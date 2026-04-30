@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"e:\\\\!cwx\\\\HealthyDesk\\\\HealthyDesk\" log --oneline -5)",
+      "Bash(python -m py_compile main.py)",
+      "Bash(python -m py_compile config.py)",
+      "Bash(python -m py_compile services/pose_detector.py)",
+      "Bash(python -m py_compile services/scorer.py)",
+      "Bash(python -m py_compile services/scheduler.py)",
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(pip install *)"
+    ]
+  }
+}
