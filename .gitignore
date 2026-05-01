@@ -2,11 +2,15 @@ node_modules/
 dist/
 dist-electron/
 release/
+release2/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/data/
+data/
+build/
 *.pyc
 *.pyo
+*.spec
 .env
 .vite/
 .DS_Store

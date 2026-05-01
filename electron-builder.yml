@@ -6,12 +6,15 @@ directories:
   buildResources: public
 files:
   - dist/**/*
+  - '!dist/neckguardian-backend/**'
   - electron/**/*.js
   - backend/**/*
   - package.json
 extraResources:
   - from: backend/
     to: backend/
+  - from: dist/neckguardian-backend/
+    to: backend-dist/
 win:
   target:
     - target: nsis

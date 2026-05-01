@@ -30,14 +30,29 @@ function startPythonBackend() {
       console.log('Backend already running on port', BACKEND_PORT)
       return
     }
-    const backendDir = getAssetPath('backend')
-    const mainPy = path.join(backendDir, 'main.py')
 
-    pythonProcess = spawn('python', [mainPy], {
-      cwd: backendDir,
-      env: { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    // Prefer bundled exe, fall back to system Python
+    const bundledExe = getAssetPath('backend-dist', 'neckguardian-backend.exe')
+    const fs = require('fs')
+
+    if (fs.existsSync(bundledExe)) {
+      const backendDir = getAssetPath('backend-dist')
+      pythonProcess = spawn(bundledExe, [], {
+        cwd: backendDir,
+        env: { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      console.log('Starting bundled backend from', bundledExe)
+    } else {
+      const backendDir = getAssetPath('backend')
+      const mainPy = path.join(backendDir, 'main.py')
+      pythonProcess = spawn('python', [mainPy], {
+        cwd: backendDir,
+        env: { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      console.log('Starting Python backend from', mainPy)
+    }
 
     pythonProcess.stdout.on('data', (data) => {
       console.log(`[Python] ${data.toString().trim()}`)
