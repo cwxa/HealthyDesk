@@ -28,6 +28,9 @@ export default function Settings() {
     setSettings((s) => ({ ...s, [key]: value }))
     try {
       await put('/api/settings', { key, value })
+      if (key === 'auto_start') {
+        window.electronAPI?.setAutoStart(value === 'true')
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {

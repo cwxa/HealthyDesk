@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeToTray: () => ipcRenderer.invoke('minimize-to-tray'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  setAutoStart: (enabled) => ipcRenderer.invoke('set-auto-start', enabled),
   onBackendReady: (callback) => {
     ipcRenderer.on('backend-ready', (_event, data) => callback(data))
   },

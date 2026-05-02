@@ -12,11 +12,39 @@ _accumulated_minutes = 0
 _last_tick: datetime = None
 _on_remind_callback = None
 _break_active = False
+_reminder_interval = REMINDER_INTERVAL_MINUTES
 
 
 def set_remind_callback(cb):
     global _on_remind_callback
     _on_remind_callback = cb
+
+
+async def _load_reminder_interval() -> int:
+    global _reminder_interval
+    try:
+        db = await get_db()
+        cursor = await db.execute("SELECT value FROM settings WHERE key='reminder_interval'")
+        row = await cursor.fetchone()
+        await db.close()
+        if row:
+            val = int(row["value"])
+            if val > 0:
+                _reminder_interval = val
+    except Exception as e:
+        logger.warning("Failed to load reminder_interval: %s", e)
+    return _reminder_interval
+
+
+async def reload_reminder_interval():
+    """Called when settings change — re-read interval and reset timer."""
+    global _accumulated_minutes, _break_active
+    old = _reminder_interval
+    await _load_reminder_interval()
+    if _reminder_interval != old:
+        _accumulated_minutes = 0
+        _break_active = False
+        logger.info("Reminder interval changed: %d → %d min", old, _reminder_interval)
 
 
 def start_scheduler():
@@ -25,7 +53,12 @@ def start_scheduler():
     _scheduler.add_job(_minute_tick, "interval", minutes=1, id="usage_tick")
     _scheduler.start()
     _last_tick = datetime.now()
-    logger.info("Scheduler started, reminder interval=%d min", REMINDER_INTERVAL_MINUTES)
+    logger.info("Scheduler started, reminder interval=%d min", _reminder_interval)
+
+
+async def _init_interval():
+    await _load_reminder_interval()
+    logger.info("Reminder interval loaded: %d min", _reminder_interval)
 
 
 def stop_scheduler():
@@ -55,7 +88,7 @@ async def _minute_tick():
         await db.commit()
 
         _accumulated_minutes += 1
-        interval = REMINDER_INTERVAL_MINUTES
+        interval = _reminder_interval
         if _accumulated_minutes >= interval and not _break_active:
             _accumulated_minutes = 0
             _break_active = True

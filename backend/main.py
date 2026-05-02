@@ -11,13 +11,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from config import BACKEND_PORT
 from db.database import init_db
-from services.scheduler import start_scheduler, stop_scheduler
+from services.scheduler import start_scheduler, stop_scheduler, set_remind_callback, _init_interval
 from api.posture import router as posture_router
 from api.stats import router as stats_router
 from api.settings import router as settings_router
 from api.ai import router as ai_router
 from api.activity import router as activity_router
-from ws.camera_ws import router as ws_router
+from ws.camera_ws import router as ws_router, notify_reminder
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI):
     logger.info("NeckGuardian backend starting...")
     os.makedirs(os.path.join(os.path.dirname(__file__), "data"), exist_ok=True)
     await init_db()
+    await _init_interval()
+    set_remind_callback(notify_reminder)
     start_scheduler()
     logger.info(f"Backend ready on port {BACKEND_PORT}")
     yield

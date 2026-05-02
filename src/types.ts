@@ -65,6 +65,7 @@ export interface ElectronAPI {
   onBackendReady: (callback: (data: { port: number }) => void) => void
   onStartExercise: (callback: () => void) => void
   onReminder: (callback: () => void) => void
+  setAutoStart: (enabled: boolean) => Promise<void>
 }
 
 declare global {

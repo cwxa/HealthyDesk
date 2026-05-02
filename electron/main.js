@@ -184,8 +184,27 @@ app.whenReady().then(async () => {
   createTray()
 
   const backendReady = await waitForBackend()
-  if (backendReady && mainWindow) {
-    mainWindow.webContents.send('backend-ready', { port: BACKEND_PORT })
+
+  // Sync auto-start setting from backend on startup
+  if (backendReady) {
+    try {
+      const http = require('http')
+      const resp = await new Promise((resolve) => {
+        http.get(`${BACKEND_URL}/api/settings/auto_start`, (res) => {
+          let body = ''
+          res.on('data', (chunk) => { body += chunk })
+          res.on('end', () => resolve(body))
+        }).on('error', () => resolve(''))
+      })
+      const data = JSON.parse(resp || '{}')
+      const autoStart = data.value === 'true'
+      app.setLoginItemSettings({ openAtLogin: autoStart, path: process.execPath })
+      console.log('Auto-start synced from backend:', autoStart)
+    } catch {}
+
+    if (mainWindow) {
+      mainWindow.webContents.send('backend-ready', { port: BACKEND_PORT })
+    }
   }
 })
 
@@ -214,6 +233,14 @@ ipcMain.handle('quit-app', () => {
     tray = null
   }
   app.exit()
+})
+
+ipcMain.handle('set-auto-start', (_event, enabled) => {
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    path: process.execPath,
+  })
+  console.log('Auto-start set to:', enabled)
 })
 
 ipcMain.handle('get-app-version', () => app.getVersion())

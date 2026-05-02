@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from db.database import get_db
+from services.scheduler import reload_reminder_interval
 
 logger = logging.getLogger("neckguardian.api.settings")
 router = APIRouter(tags=["settings"])
@@ -47,6 +48,8 @@ async def update_setting(item: SettingItem):
         )
         await db.commit()
         logger.info("Setting updated: %s=%s", item.key, item.value)
+        if item.key == "reminder_interval":
+            await reload_reminder_interval()
         return {"status": "ok", "key": item.key, "value": item.value}
     finally:
         await db.close()
