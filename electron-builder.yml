@@ -21,6 +21,21 @@ win:
       arch:
         - x64
   icon: public/icon.png
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: public/icon.png
+  category: public.app-category.healthcare-fitness
+linux:
+  target:
+    - target: tar.gz
+      arch:
+        - x64
+  icon: public/icon.png
+  category: Utility
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
