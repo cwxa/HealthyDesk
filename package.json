@@ -2,7 +2,7 @@
   "name": "neck-guardian",
   "version": "1.0.0",
   "description": "肩颈健康助手 - NeckGuardian",
-  "main": "electron/main.js",
+  "main": "dist/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",

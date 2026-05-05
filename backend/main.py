@@ -17,6 +17,7 @@ from api.stats import router as stats_router
 from api.settings import router as settings_router
 from api.ai import router as ai_router
 from api.activity import router as activity_router
+from api.reminder import router as reminder_router
 from ws.camera_ws import router as ws_router, notify_reminder
 
 logging.basicConfig(
@@ -56,6 +57,7 @@ app.include_router(stats_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
+app.include_router(reminder_router, prefix="/api")
 app.include_router(ws_router)
 
 

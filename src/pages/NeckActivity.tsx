@@ -5,7 +5,7 @@ import { useApi } from '../hooks/useApi'
 import PostureSkeleton from '../components/PostureSkeleton'
 import ScoreGauge from '../components/ScoreGauge'
 import ExercisePanel, { exercises, type ExerciseState } from '../components/ExercisePanel'
-import { speak, speakPostureIssue } from '../utils/speech'
+import { speakPostureIssue, speak } from '../utils/speech'
 import type { PoseResult } from '../types'
 
 type Mode = 'monitor' | 'exercise' | 'done'
@@ -18,10 +18,40 @@ export default function NeckActivity() {
   const [cameraError, setCameraError] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connect, disconnect, connected, sendFrame, onPoseResult } = useWebSocket()
-  const { post } = useApi()
+  const { connect, disconnect, connected, sendFrame, onPoseResult, reminderTriggered, setReminderTriggered } = useWebSocket()
+  const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
+  const [nextReminderText, setNextReminderText] = useState('')
+  const [nextReminderAt, setNextReminderAt] = useState<string | null>(null)
+
+  // 获取提醒状态并更新UI显示
+  interface ReminderStatus {
+    pending: boolean
+    next_reminder: string | null
+    snooze_until: string | null
+    last_triggered: string | null
+  }
+
+  const updateReminderStatus = useCallback(async () => {
+    try {
+      const status = await get<ReminderStatus>('/api/reminder/status')
+      if (status.next_reminder) {
+        const nextTime = new Date(status.next_reminder)
+        setNextReminderAt(status.next_reminder)
+        setNextReminderText(`下次提醒: ${nextTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
+      } else if (status.snooze_until) {
+        const snoozeTime = new Date(status.snooze_until)
+        setNextReminderAt(status.snooze_until)
+        setNextReminderText(`已暂停至: ${snoozeTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
+      } else {
+        setNextReminderText('')
+        setNextReminderAt(null)
+      }
+    } catch (e) {
+      console.error('Failed to get reminder status:', e)
+    }
+  }, [get])
 
   // Exercise state
   const [exCurrent, setExCurrent] = useState(0)
@@ -109,15 +139,64 @@ export default function NeckActivity() {
     })
   }, [onPoseResult, post, mode])
 
+  // Handle reminder triggered from WebSocket
+  useEffect(() => {
+    if (reminderTriggered) {
+      console.log('[NeckActivity] WebSocket reminder triggered')
+      window.dispatchEvent(new CustomEvent('show-reminder-modal'))
+      setReminderTriggered(false)
+    }
+  }, [reminderTriggered, setReminderTriggered])
+
+  // Check for pending reminder on mount
+  useEffect(() => {
+    const checkPendingReminder = async () => {
+      try {
+        const status = await get<{pending: boolean, is_startup_reminder?: boolean}>('/api/reminder/status')
+        if (status.pending) {
+          window.dispatchEvent(new CustomEvent('show-reminder-modal'))
+        }
+      } catch (e) {
+        console.error('Failed to check pending reminder:', e)
+      }
+    }
+    checkPendingReminder()
+  }, [get])
+
+  // Listen for start-exercise-mode event from App.tsx
+  useEffect(() => {
+    const handleStartExerciseMode = async () => {
+      try {
+        await post('/api/reminder/end', {})
+      } catch (e) {
+        console.error('End break failed:', e)
+      }
+      setMode('exercise')
+      setExCurrent(0)
+      setExTimeLeft(exercises[0].duration)
+      setExScores([])
+      exScoresRef.current = []
+      speak('请跟随引导完成肩颈活动')
+    }
+    window.addEventListener('start-exercise-mode', handleStartExerciseMode)
+    return () => window.removeEventListener('start-exercise-mode', handleStartExerciseMode)
+  }, [post])
+
   // Start exercise
-  const startExercise = useCallback(() => {
+  const startExercise = useCallback(async () => {
+    try {
+      await post('/api/reminder/end', {})
+      updateReminderStatus()
+    } catch (e) {
+      console.error('End break failed:', e)
+    }
     setMode('exercise')
     setExCurrent(0)
     setExTimeLeft(exercises[0].duration)
     setExScores([])
     exScoresRef.current = []
     speak('请跟随引导完成肩颈活动')
-  }, [])
+  }, [post])
 
   // Exercise timer
   useEffect(() => {
@@ -159,21 +238,33 @@ export default function NeckActivity() {
     finishExercise()
   }
 
-  const finishExercise = useCallback(() => {
+  const finishExercise = useCallback(async () => {
     clearInterval(exTimerRef.current)
     setMode('done')
     const ss = exScoresRef.current
     const avg = ss.length > 0 ? Math.round(ss.reduce((a, b) => a + b, 0) / ss.length) : 0
     const dur = exercises.reduce((s, e) => s + e.duration, 0)
     speak('活动完成！')
-    post('/api/activity/record', {
-      timestamp: new Date().toISOString(),
-      activity_type: 'exercise',
-      exercise_count: exercises.length,
-      duration_sec: dur,
-      avg_score: avg,
-    }).then(() => console.log('Activity recorded OK')).catch(e => console.error('Activity record failed:', e))
+    try {
+      await post('/api/activity/record', {
+        timestamp: new Date().toISOString(),
+        activity_type: 'exercise',
+        exercise_count: exercises.length,
+        duration_sec: dur,
+        avg_score: avg,
+      })
+      await post('/api/reminder/end', {})
+      console.log('Activity recorded, reminder ended')
+    } catch (e) {
+      console.error('Activity record failed:', e)
+    }
   }, [post])
+
+  useEffect(() => {
+    if (mode === 'done') {
+      updateReminderStatus()
+    }
+  }, [mode, updateReminderStatus])
 
   const score = latestResult?.type === 'pose' ? (latestResult.score ?? 0) : 0
   const issues = latestResult?.type === 'pose' ? (latestResult.issues ?? []) : []
@@ -277,8 +368,8 @@ export default function NeckActivity() {
         </div>
 
         {/* Right panel */}
-        <div style={{ width: 300, minWidth: 300, height: '100%', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ width: 300, minWidth: 300, height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' }}>
           {mode === 'monitor' ? (
             <>
               {/* Score card */}

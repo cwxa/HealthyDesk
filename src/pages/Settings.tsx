@@ -57,18 +57,30 @@ export default function Settings() {
         >
           <SettingRow
             label="提醒间隔（分钟）"
-            description="每工作多少分钟提醒一次肩颈放松"
+            description="每工作多少分钟提醒一次肩颈放松（最少2分钟）"
           >
-            <select
-              value={settings.reminder_interval}
-              onChange={(e) => updateSetting('reminder_interval', e.target.value)}
-              style={selectStyle}
-            >
-              <option value="15">15 分钟</option>
-              <option value="30">30 分钟</option>
-              <option value="45">45 分钟</option>
-              <option value="60">60 分钟</option>
-            </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min="2"
+                max="120"
+                value={settings.reminder_interval}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 2
+                  const clamped = Math.max(2, Math.min(120, value))
+                  updateSetting('reminder_interval', String(clamped))
+                }}
+                style={{
+                  width: 80,
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  fontSize: 14,
+                  textAlign: 'center',
+                }}
+              />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>分钟</span>
+            </div>
           </SettingRow>
 
           <SettingRow

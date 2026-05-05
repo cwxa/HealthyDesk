@@ -10,6 +10,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services.pose_detector import pose_detector
 from services.scorer import compute_score
+from services.scheduler import record_break
 
 logger = logging.getLogger("neckguardian.ws")
 router = APIRouter()
@@ -131,6 +132,7 @@ def _decode_frame(msg: dict):
 
 
 async def notify_reminder():
+    await record_break()
     disconnected = []
     for ws in active_connections:
         try:

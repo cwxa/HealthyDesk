@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { useApi } from '../hooks/useApi'
 
 const navItems = [
   { path: '/', label: '肩颈活动', icon: '🧘' },
@@ -7,7 +9,52 @@ const navItems = [
   { path: '/settings', label: '系统设置', icon: '⚙' },
 ]
 
+interface ReminderStatus {
+  pending: boolean
+  next_reminder: string | null
+  snooze_until: string | null
+  last_triggered: string | null
+}
+
 export default function Sidebar() {
+  const { get } = useApi()
+  const [nextReminderText, setNextReminderText] = useState('')
+
+  useEffect(() => {
+    const fetchReminderStatus = async () => {
+      try {
+        const status = await get<ReminderStatus>('/api/reminder/status')
+        if (status.next_reminder) {
+          const nextTime = new Date(status.next_reminder)
+          const now = new Date()
+          const diff = nextTime.getTime() - now.getTime()
+          
+          if (diff <= 0) {
+            setNextReminderText('⏰ 即将提醒')
+          } else if (diff < 60000) {
+            setNextReminderText('⏰ 1分钟内提醒')
+          } else if (diff < 3600000) {
+            const minutes = Math.floor(diff / 60000)
+            setNextReminderText(`⏰ ${minutes}分钟后提醒`)
+          } else {
+            setNextReminderText(`下次活动: ${nextTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
+          }
+        } else if (status.snooze_until) {
+          const snoozeTime = new Date(status.snooze_until)
+          setNextReminderText(`暂停至: ${snoozeTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
+        } else {
+          setNextReminderText('')
+        }
+      } catch (e) {
+        console.error('Failed to get reminder status:', e)
+      }
+    }
+
+    fetchReminderStatus()
+    const interval = setInterval(fetchReminderStatus, 30000)
+    return () => clearInterval(interval)
+  }, [get])
+
   return (
     <nav style={{
       width: 200, minWidth: 200, background: 'var(--bg-card)',
@@ -49,6 +96,15 @@ export default function Sidebar() {
       ))}
 
       <div style={{ marginTop: 'auto', padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {nextReminderText && (
+          <div style={{
+            padding: '8px 12px', borderRadius: 8,
+            background: '#FFF9C4', border: '1px solid #FFE082',
+            fontSize: 12, color: '#F57C00', textAlign: 'center',
+          }}>
+            {nextReminderText}
+          </div>
+        )}
         <button
           onClick={() => window.electronAPI?.minimizeToTray()}
           style={{

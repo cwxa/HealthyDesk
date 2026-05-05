@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist/  # Temporarily disabled for electron-builder
 dist-electron/
 release/
 release2/
@@ -15,3 +15,5 @@ build/
 .vite/
 .DS_Store
 Thumbs.db
+/dist
+*.log

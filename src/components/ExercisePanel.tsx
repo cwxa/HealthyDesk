@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import ScoreGauge from './ScoreGauge'
+import ExerciseGuide from './ExerciseGuide'
 
 export interface ExerciseState {
   phase: 'active' | 'done'
@@ -107,6 +108,11 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
           <p style={{ fontSize: 13, color: '#777', lineHeight: 1.5 }}>{ex.hint}</p>
         </motion.div>
       </AnimatePresence>
+
+      {/* Exercise animation guide */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+        <ExerciseGuide exerciseIndex={current} color={ex.color} size={160} />
+      </div>
 
       {/* Countdown timer */}
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>

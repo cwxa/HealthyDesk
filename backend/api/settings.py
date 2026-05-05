@@ -41,6 +41,14 @@ async def get_setting(key: str):
 async def update_setting(item: SettingItem):
     db = await get_db()
     try:
+        if item.key == "reminder_interval":
+            try:
+                interval = int(item.value)
+                if interval < 2:
+                    raise HTTPException(status_code=400, detail="提醒间隔最少为2分钟")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="提醒间隔必须是有效的数字")
+        
         await db.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=?",
