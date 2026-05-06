@@ -198,8 +198,12 @@ app.whenReady().then(async () => {
       })
       const data = JSON.parse(resp || '{}')
       const autoStart = data.value === 'true'
-      app.setLoginItemSettings({ openAtLogin: autoStart, path: process.execPath })
-      console.log('Auto-start synced from backend:', autoStart)
+      if (app.isPackaged) {
+        app.setLoginItemSettings({ openAtLogin: autoStart, path: process.execPath })
+        console.log('Auto-start synced from backend:', autoStart)
+      } else {
+        console.log('Auto-start sync skipped: running in development mode, backend reports:', autoStart)
+      }
     } catch {}
 
     if (mainWindow) {
@@ -236,11 +240,15 @@ ipcMain.handle('quit-app', () => {
 })
 
 ipcMain.handle('set-auto-start', (_event, enabled) => {
-  app.setLoginItemSettings({
-    openAtLogin: enabled,
-    path: process.execPath,
-  })
-  console.log('Auto-start set to:', enabled)
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      path: process.execPath,
+    })
+    console.log('Auto-start set to:', enabled)
+  } else {
+    console.log('Auto-start skipped: running in development mode')
+  }
 })
 
 ipcMain.handle('get-app-version', () => app.getVersion())
