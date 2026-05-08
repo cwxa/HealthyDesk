@@ -4,6 +4,7 @@ import { useApi } from '../hooks/useApi'
 import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
 import type { ActivityRecord, WeeklyReport as WeeklyReportType } from '../types'
+import { TrendingUpIcon, ActivityIcon, BarChart2Icon, CheckIcon, MonitorIcon, ClockIcon, NeckIcon, FlameIcon } from '../components/icons'
 
 interface Summary { today_activities: number; today_avg: number }
 
@@ -20,10 +21,10 @@ export default function Dashboard() {
   }, [get])
 
   const tips = [
-    { icon: '🖥', text: '显示器顶部与眼睛齐平' },
-    { icon: '⏰', text: '每30分钟起身活动' },
-    { icon: '🧘', text: '保持背部挺直坐姿' },
-    { icon: '💪', text: '双肩放松自然下沉' },
+    { icon: MonitorIcon, text: '显示器顶部与眼睛齐平' },
+    { icon: ClockIcon, text: '每30分钟起身活动' },
+    { icon: NeckIcon, text: '保持背部挺直坐姿' },
+    { icon: FlameIcon, text: '双肩放松自然下沉' },
   ]
 
   return (
@@ -36,10 +37,10 @@ export default function Dashboard() {
 
       {/* Stats cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon="📈" delay={0} />
-        <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon="🏃" delay={0.04} />
-        <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon="📊" delay={0.08} />
-        <StatCard label="活动完成率" value={weekly?.completion_rate} unit="%" color="#9C27B0" icon="✅" delay={0.12} />
+        <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon={TrendingUpIcon} delay={0} />
+        <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon={ActivityIcon} delay={0.04} />
+        <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon={BarChart2Icon} delay={0.08} />
+        <StatCard label="活动完成率" value={weekly?.completion_rate} unit="%" color="#9C27B0" icon={CheckIcon} delay={0.12} />
       </div>
 
       {/* Trend chart */}
@@ -82,7 +83,7 @@ export default function Dashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
             {tips.map((tip, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-                <span style={{ fontSize: 16 }}>{tip.icon}</span>
+                <tip.icon size={16} color="#666" />
                 <span style={{ fontSize: 12, color: '#666' }}>{tip.text}</span>
               </div>
             ))}
@@ -192,15 +193,15 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   )
 }
 
-function StatCard({ label, value, unit, color, icon, delay }: {
-  label: string; value: number | undefined; unit: string; color: string; icon: string; delay: number
+function StatCard({ label, value, unit, color, icon: Icon, delay }: {
+  label: string; value: number | undefined; unit: string; color: string; icon: React.ElementType; delay: number
 }) {
   return (
     <div
       style={{ background: '#fff', borderRadius: 14, padding: '20px 22px', boxShadow: '0 1px 8px rgba(0,0,0,0.06)' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 20 }}>{icon}</span>
+        <Icon size={20} color={color} />
         <span style={{ fontSize: 13, color: '#999', fontWeight: 500 }}>{label}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>

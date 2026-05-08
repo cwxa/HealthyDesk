@@ -191,6 +191,18 @@ function createTray(): void {
 }
 
 function createWindow(): void {
+  // 获取窗口图标路径
+  const windowIconPath = getAssetPath('public', 'icon.ico')
+  let windowIcon: Electron.NativeImage | undefined
+  try {
+    windowIcon = nativeImage.createFromPath(windowIconPath)
+    if (windowIcon.isEmpty()) {
+      windowIcon = undefined
+    }
+  } catch {
+    windowIcon = undefined
+  }
+
   mainWindow = new BrowserWindow({
     title: 'NeckGuardian - 肩颈健康助手',
     width: 1200,
@@ -201,6 +213,7 @@ function createWindow(): void {
     maximizable: true,
     resizable: true,
     fullscreenable: true,
+    icon: windowIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

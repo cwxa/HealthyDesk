@@ -1,7 +1,12 @@
 appId: com.neckguardian.app
 productName: NeckGuardian
-copyright: Copyright © 2024
+copyright: Copyright © 2024 NeckGuardian Team
 asar: false
+publish:
+  provider: github
+  releaseType: release
+  repo: HealthyDesk
+  owner: cwxa
 directories:
   output: release2
   buildResources: public
@@ -17,21 +22,26 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: public/icon.png
+  icon: public/icon.ico
+  requestedExecutionLevel: asInvoker
 mac:
   target:
     - target: dmg
       arch:
         - x64
         - arm64
-  icon: public/icon.png
+  icon: public/icon.icns
   category: public.app-category.healthcare-fitness
+  darkModeSupport: true
 linux:
   target:
+    - target: deb
+      arch:
+        - x64
     - target: tar.gz
       arch:
         - x64
-  icon: public/icon.png
+  icon: public/icons
   category: Utility
 nsis:
   oneClick: false
@@ -39,3 +49,6 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: NeckGuardian
+  installerIcon: public/icon.ico
+  uninstallerIcon: public/icon.ico
+  installerHeaderIcon: public/icon.ico

@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
+import { ActivityIcon, DashboardIcon, SettingsIcon, NeckIcon } from './icons'
 
 const navItems = [
-  { path: '/', label: '肩颈活动', icon: '🧘' },
-  { path: '/dashboard', label: '仪表盘', icon: '📊' },
-  { path: '/settings', label: '系统设置', icon: '⚙' },
+  { path: '/', label: '肩颈活动', icon: ActivityIcon },
+  { path: '/dashboard', label: '仪表盘', icon: DashboardIcon },
+  { path: '/settings', label: '系统设置', icon: SettingsIcon },
 ]
 
 interface ReminderStatus {
@@ -62,12 +63,17 @@ export default function Sidebar() {
       flexDirection: 'column', padding: '16px 0', boxShadow: 'var(--shadow)',
     }}>
       <div style={{ padding: '0 20px 20px', borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
-        <h1 style={{ fontSize: 18, color: 'var(--primary-dark)', fontWeight: 700 }}>
-          🛡 NeckGuardian
-        </h1>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-          肩颈健康助手
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <NeckIcon size={28} color="#4CAF50" />
+          <div>
+            <h1 style={{ fontSize: 18, color: 'var(--primary-dark)', fontWeight: 700 }}>
+              NeckGuardian
+            </h1>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+              肩颈健康助手
+            </p>
+          </div>
+        </div>
       </div>
 
       {navItems.map((item) => (
@@ -85,12 +91,12 @@ export default function Sidebar() {
             transition: 'all 0.2s',
           })}
         >
-          <motion.span
+          <motion.div
             whileHover={{ scale: 1.1 }}
             style={{ fontSize: 18 }}
           >
-            {item.icon}
-          </motion.span>
+            <item.icon size={18} />
+          </motion.div>
           {item.label}
         </NavLink>
       ))}

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="trayGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4CAF50;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#388E3C;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Head -->
+  <circle cx="32" cy="22" r="14" fill="url(#trayGrad)"/>
+  
+  <!-- Eyes -->
+  <circle cx="27" cy="20" r="2" fill="#fff"/>
+  <circle cx="37" cy="20" r="2" fill="#fff"/>
+  
+  <!-- Neck -->
+  <rect x="27" y="35" width="10" height="15" rx="4" fill="#81C784"/>
+  
+  <!-- Shoulders -->
+  <path d="M 15 42 Q 32 38 49 42" stroke="#4CAF50" stroke-width="3" fill="none"/>
+</svg>
