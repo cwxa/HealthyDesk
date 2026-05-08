@@ -1,12 +1,7 @@
 appId: com.neckguardian.app
 productName: NeckGuardian
-copyright: Copyright © 2024 NeckGuardian Team
+copyright: Copyright © 2024
 asar: false
-publish:
-  provider: github
-  releaseType: release
-  repo: HealthyDesk
-  owner: cwxa
 directories:
   output: release2
   buildResources: public
