@@ -267,66 +267,84 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 
 #### 表结构
 
-**posture_records**（姿势记录）：
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER | 主键 |
-| timestamp | DATETIME | 记录时间 |
-| score | INTEGER | 姿势评分 |
-| head_tilt | REAL | 头部倾斜角度 |
-| shoulder_diff | REAL | 肩部高度差 |
-| spine_angle | REAL | 脊柱弯曲角度 |
+> 实际表结构以 `backend/db/database.py` 中的 `init_db()` 为准。
 
-**activity_records**（活动记录）：
+**usage_record**（每日使用时长）：
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| id | INTEGER | 主键 |
-| timestamp | DATETIME | 活动时间 |
-| duration | INTEGER | 活动时长（秒） |
-| exercises | TEXT | 完成的运动列表 |
-| score | INTEGER | 活动评分 |
+| id | INTEGER | 主键，自增 |
+| date | TEXT (UNIQUE) | 日期 (YYYY-MM-DD) |
+| usage_minutes | INTEGER | 当日电脑使用时长（分钟），由调度器每分钟 +1 |
+| break_count | INTEGER | 当日活动（休息）次数 |
+
+**posture_score**（姿势评分记录）：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER | 主键，自增 |
+| timestamp | TEXT | ISO 8601 记录时间 |
+| head_angle | REAL | 头部侧倾角（度） |
+| shoulder_diff | REAL | 肩部高度差（占肩宽百分比） |
+| spine_angle | REAL | 脊柱倾斜角（度） |
+| score | INTEGER | 姿态评分 (20–100) |
+
+**activity_log**（活动记录）：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER | 主键，自增 |
+| timestamp | TEXT | 活动完成时间 |
+| activity_type | TEXT | 活动类型，默认 `'exercise'` |
+| exercise_count | INTEGER | 完成的动作数量 |
+| duration_sec | INTEGER | 活动时长（秒） |
+| avg_score | INTEGER | 活动期间平均姿态评分 |
 
 **settings**（用户设置）：
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| key | TEXT | 设置键名 |
+| key | TEXT (PK) | 设置键名 |
 | value | TEXT | 设置值 |
-| updated_at | DATETIME | 更新时间 |
+
+默认设置：`reminder_interval='30'`、`ai_enabled='false'`、`auto_start='false'`、`voice_enabled='true'`。
 
 ### 2.5 API 接口设计
 
 #### 接口分类
 
+> 实时姿势流通过 WebSocket `/ws/camera` 推送，不属于下方 REST 接口。
+
 | 模块 | 接口数量 | 功能说明 |
 |------|----------|----------|
-| posture | 3 | 姿势数据获取、实时流 |
-| stats | 4 | 日/周/月统计、历史记录 |
-| reminder | 4 | 状态查询、延后、结束、配置 |
-| ai | 1 | AI 健康建议 |
-| settings | 2 | 获取/更新设置 |
+| posture | 4 | 姿势评分记录、历史、均值、趋势 |
+| stats | 2 | 周报统计、今日摘要 |
+| reminder | 3 | 结束休息、延迟提醒、状态查询 |
+| ai | 1 | AI 健康建议（未配置 Key 时降级本地规则） |
+| settings | 3 | 获取全部/单个设置、更新设置 |
+| activity | 3 | 记录活动、最近活动、今日活动数 |
 
 #### 核心接口示例
 
-**POST /api/ai/advice**
+**POST /api/ai/suggestion**
 
 请求体：
 ```json
 {
-  "daily_score": 75,
-  "activity_count": 3,
-  "avg_duration": 5.5,
-  "concerns": ["neck_pain", "shoulder_stiffness"]
+  "head_angle": 28.0,
+  "shoulder_diff": 12.0,
+  "spine_angle": 15.0,
+  "history_avg": 55.0,
+  "issues": ["头部明显侧倾", "肩部明显不平衡"]
 }
 ```
 
-响应体：
+响应体（命中 AI，需配置 `DEEPSEEK_API_KEY`）：
 ```json
-{
-  "advice": "根据您的姿势数据，建议您每25分钟进行一次肩颈活动...",
-  "exercises": ["颈部拉伸", "肩部环绕", "深呼吸"],
-  "tips": ["保持正确坐姿", "调整显示器高度"]
-}
+{ "source": "ai", "suggestion": "..." }
 ```
+
+响应体（降级本地规则）：
+```json
+{ "source": "fallback", "suggestions": ["...", "..."] }
+```
+
 
 ### 2.6 部署与构建
 

@@ -44,11 +44,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NeckGuardian API", version="1.0.0", lifespan=lifespan)
 
+# 仅允许本地前端（Vite 开发服务器）与打包后的 Electron 渲染进程
+# （file:// 加载）调用 API，避免通配符来源。
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:5173",  # Vite 开发服务器
+    "http://localhost:5173",
+    "file://",                # Electron 打包后渲染进程
+    "null",                   # 部分引擎中 file:// 页面发送的 Origin
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["*"],
 )
 

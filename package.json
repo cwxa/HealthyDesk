@@ -1,6 +1,6 @@
 {
   "name": "neck-guardian",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "肩颈健康助手 - NeckGuardian",
   "main": "dist/main.js",
   "author": "NeckGuardian Team",
@@ -10,7 +10,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "backend:build": "pyinstaller neckguardian-backend.spec --noconfirm --distpath build",
+    "build": "tsc && vite build && npm run backend:build && electron-builder",
     "preview": "vite preview",
     "electron:dev": "vite build && electron .",
     "electron:build": "vite build && electron-builder",

@@ -12,6 +12,10 @@ files:
 extraResources:
   - from: backend/
     to: backend/
+  # 自包含的后端可执行文件（PyInstaller 产物，由 `npm run backend:build` 生成）。
+  # 打包进安装包后，目标机器无需安装 Python 即可运行后端。
+  - from: build/neckguardian-backend
+    to: neckguardian-backend
 win:
   target:
     - target: nsis

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, Notification } from 'electron'
 import path from 'path'
+import fs from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import http from 'http'
 
@@ -31,13 +32,39 @@ function checkBackendRunning(): Promise<boolean> {
   })
 }
 
+function getBackendExePath(): string | null {
+  // 打包后的安装包会把 PyInstaller 后端放到 resources/neckguardian-backend
+  if (app.isPackaged) {
+    const p = path.join(process.resourcesPath, 'neckguardian-backend', 'neckguardian-backend.exe')
+    return fs.existsSync(p) ? p : null
+  }
+  // 开发环境：若本地已用 PyInstaller 构建过 exe，则优先使用
+  const local = path.join(__dirname, '..', 'build', 'neckguardian-backend', 'neckguardian-backend.exe')
+  return fs.existsSync(local) ? local : null
+}
+
 function startPythonBackend(): void {
+  const env = { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) }
+
+  // 优先使用自包含后端可执行文件（目标机无需安装 Python）
+  const exePath = getBackendExePath()
+  if (exePath) {
+    console.log('Starting bundled backend executable:', exePath)
+    pythonProcess = spawn(exePath, [], {
+      cwd: path.dirname(exePath),
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return
+  }
+
+  // 开发环境回退：直接运行 Python 源码
   const backendDir = getAssetPath('backend')
   const mainPy = path.join(backendDir, 'main.py')
-
+  console.log('Starting backend via python:', mainPy)
   pythonProcess = spawn('python', [mainPy], {
     cwd: backendDir,
-    env: { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 

@@ -18,7 +18,7 @@ export default function NeckActivity() {
   const [cameraError, setCameraError] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connect, disconnect, connected, sendFrame, onPoseResult, reminderTriggered, setReminderTriggered } = useWebSocket()
+  const { connect, disconnect, connected, sendFrame, onPoseResult } = useWebSocket()
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
@@ -138,15 +138,6 @@ export default function NeckActivity() {
       }
     })
   }, [onPoseResult, post, mode])
-
-  // Handle reminder triggered from WebSocket
-  useEffect(() => {
-    if (reminderTriggered) {
-      console.log('[NeckActivity] WebSocket reminder triggered')
-      window.dispatchEvent(new CustomEvent('show-reminder-modal'))
-      setReminderTriggered(false)
-    }
-  }, [reminderTriggered, setReminderTriggered])
 
   // Check for pending reminder on mount
   useEffect(() => {

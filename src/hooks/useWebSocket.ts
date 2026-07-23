@@ -3,11 +3,13 @@ import type { PoseResult } from '../types'
 
 const WS_URL = 'ws://127.0.0.1:18920/ws/camera'
 
+// 提醒弹窗统一走 Electron IPC 轮询（electron/main.ts -> /api/reminder/status ->
+// 'reminder-trigger'），以便保留操作系统级通知且只有单一触发来源。
+// 本 hook 只负责传递姿势数据，不再处理 reminder 消息。
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const [connected, setConnected] = useState(false)
   const [poseResult, setPoseResult] = useState<PoseResult | null>(null)
-  const [reminderTriggered, setReminderTriggered] = useState(false)
   const onPoseRef = useRef<((result: PoseResult) => void) | null>(null)
 
   const connect = useCallback(() => {
@@ -26,8 +28,6 @@ export function useWebSocket() {
         if (data.type === 'pose' || data.type === 'no_pose') {
           setPoseResult(data as PoseResult)
           onPoseRef.current?.(data as PoseResult)
-        } else if (data.type === 'reminder') {
-          setReminderTriggered(true)
         }
       } catch {
         // ignore parse errors
@@ -62,8 +62,6 @@ export function useWebSocket() {
     disconnect,
     connected,
     poseResult,
-    reminderTriggered,
-    setReminderTriggered,
     sendFrame,
     onPoseResult,
   }
