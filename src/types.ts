@@ -14,7 +14,7 @@ export interface Landmarks {
 }
 
 export interface PoseResult {
-  type: 'pose' | 'no_pose'
+  type: 'pose' | 'no_pose' | 'ready' | 'error'
   timestamp: string
   score?: number
   head_angle?: number

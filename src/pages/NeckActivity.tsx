@@ -18,7 +18,7 @@ export default function NeckActivity() {
   const [cameraError, setCameraError] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connect, disconnect, connected, sendFrame, onPoseResult } = useWebSocket()
+  const { connect, disconnect, connected, sendFrame, onPoseResult, backendError, resetBackendError } = useWebSocket()
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
@@ -316,9 +316,30 @@ export default function NeckActivity() {
             </div>
           )}
 
-          {!connected && cameraReady && (
+          {!connected && cameraReady && !backendError && (
             <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,167,38,0.9)', color: '#fff', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500, zIndex: 10 }}>
               正在连接后端...
+            </div>
+          )}
+
+          {backendError && (
+            <div style={{
+              position: 'absolute', top: 12, left: 12, right: 12,
+              background: 'rgba(198,40,40,0.92)', color: '#fff',
+              padding: '10px 16px', borderRadius: 12, fontSize: 12, zIndex: 10,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            }}>
+              <span style={{ lineHeight: 1.6 }}>⚠ 姿态识别服务异常：{backendError}</span>
+              <button
+                onClick={() => { resetBackendError(); connect() }}
+                style={{
+                  flexShrink: 0, padding: '6px 16px', borderRadius: 8, border: 'none',
+                  background: 'rgba(255,255,255,0.9)', color: '#C62828',
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                重试
+              </button>
             </div>
           )}
 

@@ -6,6 +6,57 @@
 
 ## 一、打包与运行（最严重）
 
+### 0. v1.3.0 界面永远卡在「正在连接后端...」 🔴🔴（本轮修复）
+
+**现象**：安装 v1.3.0 后，进入「肩颈检测」页，画面顶部一直显示橙色
+「正在连接后端...」，摄像头检测永远不开始，界面无限闪烁重连。
+
+**排查过程**：
+- 打包后端 exe 能正常启动，`/api/health` 返回 `{"status":"ok","version":"1.3.0"}`；
+- WebSocket 握手也能成功（`101 Switching Protocols`）；
+- 但**一连上 WS 就立刻断开**，前端 `onclose` 触发指数退避重连 → 无限循环。
+- 打开后端日志看到真正的报错：
+  ```
+  Failed to initialize MediaPipe: 'google._upb._message.FieldDescriptor' object has no attribute 'label'
+  connection closed
+  ```
+
+**根因**：机器上（及被打进 exe 的）**protobuf 版本与 mediapipe 不兼容**。
+- `mediapipe 0.10.13` 要求 `protobuf <5, >=4.25.3`；
+- 但打包环境里被安装成了 `protobuf 7.35.1`（dist-info 却写着 4.25.9，属于混杂损坏状态）；
+- 过新的 protobuf 移除了 `FieldDescriptor.label` 属性，MediaPipe 在加载 `_pb2` 描述符时抛异常，
+  `initialize()` 返回 `False` → WS 端发错误并关闭 → 前端无限重连。
+
+**修复**（三处）：
+1. `backend/requirements.txt`：`protobuf>=4.25.3,<5` 显式约束；`mediapipe==0.10.13`
+   （0.10.9 及更早**没有 cp312 wheel**，Python 3.12 装不上）。
+2. 用**干净虚拟环境** `.buildenv` 重新安装依赖并打包 exe，确保打进 exe 的是 protobuf 4.25.9。
+3. `backend/ws/camera_ws.py`：初始化失败时**主动下发可读错误并关闭连接**；
+   前端 `useWebSocket` 收到 `type:"error"` 时**停止重连**并展示错误横幅 + 「重试」按钮，
+   不再让界面无限空转「正在连接后端...」。
+
+**验证方法**（关键，务必执行）：
+```bash
+# 1. 启动打包后的 exe
+./build/neckguardian-backend/neckguardian-backend.exe > build/verify.log 2>&1 &
+sleep 8
+curl -s --noproxy "*" http://127.0.0.1:18920/api/health   # 期望 version 正确
+
+# 2. 连 WS，确认收到 ready 而不是被关闭
+python -c "import asyncio,websockets
+async def m():
+    async with websockets.connect('ws://127.0.0.1:18920/ws/camera') as ws:
+        print(await ws.recv())
+asyncio.run(m())"
+# 期望：{"type":"ready","message":"MediaPipe ready"}
+# 日志期望：MediaPipe Pose initialized successfully（且无 FieldDescriptor 报错）
+```
+
+> 教训：**依赖约束必须显式写死**。mediapipe 对 protobuf 有严格上界，一旦被其它包
+> 升级到 5+ 就会静默炸掉姿态检测，且报错只在后端日志里、前端完全看不到。
+
+---
+
 ### 1. 打包后端 exe 启动即崩溃 —— UPX 压缩破坏核心模块 🔴
 
 **现象**：PyInstaller 打出的 `neckguardian-backend.exe` 一启动就退出，日志报
@@ -108,6 +159,10 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 **根因**：`useWebSocket.ts` 的 `onclose` 只置 `connected=false`，没有任何重连逻辑。
 
 **修复**：加入指数退避自动重连（1s 起，上限 10s），组件卸载时彻底清理定时器与回调。
+
+> 补充（v1.3.1）：重连不能解决**后端侧致命错误**（如 MediaPipe 初始化失败）。
+> 此时后端下发 `{"type":"error"}` 并关闭连接，前端据此**停止重连**、展示错误横幅 + 「重试」按钮，
+> 避免陷入"无限重连 + 一直显示正在连接"的假死状态。参见第 0 条。
 
 ---
 

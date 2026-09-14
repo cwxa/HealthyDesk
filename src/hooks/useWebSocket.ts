@@ -12,9 +12,14 @@ export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const [connected, setConnected] = useState(false)
   const [poseResult, setPoseResult] = useState<PoseResult | null>(null)
+  // 后端在 WebSocket 上主动报告的错误（如 MediaPipe 初始化失败）。
+  // 与「网络断开」区分开：这类错误重连也修不好，必须提示用户而不是静默重试。
+  const [backendError, setBackendError] = useState<string | null>(null)
   const onPoseRef = useRef<((result: PoseResult) => void) | null>(null)
   // 主动断开时禁止重连（避免组件卸载后仍持续重试）
   const manualCloseRef = useRef(false)
+  // 后端已明确报错（如模型初始化失败）时停止指数退避重连，避免无限空转。
+  const fatalErrorRef = useRef(false)
   const reconnectTimerRef = useRef<number>(0)
   const retryCountRef = useRef(0)
 
@@ -22,6 +27,8 @@ export function useWebSocket() {
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return
 
     manualCloseRef.current = false
+    // 显式重新连接时清除致命错误标记（用户点击「重试」或后端重启后调用）
+    fatalErrorRef.current = false
 
     let ws: WebSocket
     try {
@@ -41,6 +48,9 @@ export function useWebSocket() {
     ws.onclose = () => {
       setConnected(false)
       if (wsRef.current === ws) wsRef.current = null
+      // 后端已明确报致命错误（如 MediaPipe 初始化失败）时不再重连：
+      // 重连也无法恢复，只会让界面无限闪「正在连接后端...」。
+      if (fatalErrorRef.current) return
       scheduleReconnect()
     }
 
@@ -55,6 +65,15 @@ export function useWebSocket() {
         if (data.type === 'pose' || data.type === 'no_pose') {
           setPoseResult(data as PoseResult)
           onPoseRef.current?.(data as PoseResult)
+        } else if (data.type === 'error') {
+          // 后端侧致命错误：标记并停止重连，向 UI 暴露原因
+          fatalErrorRef.current = true
+          setBackendError(data.message || '后端处理出错')
+          setConnected(false)
+        } else if (data.type === 'ready') {
+          // 模型就绪，清除历史错误
+          fatalErrorRef.current = false
+          setBackendError(null)
         }
       } catch {
         // ignore parse errors
@@ -104,6 +123,12 @@ export function useWebSocket() {
     onPoseRef.current = cb
   }, [])
 
+  // 供「重试」按钮使用：清除致命错误标记并允许重新连接
+  const resetBackendError = useCallback(() => {
+    fatalErrorRef.current = false
+    setBackendError(null)
+  }, [])
+
   useEffect(() => {
     return () => {
       // 卸载：彻底清理连接、定时器与回调引用，避免内存泄漏
@@ -127,6 +152,8 @@ export function useWebSocket() {
     disconnect,
     connected,
     poseResult,
+    backendError,
+    resetBackendError,
     sendFrame,
     onPoseResult,
   }

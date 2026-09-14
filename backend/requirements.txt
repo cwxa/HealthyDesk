@@ -1,6 +1,13 @@
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
-mediapipe==0.10.9
+# mediapipe 0.10.9 及更早版本没有 Python 3.12 的 wheel（仅支持 ≤3.11），
+# 从 0.10.13 起才提供 cp312 wheel。这里固定到经验证的 0.10.13。
+mediapipe==0.10.13
+# ⚠️ 关键：mediapipe 0.10.13 要求 protobuf <5,>=4.25.3。
+# 若环境中存在 protobuf 5+（例如被其它包升级），MediaPipe 会在
+# 加载 _pb2 时抛 `FieldDescriptor has no attribute 'label'` 而初始化失败，
+# 表现为前端一直卡在「正在连接后端...」。必须显式约束。
+protobuf>=4.25.3,<5
 opencv-python==4.9.0.80
 numpy==1.26.4
 aiosqlite==0.20.0

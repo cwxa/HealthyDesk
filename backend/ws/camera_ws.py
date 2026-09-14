@@ -54,8 +54,14 @@ async def camera_websocket(ws: WebSocket):
     if not pose_detector.initialized:
         ok = pose_detector.initialize()
         if not ok:
-            await ws.send_json({"type": "error", "message": "MediaPipe initialization failed"})
-            active_connections.remove(ws)
+            logger.error("MediaPipe initialization failed — closing WebSocket")
+            await ws.send_json({
+                "type": "error",
+                "message": "人体姿态模型初始化失败，无法进行姿势检测",
+            })
+            await ws.close()
+            if ws in active_connections:
+                active_connections.remove(ws)
             return
         else:
             await ws.send_json({"type": "ready", "message": "MediaPipe ready"})

@@ -349,7 +349,7 @@ export default function Settings() {
         >
           <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>关于 NeckGuardian</p>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-            版本：{appVersion || '1.3.0'}<br />
+            版本：{appVersion || '1.3.1'}<br />
             技术栈：Electron + React + TypeScript + Python FastAPI + MediaPipe<br />
             数据存储：本地 SQLite，所有数据不上传<br />
             隐私保护：摄像头画面仅在本地处理；仅在启用 AI 分析时，将匿名的姿态指标与统计数据发送至 DeepSeek
