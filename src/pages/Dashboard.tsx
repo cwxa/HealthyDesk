@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
 import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
+import AIAnalysisPanel from '../components/AIAnalysisPanel'
 import type { ActivityRecord, WeeklyReport as WeeklyReportType } from '../types'
 import { TrendingUpIcon, ActivityIcon, BarChart2Icon, CheckIcon, MonitorIcon, ClockIcon, NeckIcon, FlameIcon } from '../components/icons'
 
@@ -19,6 +20,24 @@ export default function Dashboard() {
     get<ActivityRecord[]>('/api/activity/recent?limit=10').then(setActivities).catch(e => console.error('Activity recent failed:', e))
     get<WeeklyReportType>('/api/stats/weekly').then(setWeekly).catch(e => console.error('Weekly report failed:', e))
   }, [get])
+
+  // 组装 AI 分析请求体：优先取最近一次姿态记录，其次用今日/本周统计兜底。
+  const buildAIPayload = useCallback(() => {
+    const latest = activities[0]
+    const hasPose = latest?.avg_score !== undefined && latest?.avg_score !== null
+    const hasStats = weekly !== null || summary !== null
+    if (!hasPose && !hasStats) return null
+
+    return {
+      score: hasPose ? Math.round(latest.avg_score) : (summary?.today_avg ?? undefined),
+      today_avg: summary?.today_avg ?? undefined,
+      weekly_avg: weekly?.posture_avg ?? undefined,
+      today_activities: summary?.today_activities ?? undefined,
+      completion_rate: weekly?.completion_rate ?? undefined,
+      daily_minutes: weekly ? Math.round(weekly.total_minutes / 7) : undefined,
+      issues: [],
+    }
+  }, [activities, summary, weekly])
 
   const tips = [
     { icon: MonitorIcon, text: '显示器顶部与眼睛齐平' },
@@ -55,6 +74,9 @@ export default function Dashboard() {
           <TrendChart data={weekly.trend} />
         </motion.div>
       )}
+
+      {/* AI 肩颈分析 */}
+      <AIAnalysisPanel buildPayload={buildAIPayload} />
 
       {/* Bottom: 2x2 grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>

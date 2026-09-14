@@ -24,5 +24,7 @@ def get_fallback_suggestions(issues: list[str]) -> list[str]:
     if "脊柱倾斜" in issues:
         result.append("检测到脊柱倾斜：调整坐姿，保持身体居中。")
 
-    result.append(SUGGESTIONS[hash(tuple(issues)) % len(SUGGESTIONS)])
+    # 用稳定的索引挑选一条通用建议（避免 Python hash 随机化导致每次进程启动结果不同）
+    idx = sum(ord(ch) for issue in sorted(issues) for ch in issue) % len(SUGGESTIONS)
+    result.append(SUGGESTIONS[idx])
     return result

@@ -53,6 +53,9 @@ async def init_db():
         INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', 'false');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start', 'false');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('voice_enabled', 'true');
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_api_key', '');
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_base_url', '');
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_model', 'deepseek-chat');
     """)
     await db.commit()
     await db.close()

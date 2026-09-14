@@ -9,7 +9,7 @@ import uvicorn
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import BACKEND_PORT
+from config import BACKEND_PORT, APP_VERSION
 from db.database import init_db
 from services.scheduler import start_scheduler, stop_scheduler, set_remind_callback, _init_interval
 from api.posture import router as posture_router
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="NeckGuardian API", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="NeckGuardian API", version=APP_VERSION, lifespan=lifespan)
 
 # 仅允许本地前端（Vite 开发服务器）与打包后的 Electron 渲染进程
 # （file:// 加载）调用 API，避免通配符来源。
@@ -73,7 +73,7 @@ app.include_router(ws_router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.2.0"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 if __name__ == "__main__":

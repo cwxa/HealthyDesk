@@ -61,10 +61,24 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒桌面应用，通�
 #### ⚙️ 设置
 
 在设置页面可调整：
-- 提醒间隔时间（15-60分钟）
+- 提醒间隔时间（2-120分钟）
+- AI 增强模式开关（连接 DeepSeek）
 - 语音播报开关
-- 评分阈值设置
-- 主题切换
+- 开机自启动开关
+
+#### 🤖 AI 肩颈分析（DeepSeek）
+
+NeckGuardian 支持接入 **DeepSeek 大模型**，对您的肩颈情况生成个性化分析报告：
+
+1. 前往 [platform.deepseek.com](https://platform.deepseek.com) 创建 **API Key**
+2. 打开「系统设置」→「DeepSeek 大模型」，粘贴 API Key
+3. 选择模型（`deepseek-chat` 快速 / `deepseek-reasoner` 深度推理），点击「保存配置」
+4. 点击「测试连接」确认 Key 可用
+5. 开启「AI 增强模式」后，进入「仪表盘」点击「生成分析」
+
+AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱倾斜）与**近期使用数据**（今日/本周评分、活动次数、完成率）生成结构化报告：整体评估 → 问题分析 → 改善建议 → 今日行动。
+
+> 🔒 **隐私说明**：API Key 仅保存在本机数据库，不会上传；仅在您主动点击「生成分析」时，才会将**匿名的姿态指标与统计数据**（不含摄像头画面）发送至 DeepSeek。
 
 ### 1.3 快捷键
 
@@ -163,7 +177,8 @@ HealthyDesk/
 │   ├── db/                    # 数据访问层
 │   │   └── database.py        # SQLite ORM 封装
 │   ├── services/              # 业务逻辑层
-│   │   ├── ai_advisor.py      # AI 健康建议生成
+│   │   ├── ai_advisor.py      # AI 健康建议 / 综合报告生成
+│   │   ├── ai_config.py       # DeepSeek 配置解析（DB > 环境变量）
 │   │   ├── fallback.py        # AI 不可用时的降级方案
 │   │   ├── pose_detector.py   # MediaPipe 姿势检测核心
 │   │   ├── scheduler.py       # APScheduler 定时任务
@@ -178,14 +193,17 @@ HealthyDesk/
 │   └── preload.ts             # 预加载脚本，API 桥接
 ├── src/                       # React 前端 (渲染进程)
 │   ├── components/            # 可复用 UI 组件
+│   │   ├── AIAnalysisPanel.tsx   # AI 肩颈分析面板
 │   │   ├── BreathingCircle.tsx   # 呼吸练习动画组件
 │   │   ├── ExerciseGuide.tsx     # 活动指导组件
 │   │   ├── ExercisePanel.tsx     # 活动面板容器
+│   │   ├── Markdown.tsx          # 轻量 Markdown 渲染
 │   │   ├── PostureSkeleton.tsx   # 骨架动画渲染
 │   │   ├── ScoreGauge.tsx        # 环形评分仪表盘
 │   │   ├── Sidebar.tsx           # 侧边导航栏
 │   │   └── TrendChart.tsx        # 趋势图表组件
 │   ├── hooks/                 # 自定义 React Hooks
+│   │   ├── useAI.ts           # AI 配置 / 分析请求封装
 │   │   ├── useApi.ts          # API 请求封装
 │   │   └── useWebSocket.ts    # WebSocket 连接管理
 │   ├── pages/                 # 页面级组件
@@ -251,17 +269,32 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 时间触发 → 检查当前状态 → 发送 WebSocket 通知 → Electron 弹窗提醒
 ```
 
-#### 2.3.4 AI 健康顾问
+#### 2.3.4 AI 健康顾问（DeepSeek 接入）
+
+**配置优先级**：数据库设置（用户在应用内填写） > 环境变量（部署默认值）。
+用户在「系统设置」填写的 API Key 会写入 `settings` 表，重启后依然生效；接口下发的 Key 一律**掩码处理**，绝不回传明文。
 
 **技术方案**：
-- 集成 **DeepSeek API** 生成个性化健康建议
-- 支持 **降级方案**（无 API Key 时使用预设建议）
-- 基于用户姿势数据和活动历史生成建议
+- 集成 **DeepSeek Chat Completions API**（`/v1/chat/completions`，Bearer 鉴权）
+- 支持 **降级方案**（未配置 Key 时使用本地预设建议）
+- 支持两类调用：
+  - `/api/ai/suggestion` — 实时单条轻量建议
+  - `/api/ai/analyze` — 结合实时姿态 + 近期使用数据的结构化分析报告
 
 **数据流向**：
 ```
-用户数据 → 格式化 Prompt → DeepSeek API → 解析响应 → 返回建议
+姿态指标 + 使用统计 → 组装结构化 Prompt → DeepSeek API → Markdown 报告 → 前端渲染
 ```
+
+**接口一览**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ai/config` | 读取配置（Key 掩码） |
+| PUT | `/api/ai/config` | 更新配置（Key 留空表示不修改） |
+| POST | `/api/ai/test` | 测试连通性（返回 401/402/404 等友好错误） |
+| POST | `/api/ai/suggestion` | 实时轻量建议（含本地降级） |
+| POST | `/api/ai/analyze` | 综合肩颈分析报告 |
 
 ### 2.4 数据库设计
 
@@ -303,7 +336,7 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 | key | TEXT (PK) | 设置键名 |
 | value | TEXT | 设置值 |
 
-默认设置：`reminder_interval='30'`、`ai_enabled='false'`、`auto_start='false'`、`voice_enabled='true'`。
+默认设置：`reminder_interval='30'`、`ai_enabled='false'`、`auto_start='false'`、`voice_enabled='true'`、`deepseek_api_key=''`、`deepseek_base_url=''`、`deepseek_model='deepseek-chat'`。
 
 ### 2.5 API 接口设计
 
@@ -316,7 +349,7 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 | posture | 4 | 姿势评分记录、历史、均值、趋势 |
 | stats | 2 | 周报统计、今日摘要 |
 | reminder | 3 | 结束休息、延迟提醒、状态查询 |
-| ai | 1 | AI 健康建议（未配置 Key 时降级本地规则） |
+| ai | 5 | 配置读写、连通性测试、实时建议、综合分析 |
 | settings | 3 | 获取全部/单个设置、更新设置 |
 | activity | 3 | 记录活动、最近活动、今日活动数 |
 
@@ -388,10 +421,10 @@ npm run dev
 | 安全措施 | 实现位置 | 说明 |
 |----------|----------|------|
 | **上下文隔离** | Electron preload.ts | 禁用 nodeIntegration，使用 contextIsolation |
-| **CORS 限制** | FastAPI middleware | 仅允许本地访问 |
-| **API Key 保护** | 环境变量 | 敏感配置不硬编码 |
+| **CORS 限制** | FastAPI middleware | 仅允许本地访问（开发服务器 + file://） |
+| **API Key 保护** | 本机 SQLite + 掩码 | Key 仅存本机数据库，接口返回一律掩码；环境变量作为可选默认值 |
 | **单实例运行** | Electron main.ts | 防止多进程竞争 |
-| **摄像头权限** | 用户授权 | 首次使用需用户确认 |
+| **摄像头权限** | 用户授权 | 首次使用需用户确认；画面仅本地处理，不上传 |
 
 ---
 
