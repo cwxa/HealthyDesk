@@ -25,7 +25,6 @@ function AppShell() {
 
   useEffect(() => {
     window.electronAPI?.onBackendReady((data) => {
-      console.log('Backend ready on port', data.port)
       setBackendReady(true)
     })
     const timer = setTimeout(() => setBackendReady(true), 5000)
@@ -35,21 +34,19 @@ function AppShell() {
   useEffect(() => {
     if (window.electronAPI) {
       window.electronAPI.onStartExercise(() => {
-        console.log('[App] onStartExercise received')
+        sessionStorage.setItem('neckguardian:start-exercise', '1')
+        window.dispatchEvent(new CustomEvent('start-exercise-mode'))
         navigate('/')
       })
       window.electronAPI.onReminder(() => {
-        console.log('[App] onReminder received from IPC')
         get<{is_startup_reminder?: boolean}>('/api/reminder/status')
           .then((res: {is_startup_reminder?: boolean}) => {
-            console.log('[App] Reminder status:', res)
             setIsStartupReminder(res.is_startup_reminder || false)
           })
           .catch(() => {
             setIsStartupReminder(false)
           })
           .finally(() => {
-            console.log('[App] Showing reminder modal')
             navigate('/')
             setReminderVisible(true)
             speak('该活动一下了！请你活动肩颈。')
@@ -98,6 +95,9 @@ function AppShell() {
     } catch (e) {
       console.error('End break failed:', e)
     }
+    // 用 sessionStorage 兜底：若 NeckActivity 尚未挂载（用户在其他页），
+    // 事件会丢失，标记可让该页挂载后自行进入练习模式。
+    sessionStorage.setItem('neckguardian:start-exercise', '1')
     window.dispatchEvent(new CustomEvent('start-exercise-mode'))
     navigate('/')
   }, [post, navigate])

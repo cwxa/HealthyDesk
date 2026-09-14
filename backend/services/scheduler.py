@@ -3,13 +3,12 @@ import logging
 from datetime import datetime, date, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from db.database import get_db
-from config import REMINDER_INTERVAL_MINUTES
+from config import REMINDER_INTERVAL_MINUTES, MIN_REMINDER_INTERVAL
 
 logger = logging.getLogger("neckguardian.scheduler")
 
 _scheduler: AsyncIOScheduler = None
 _accumulated_minutes = 0
-_last_tick: datetime = None
 _on_remind_callback = None
 _break_active = False
 _pending_reminder = False
@@ -35,7 +34,7 @@ async def _init_interval() -> int:
         await db.close()
         if row:
             val = int(row["value"])
-            if val >= 2:
+            if val >= MIN_REMINDER_INTERVAL:
                 _reminder_interval = val
                 logger.info("Loaded reminder_interval from database: %d", _reminder_interval)
                 return _reminder_interval
@@ -54,7 +53,7 @@ async def _load_reminder_interval() -> int:
         await db.close()
         if row:
             val = int(row["value"])
-            if val >= 2:
+            if val >= MIN_REMINDER_INTERVAL:
                 _reminder_interval = val
     except Exception as e:
         logger.warning("Failed to load reminder_interval: %s", e)
@@ -73,11 +72,10 @@ async def reload_reminder_interval():
 
 
 def start_scheduler():
-    global _scheduler, _last_tick, _startup_triggered, _break_active, _pending_reminder, _accumulated_minutes, _startup_reminder_active
+    global _scheduler, _startup_triggered, _break_active, _pending_reminder, _accumulated_minutes, _startup_reminder_active
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(_minute_tick, "interval", minutes=1, id="usage_tick")
     _scheduler.start()
-    _last_tick = datetime.now()
     _startup_triggered = False  # Reset to ensure mandatory startup reminder triggers
     _startup_reminder_active = False  # Reset startup reminder state
     _break_active = False       # Reset break state
@@ -126,7 +124,7 @@ def stop_scheduler():
 
 
 async def _minute_tick():
-    global _accumulated_minutes, _last_tick, _break_active, _pending_reminder, _forced_reminder_at, _last_triggered, _startup_reminder_active
+    global _accumulated_minutes, _break_active, _pending_reminder, _forced_reminder_at, _last_triggered, _startup_reminder_active
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
 

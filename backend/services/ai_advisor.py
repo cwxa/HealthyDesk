@@ -1,6 +1,13 @@
 import logging
 import httpx
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, AI_ENABLED
+from config import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    AI_ENABLED,
+    HEAD_TILT_THRESHOLD,
+    SHOULDER_DIFF_THRESHOLD,
+    SPINE_ANGLE_THRESHOLD,
+)
 
 logger = logging.getLogger("neckguardian.ai")
 
@@ -45,9 +52,9 @@ async def get_ai_suggestion(posture_data: dict) -> str:
 def _build_prompt(data: dict) -> str:
     return (
         f"用户的姿态检测数据如下：\n"
-        f"- 头部前倾角度: {data['head_angle']}°（正常应小于20°）\n"
-        f"- 肩部高度差: {data['shoulder_diff']}像素\n"
-        f"- 脊柱倾斜角度: {data['spine_angle']}°\n"
+        f"- 头部侧倾角度: {data['head_angle']}°（正常应小于{HEAD_TILT_THRESHOLD:g}°）\n"
+        f"- 肩部高度差: {data['shoulder_diff']}%（正常应小于{SHOULDER_DIFF_THRESHOLD:g}%）\n"
+        f"- 脊柱倾斜角度: {data['spine_angle']}°（正常应小于{SPINE_ANGLE_THRESHOLD:g}°）\n"
         f"- 历史平均评分: {data.get('history_avg', 0)}分\n\n"
         f"请根据以上数据，给出关于桌椅高度调整、显示器位置、放松动作的具体建议。"
     )

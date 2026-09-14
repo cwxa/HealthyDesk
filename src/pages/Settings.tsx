@@ -12,6 +12,11 @@ export default function Settings() {
     voice_enabled: 'true',
   })
   const [saved, setSaved] = useState(false)
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    window.electronAPI?.getAppVersion?.().then(setAppVersion).catch(() => {})
+  }, [])
 
   useEffect(() => {
     get<Record<string, string>>('/api/settings').then((data) => {
@@ -171,7 +176,7 @@ export default function Settings() {
         >
           <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>关于 NeckGuardian</p>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-            版本：1.0.0<br />
+            版本：{appVersion || '1.2.0'}<br />
             技术栈：Electron + React + TypeScript + Python FastAPI + MediaPipe<br />
             数据存储：本地 SQLite，所有数据不上传<br />
             隐私保护：摄像头画面仅在本地处理，不发送至任何服务器
@@ -204,15 +209,6 @@ const cardStyle: React.CSSProperties = {
   borderRadius: 'var(--radius)',
   padding: 20,
   boxShadow: 'var(--shadow)',
-}
-
-const selectStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 6,
-  border: '1px solid var(--border)',
-  fontSize: 14,
-  background: 'var(--bg)',
-  cursor: 'pointer',
 }
 
 const switchContainer: React.CSSProperties = { cursor: 'pointer', display: 'inline-block' }

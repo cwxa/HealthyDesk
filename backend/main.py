@@ -20,8 +20,9 @@ from api.activity import router as activity_router
 from api.reminder import router as reminder_router
 from ws.camera_ws import router as ws_router, notify_reminder
 
+log_level = logging.DEBUG if os.getenv("NECKGUARDIAN_DEBUG") else logging.INFO
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler()],
 )
@@ -42,7 +43,7 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="NeckGuardian API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="NeckGuardian API", version="1.2.0", lifespan=lifespan)
 
 # 仅允许本地前端（Vite 开发服务器）与打包后的 Electron 渲染进程
 # （file:// 加载）调用 API，避免通配符来源。
@@ -72,7 +73,7 @@ app.include_router(ws_router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.2.0"}
 
 
 if __name__ == "__main__":

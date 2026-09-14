@@ -13,10 +13,6 @@ export function speak(text: string, lang = 'zh-CN'): void {
   window.speechSynthesis.speak(utterance)
 }
 
-export function speakReminder(): void {
-  speak('该休息一下了！请做一个简短的肩颈放松活动。')
-}
-
 export function speakPostureIssue(issues: string[]): void {
   if (issues.length === 0) return
   const text = `检测到${issues.join('、')}，请注意调整坐姿。`

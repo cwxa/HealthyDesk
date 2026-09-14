@@ -22,36 +22,8 @@ export default function NeckActivity() {
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
-  const [nextReminderText, setNextReminderText] = useState('')
-  const [nextReminderAt, setNextReminderAt] = useState<string | null>(null)
-
-  // 获取提醒状态并更新UI显示
-  interface ReminderStatus {
-    pending: boolean
-    next_reminder: string | null
-    snooze_until: string | null
-    last_triggered: string | null
-  }
-
-  const updateReminderStatus = useCallback(async () => {
-    try {
-      const status = await get<ReminderStatus>('/api/reminder/status')
-      if (status.next_reminder) {
-        const nextTime = new Date(status.next_reminder)
-        setNextReminderAt(status.next_reminder)
-        setNextReminderText(`下次提醒: ${nextTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
-      } else if (status.snooze_until) {
-        const snoozeTime = new Date(status.snooze_until)
-        setNextReminderAt(status.snooze_until)
-        setNextReminderText(`已暂停至: ${snoozeTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`)
-      } else {
-        setNextReminderText('')
-        setNextReminderAt(null)
-      }
-    } catch (e) {
-      console.error('Failed to get reminder status:', e)
-    }
-  }, [get])
+  // 标记摄像头已卸载（StrictMode 双挂载 / 组件卸载），使未完成的 async 不再回写
+  const cameraAbortRef = useRef(false)
 
   // Exercise state
   const [exCurrent, setExCurrent] = useState(0)
@@ -65,29 +37,43 @@ export default function NeckActivity() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: 'user' },
       })
+      // 若在等待授权期间组件已卸载/重挂载，立即释放这条流，避免泄漏
+      if (cameraAbortRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
+      if (cameraAbortRef.current) {
+        streamRef.current?.getTracks().forEach((t) => t.stop())
+        streamRef.current = null
+        return
+      }
       setCameraReady(true)
       setCameraError('')
       connect()
     } catch {
-      setCameraError('无法访问摄像头，请检查权限设置')
+      if (!cameraAbortRef.current) setCameraError('无法访问摄像头，请检查权限设置')
     }
   }, [connect])
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
     setCameraReady(false)
     disconnect()
   }, [disconnect])
 
   useEffect(() => {
+    cameraAbortRef.current = false
     startCamera()
     return () => {
+      // 标记中止：使未完成的 getUserMedia 回调不再回写 state
+      cameraAbortRef.current = true
       stopCamera()
       clearInterval(intervalRef.current)
       clearInterval(exTimerRef.current)
@@ -154,14 +140,11 @@ export default function NeckActivity() {
     checkPendingReminder()
   }, [get])
 
-  // Listen for start-exercise-mode event from App.tsx
+  // 监听来自 App / 托盘的「开始活动」意图。
+  // 用 sessionStorage 兜底：若事件在组件挂载前已派发（跨路由跳转），
+  // 挂载时读取标记并进入练习模式，避免意图丢失。
   useEffect(() => {
-    const handleStartExerciseMode = async () => {
-      try {
-        await post('/api/reminder/end', {})
-      } catch (e) {
-        console.error('End break failed:', e)
-      }
+    const beginExerciseMode = () => {
       setMode('exercise')
       setExCurrent(0)
       setExTimeLeft(exercises[0].duration)
@@ -169,15 +152,22 @@ export default function NeckActivity() {
       exScoresRef.current = []
       speak('请跟随引导完成肩颈活动')
     }
+    const handleStartExerciseMode = () => {
+      sessionStorage.removeItem('neckguardian:start-exercise')
+      beginExerciseMode()
+    }
     window.addEventListener('start-exercise-mode', handleStartExerciseMode)
+    if (sessionStorage.getItem('neckguardian:start-exercise')) {
+      sessionStorage.removeItem('neckguardian:start-exercise')
+      beginExerciseMode()
+    }
     return () => window.removeEventListener('start-exercise-mode', handleStartExerciseMode)
-  }, [post])
+  }, [])
 
   // Start exercise
   const startExercise = useCallback(async () => {
     try {
       await post('/api/reminder/end', {})
-      updateReminderStatus()
     } catch (e) {
       console.error('End break failed:', e)
     }
@@ -188,46 +178,6 @@ export default function NeckActivity() {
     exScoresRef.current = []
     speak('请跟随引导完成肩颈活动')
   }, [post])
-
-  // Exercise timer
-  useEffect(() => {
-    if (mode !== 'exercise') return
-    exTimerRef.current = window.setInterval(() => {
-      setExTimeLeft(t => {
-        if (t <= 1) {
-          setExCurrent(c => {
-            if (c < exercises.length - 1) {
-              setExTimeLeft(exercises[c + 1].duration)
-              return c + 1
-            } else {
-              finishExercise()
-              return c
-            }
-          })
-          return 0
-        }
-        return t - 1
-      })
-    }, 1000)
-    return () => clearInterval(exTimerRef.current)
-  }, [mode])
-
-  const skipCurrent = () => {
-    setExCurrent(c => {
-      if (c < exercises.length - 1) {
-        setExTimeLeft(exercises[c + 1].duration)
-        return c + 1
-      } else {
-        finishExercise()
-        return c
-      }
-    })
-  }
-
-  const endExercise = () => {
-    clearInterval(exTimerRef.current)
-    finishExercise()
-  }
 
   const finishExercise = useCallback(async () => {
     clearInterval(exTimerRef.current)
@@ -245,17 +195,54 @@ export default function NeckActivity() {
         avg_score: avg,
       })
       await post('/api/reminder/end', {})
-      console.log('Activity recorded, reminder ended')
     } catch (e) {
       console.error('Activity record failed:', e)
     }
   }, [post])
 
+  // 用 ref 持有最新的 finishExercise，供计时器回调调用，避免 stale closure
+  const finishRef = useRef(finishExercise)
+  useEffect(() => { finishRef.current = finishExercise }, [finishExercise])
+
+  // Exercise timer
   useEffect(() => {
-    if (mode === 'done') {
-      updateReminderStatus()
-    }
-  }, [mode, updateReminderStatus])
+    if (mode !== 'exercise') return
+    exTimerRef.current = window.setInterval(() => {
+      setExTimeLeft(t => {
+        if (t <= 1) {
+          setExCurrent(c => {
+            if (c < exercises.length - 1) {
+              setExTimeLeft(exercises[c + 1].duration)
+              return c + 1
+            } else {
+              finishRef.current()
+              return c
+            }
+          })
+          return 0
+        }
+        return t - 1
+      })
+    }, 1000)
+    return () => clearInterval(exTimerRef.current)
+  }, [mode])
+
+  const skipCurrent = () => {
+    setExCurrent(c => {
+      if (c < exercises.length - 1) {
+        setExTimeLeft(exercises[c + 1].duration)
+        return c + 1
+      } else {
+        finishRef.current()
+        return c
+      }
+    })
+  }
+
+  const endExercise = () => {
+    clearInterval(exTimerRef.current)
+    finishRef.current()
+  }
 
   const score = latestResult?.type === 'pose' ? (latestResult.score ?? 0) : 0
   const issues = latestResult?.type === 'pose' ? (latestResult.issues ?? []) : []

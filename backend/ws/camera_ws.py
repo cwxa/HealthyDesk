@@ -132,13 +132,10 @@ def _decode_frame(msg: dict):
 
 
 async def notify_reminder():
+    """提醒事件回调。
+
+    提醒弹窗/系统通知统一走 Electron 主进程轮询 /api/reminder/status，
+    WebSocket 仅负责姿态数据（前端不再消费 'reminder' 消息）。
+    此处只记录一次休息计数，避免「用广播的壳做计数的活」的误导性代码。
+    """
     await record_break()
-    disconnected = []
-    for ws in active_connections:
-        try:
-            await ws.send_json({"type": "reminder", "message": "该活动一下了！"})
-        except Exception:
-            disconnected.append(ws)
-    for ws in disconnected:
-        if ws in active_connections:
-            active_connections.remove(ws)

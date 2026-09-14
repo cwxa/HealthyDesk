@@ -43,6 +43,25 @@ function getBackendExePath(): string | null {
   return fs.existsSync(local) ? local : null
 }
 
+// 强制终止后端进程及其子进程树（PyInstaller exe 会 fork 子进程，
+// Windows 上单纯 kill() 不保证回收整棵树）。
+function killBackendProcess(): void {
+  const proc = pythonProcess
+  pythonProcess = null
+  if (!proc || proc.killed || proc.pid === undefined) return
+
+  if (process.platform === 'win32') {
+    try {
+      // taskkill /T 递归终止子进程，/F 强制
+      spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      proc.kill()
+    }
+  } else {
+    proc.kill('SIGTERM')
+  }
+}
+
 function startPythonBackend(): void {
   const env = { ...process.env, NECKGUARDIAN_PORT: String(BACKEND_PORT) }
 
@@ -55,32 +74,37 @@ function startPythonBackend(): void {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    return
+  } else {
+    // 开发环境回退：直接运行 Python 源码
+    const backendDir = getAssetPath('backend')
+    const mainPy = path.join(backendDir, 'main.py')
+    console.log('Starting backend via python:', mainPy)
+    pythonProcess = spawn('python', [mainPy], {
+      cwd: backendDir,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
   }
 
-  // 开发环境回退：直接运行 Python 源码
-  const backendDir = getAssetPath('backend')
-  const mainPy = path.join(backendDir, 'main.py')
-  console.log('Starting backend via python:', mainPy)
-  pythonProcess = spawn('python', [mainPy], {
-    cwd: backendDir,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  // 统一挂载日志与崩溃恢复（此前 exe 分支提前 return，导致打包环境
+  // 崩溃后永不重启、日志被吞）。
   pythonProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[Python] ${data.toString().trim()}`)
+    console.log(`[Backend] ${data.toString().trim()}`)
   })
 
   pythonProcess.stderr?.on('data', (data: Buffer) => {
-    console.error(`[Python ERR] ${data.toString().trim()}`)
+    console.error(`[Backend ERR] ${data.toString().trim()}`)
   })
 
   pythonProcess.on('exit', (code) => {
-    console.log(`Python process exited with code ${code}`)
-    if (code !== 0 && mainWindow) {
+    console.log(`Backend process exited with code ${code}`)
+    // 正常退出（含应用退出时被主动 kill）不重启
+    if (isQuiting) return
+    if (mainWindow) {
       console.warn('Backend crashed, restarting in 3s...')
-      setTimeout(() => startPythonBackend(), 3000)
+      setTimeout(() => {
+        if (!isQuiting) startPythonBackend()
+      }, 3000)
     }
   })
 }
@@ -340,9 +364,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    // Don't quit if tray exists
-  }
+  // 保持托盘常驻：关闭窗口不退出应用（用户从托盘菜单或侧栏按钮显式退出）。
+  // 非 macOS 且托盘不可用时，仍保留此行为以免后台无双击入口。
 })
 
 app.on('before-quit', () => {
@@ -351,10 +374,17 @@ app.on('before-quit', () => {
   const { globalShortcut } = require('electron')
   globalShortcut.unregisterAll()
   stopReminderPolling()
-  if (pythonProcess) {
-    pythonProcess.kill()
-    pythonProcess = null
-  }
+  killBackendProcess()
+})
+
+// 进程被信号中断（如任务管理器结束、开发热重载）时同样清理后端，
+// 避免孤儿进程占用端口 18920。
+;(['SIGINT', 'SIGTERM'] as const).forEach((sig) => {
+  process.on(sig, () => {
+    isQuiting = true
+    killBackendProcess()
+    app.quit()
+  })
 })
 
 ipcMain.handle('get-backend-url', () => BACKEND_URL)
@@ -371,3 +401,12 @@ ipcMain.handle('quit-app', () => {
 })
 
 ipcMain.handle('get-app-version', () => app.getVersion())
+
+ipcMain.handle('set-auto-start', (_event, enabled: boolean) => {
+  // 仅打包后生效；开发环境调用会写入 Electron 默认 exe，故跳过。
+  if (!app.isPackaged) return
+  app.setLoginItemSettings({
+    openAtLogin: !!enabled,
+    path: process.execPath,
+  })
+})

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from db.database import get_db
 from services.scheduler import reload_reminder_interval
+from config import MIN_REMINDER_INTERVAL, MAX_REMINDER_INTERVAL
 
 logger = logging.getLogger("neckguardian.api.settings")
 router = APIRouter(tags=["settings"])
@@ -44,10 +45,13 @@ async def update_setting(item: SettingItem):
         if item.key == "reminder_interval":
             try:
                 interval = int(item.value)
-                if interval < 2:
-                    raise HTTPException(status_code=400, detail="提醒间隔最少为2分钟")
             except ValueError:
                 raise HTTPException(status_code=400, detail="提醒间隔必须是有效的数字")
+            if not (MIN_REMINDER_INTERVAL <= interval <= MAX_REMINDER_INTERVAL):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"提醒间隔需在 {MIN_REMINDER_INTERVAL}-{MAX_REMINDER_INTERVAL} 分钟之间",
+                )
         
         await db.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) "

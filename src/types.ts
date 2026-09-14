@@ -26,11 +26,6 @@ export interface PoseResult {
   message?: string
 }
 
-export interface WSMessage {
-  type: string
-  [key: string]: unknown
-}
-
 export interface WeeklyReport {
   posture_avg: number
   weekly_activities: number

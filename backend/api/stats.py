@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter
 from db.database import get_db
+from config import REMINDER_INTERVAL_MINUTES
 
 logger = logging.getLogger("neckguardian.api.stats")
 router = APIRouter(tags=["stats"])
@@ -43,7 +44,10 @@ async def get_weekly_report():
         total_minutes = row["total_min"] or 0
         total_breaks = row["total_breaks"] or 0
 
-        expected_breaks = max(1, total_minutes // 30)
+        # 完成率 = 实际活动次数 / 应休息次数。
+        # 应休息次数按使用时长与提醒间隔估算（此前固定按 30 分钟，
+        # 且未考虑用户自定义间隔，导致数值失真）。
+        expected_breaks = max(1, round(total_minutes / max(1, REMINDER_INTERVAL_MINUTES)))
         completion_rate = round(min(100, (weekly_activities / expected_breaks) * 100), 1) if expected_breaks > 0 else 0
 
         # Trend: daily average score

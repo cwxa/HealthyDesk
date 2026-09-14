@@ -1,5 +1,4 @@
 import { motion } from 'framer-motion'
-import { useEffect } from 'react'
 
 interface Props {
   exerciseIndex: number
@@ -9,10 +8,6 @@ interface Props {
 
 // 肩颈活动动画引导组件 - 使用SVG+Framer Motion直观展示每个动作
 export default function ExerciseGuide({ exerciseIndex, color, size = 160 }: Props) {
-  useEffect(() => {
-    console.log(`[ExerciseGuide] Rendering exercise ${exerciseIndex}, color=${color}`)
-  }, [exerciseIndex, color])
-
   const c = size / 2
   const headR = size * 0.16
   const bodyW = size * 0.22

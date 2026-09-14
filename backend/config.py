@@ -14,3 +14,7 @@ CONSECUTIVE_LOW_COUNT = 3
 HEAD_TILT_THRESHOLD = 5.0  # degrees, ear-line vs horizontal
 SHOULDER_DIFF_THRESHOLD = 4.0  # percentage of shoulder width (distance-invariant)
 SPINE_ANGLE_THRESHOLD = 10.0
+
+# 提醒间隔的合法范围（settings 校验、前端输入、scheduler 读取共用同一来源）
+MIN_REMINDER_INTERVAL = 2
+MAX_REMINDER_INTERVAL = 120
