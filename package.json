@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "backend:build": "pyinstaller neckguardian-backend.spec --noconfirm --distpath build",
+    "backend:build": "pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath build/pyi-work",
     "build": "tsc && vite build && npm run backend:build && electron-builder",
     "preview": "vite preview",
     "electron:dev": "vite build && electron .",

@@ -9,9 +9,18 @@ files:
   - dist/**/*
   - backend/**/*
   - package.json
+  # 排除 devDependencies 依赖树与 Python 编译缓存，避免把体积巨大的
+  # node_modules / __pycache__ 原样打进安装包（此前会导致打包卡死）。
+  - '!**/node_modules/**'
+  - '!**/__pycache__/**'
+  - '!**/*.pyc'
 extraResources:
   - from: backend/
     to: backend/
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
+      - '!**/*.pyc'
   # 自包含的后端可执行文件（PyInstaller 产物，由 `npm run backend:build` 生成）。
   # 打包进安装包后，目标机器无需安装 Python 即可运行后端。
   - from: build/neckguardian-backend
