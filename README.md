@@ -10,6 +10,17 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 
 ---
 
+## ⬇️ 下载
+
+| 平台 | 文件 | 大小 | 说明 |
+|------|------|------|------|
+| 🖥️ Windows | [NeckGuardian Setup 1.3.1.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian.Setup.1.3.1.exe) | 196 MB | 安装包；首次启动会请求摄像头权限 |
+| 📱 Android | [NeckGuardian-Android-1.3.1-debug.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian-Android-1.3.1-debug.apk) | 18.3 MB | **Debug 签名**，仅供测试安装；需允许「未知来源应用」 |
+
+最新版本：**[v1.3.1](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.1)** ｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+
+---
+
 ## 📱 安卓版快速上手
 
 安卓版把姿态检测整个搬进了手机（MediaPipe WASM/GPU 本地推理），摄像头画面**不出设备**。
