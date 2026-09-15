@@ -261,8 +261,31 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 复刻 Python 语义，替换所有涉及评分的 `Math.round`。
 
 **防回归**：新增 `scripts/verify-scoring.mjs` + `verify-angles.mjs`，从 Python 侧生成期望值，
-逐条比对前端实现（当前 80 + 8 条用例全通过）。`verify-scoring.mjs` 还会断言评分模型的核心不变量
-「**有提醒 ⟺ 分数 < 80**」，改动评分/角度公式后务必重跑 `npm run verify:parity`。
+逐条比对前端实现（当前 80 条评分用例 + 439 帧平滑序列 + 8 条角度用例全通过）。
+`verify-scoring.mjs` 还会断言评分模型的核心不变量「**有提醒 ⟺ 分数 < 80**」，
+改动评分/角度公式后务必重跑 `npm run verify:parity`。
+
+> ⚠️ 该脚本用 esbuild bundle `src/platform/localPoseEngine.ts` **真实源码**执行，不维护内联副本；
+> 副本与源码各错各的、测试却全绿，是这类"一致性测试"最典型的失效方式。
+
+### 6b. 平滑器取整口径不一致（同一类问题的第二个实例）🔴
+
+**现象**：评分逻辑已对齐，但理论上仍可能差 1 分——仅靠 80 条评分用例发现不了。
+
+**根因**：后端 `camera_ws.py` 的 EMA 平滑器写的是 `round(x, 2)`，前端写的是
+`pyRound(x * 100) / 100`。**两者不是同一个函数**：
+
+- `round(x, 2)` = 把 x 的**精确值**舍入到 2 位小数；
+- `round(x * 100) / 100` = 先把 x 乘 100（引入一次舍入），再对结果做银行家舍入。
+
+当 `x * 100` 恰好落在半整数上时结果不同：`x = 0.015` → 前者 `0.01`、后者 `0.02`。
+（2 位小数的中点 1/200 不是二进制可精确表示的数，所以这个平局点只能由 `x * 100` 这一步踩中。）
+
+**修复**：`PoseSmoother` 抽到独立模块 `backend/services/smoother.py`（便于被测试直接导入），
+取整统一为 `round(x * 100) / 100`，与前端 `pyRound()` 逐位等价。
+
+**防回归**：`gen-scoring-cases.py` 增加平滑器逐帧用例，并专门构造 40 个能踩中平局点的输入
+（实测：把后端改回 `round(x, 2)` 会让这 40 条全部报错）。
 
 ### 7. Capacitor WebView 打不开摄像头 🔴
 

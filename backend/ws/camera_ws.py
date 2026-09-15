@@ -3,7 +3,6 @@ import base64
 import json
 import logging
 from datetime import datetime
-from typing import Optional
 import cv2
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -11,38 +10,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services.pose_detector import pose_detector
 from services.scorer import compute_score
 from services.scheduler import record_break
+# 平滑器单独成模块（要参与双端等价性验证，见 backend/services/smoother.py 顶部说明）
+from services.smoother import PoseSmoother
 
 logger = logging.getLogger("neckguardian.ws")
 router = APIRouter()
 
 active_connections: list[WebSocket] = []
-
-EMA_ALPHA = 0.35  # smoothing factor: higher = faster response, lower = more stable
-
-
-class PoseSmoother:
-    """Exponential moving average for pose metrics — reduces frame-to-frame jitter."""
-
-    def __init__(self, alpha: float = EMA_ALPHA):
-        self.alpha = alpha
-        self._values: Optional[dict] = None
-
-    def update(self, metrics: dict) -> dict:
-        if self._values is None:
-            self._values = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
-            return dict(self._values)
-
-        smoothed = {}
-        for k, v in metrics.items():
-            if isinstance(v, (int, float)) and k in self._values:
-                smoothed[k] = round(self.alpha * v + (1 - self.alpha) * self._values[k], 2)
-                self._values[k] = smoothed[k]
-            else:
-                smoothed[k] = v
-        return smoothed
-
-    def reset(self):
-        self._values = None
 
 
 @router.websocket("/ws/camera")

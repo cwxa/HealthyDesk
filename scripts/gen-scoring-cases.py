@@ -4,11 +4,20 @@
 分别用 Python 的 scorer.compute_score 与前端 TS 的 computeScore 计算，
 逐条比对 score 与 issues 是否完全一致。
 
-前端实现通过 tsx/esbuild 转译后由 node 执行（见 scripts/verify-scoring.mjs）。
-本脚本只负责「Python 侧」的期望值，输出 JSON 供 node 侧对比。
+前端实现由 scripts/verify-scoring.mjs 用 esbuild 把**真实源码**
+src/platform/localPoseEngine.ts 打出来执行（不是内联副本），所以这里只需
+产出「Python 侧的期望值」。
+
+除评分外还覆盖**平滑器**（帧 → 角度 → 平滑 → 评分 里的中间一环）：
+同一个姿势在手机和电脑上要得到同一串平滑值，否则分数还是会不一致。
+
+用法：
+    python scripts/gen-scoring-cases.py > scripts/scoring-expected.json
+    node scripts/verify-scoring.mjs
 """
 
 import json
+import math
 import sys
 import os
 
@@ -17,8 +26,11 @@ BACKEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backen
 sys.path.insert(0, BACKEND)
 
 import services.scorer as _scorer  # noqa: E402
+import services.smoother as _smoother  # noqa: E402
 
 compute_score = _scorer.compute_score
+PoseSmoother = _smoother.PoseSmoother
+EMA_ALPHA = _smoother.EMA_ALPHA
 
 CASES = [
     # (head_angle, shoulder_diff, spine_angle) —— 覆盖各档位边界
@@ -74,6 +86,83 @@ def _boundary_cases():
 CASES = CASES + _boundary_cases()
 
 
+# ---------------------------------------------------------------------------
+# 平滑器对拍用例
+#
+# 背景：后端原先写的是 `round(x, 2)`，前端是 `pyRound(x * 100) / 100`。
+# 两者不是同一个函数 —— 当 `x * 100` 恰好落在半整数上时结果会不同
+# （例：x = 0.015 → round(x, 2) = 0.01，而 round(x * 100) / 100 = 0.02）。
+# 下面第一组专门构造能踩中这个点的输入，作为回归用例；第二组是常规序列。
+# ---------------------------------------------------------------------------
+
+def _tie_cases():
+    """构造能让 `round(x, 2)` 与 `round(x * 100) / 100` 分叉的平滑输入。
+
+    第一帧把内部状态置为 v，第二帧传 0，则平滑值 x = 0.65 * v。
+    只要此时 x * 100 恰好等于半整数，两种取整实现就会给出不同结果。
+    """
+    out = []
+    for k in range(1, 40000):
+        v = (k + 0.5) / 65.0
+        x = (1 - EMA_ALPHA) * v
+        t = x * 100.0
+        if t != math.floor(t) + 0.5:
+            continue                      # 没踩中平局点，无区分度
+        if round(x, 2) == round(x * 100) / 100:
+            continue                      # 这个点两种实现恰好一致
+        out.append(v)
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _sequences():
+    """返回 [(frames, smoothed), ...]：frames 是逐帧原始值，smoothed 是期望平滑值。"""
+    seqs = []
+
+    # 1) 平局点回归：两帧一组
+    for v in _tie_cases():
+        seqs.append([[v, 0.0, 0.0], [0.0, 0.0, 0.0]])
+
+    # 2) 常规序列：确定性 LCG（与 verify-scoring.mjs 无关，只在这里生成输入）
+    x = 20260915
+    frames = []
+    for i in range(240):
+        if i == 120:
+            frames.append(None)           # None 表示 reset()
+            continue
+        x = (x * 48271) % 2147483647
+        head = (x % 2501) / 100
+        x = (x * 48271) % 2147483647
+        shoulder = (x % 2001) / 100
+        x = (x * 48271) % 2147483647
+        spine = (x % 4501) / 100
+        frames.append([head, shoulder, spine])
+    seqs.append(frames)
+
+    # 3) 抖动序列：在阈值附近来回跳（评分与提醒最容易失配的位置）
+    frames = []
+    for i in range(120):
+        frames.append([5.0 + (0.4 if i % 2 else -0.4),
+                       4.0 + (0.2 if i % 3 else -0.2),
+                       10.0 + (0.6 if i % 5 else -0.6)])
+    seqs.append(frames)
+
+    out = []
+    for frames in seqs:
+        smoother = PoseSmoother()
+        smoothed = []
+        for f in frames:
+            if f is None:
+                smoother.reset()
+                smoothed.append(None)
+                continue
+            r = smoother.update({"head_angle": f[0], "shoulder_diff": f[1], "spine_angle": f[2]})
+            smoothed.append([r["head_angle"], r["shoulder_diff"], r["spine_angle"]])
+        out.append({"frames": frames, "smoothed": smoothed})
+    return out
+
+
 def main():
     out = []
     for head, sh, spine in CASES:
@@ -109,6 +198,9 @@ def main():
             "SPINE_MILD_HI": _scorer.SPINE_MILD_HI,
             "SPINE_MODERATE_HI": _scorer.SPINE_MODERATE_HI,
         },
+        # 平滑器常量与逐帧期望值
+        "smootherConstants": {"EMA_ALPHA": EMA_ALPHA},
+        "smootherSequences": _sequences(),
         "cases": out,
     }
     # 输出到 stdout，供 node 侧读取比对
