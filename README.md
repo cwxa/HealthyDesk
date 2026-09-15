@@ -15,7 +15,10 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 | 平台 | 文件 | 大小 | 说明 |
 |------|------|------|------|
 | 🖥️ Windows | [NeckGuardian Setup 1.3.1.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian.Setup.1.3.1.exe) | 196 MB | 安装包；首次启动会请求摄像头权限 |
-| 📱 Android | [NeckGuardian-Android-1.3.1-debug.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian-Android-1.3.1-debug.apk) | 18.3 MB | **Debug 签名**，仅供测试安装；需允许「未知来源应用」 |
+| 📱 Android | [NeckGuardian-Android-1.3.1.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian-Android-1.3.1.apk) | 16.6 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
+
+> 📱 安卓包签名指纹（SHA-256）：`9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5`
+> 后续升级必须用同一把密钥签名，否则老用户无法覆盖安装（密钥位置与备份要求见 [docs/ANDROID_BUILD.md §3.4](docs/ANDROID_BUILD.md)）。
 
 最新版本：**[v1.3.1](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.1)** ｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
 
@@ -30,18 +33,22 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 npm install
 
 # 2. 一条命令出 APK（编译前端 + 同步 + Gradle 打包）
-npm run cap:build
-# 产物：android/app/build/outputs/apk/debug/app-debug.apk（约 18MB）
+npm run cap:build            # debug 包，自测用
+npm run cap:build:release    # release 包，已配置签名，用于分发
+# 产物：android/app/build/outputs/apk/{debug,release}/app-{debug,release}.apk
+
+# 只改了原生代码时可跳过前端构建，快一倍：
+npm run cap:build -- --skip-web
 
 # 想用图形界面：
 npm run cap:open      # = npm run cap:sync && cap open android
 # 然后在 Android Studio 里：Build → Build APK(s)
 ```
 
-详细的构建流程、权限配置与常见问题见 **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**。
+详细的构建流程、权限配置、签名与常见问题见 **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**。
 
 > 前提：本机需要 JDK 17 + Android SDK 34（可用 Android Studio 自带，也可纯命令行装）。
-> **本仓库的开发机已在 `E:\AndroidDev` 装好整套命令行工具链**，`npm run cap:build` 开箱即用，详见文档 §2.1。
+> **本仓库的开发机已在 `E:\AndroidDev` 装好整套命令行工具链与 release 签名密钥**，`npm run cap:build` 开箱即用，详见文档 §2.1 / §3.4。
 
 ---
 

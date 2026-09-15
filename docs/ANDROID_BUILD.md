@@ -166,22 +166,69 @@ npm run android
 
 发布给别人的包必须用**你自己的**密钥签名，且**此后每次升级都要用同一把密钥**，否则用户无法覆盖安装。
 
-```bash
-# 1) 生成密钥（只做一次，务必妥善备份 keystore 与密码！）
-"E:/AndroidDev/jdk/jdk-17.0.20.1+1/bin/keytool.exe" -genkeypair -v \
-  -keystore E:/AndroidDev/neckguardian-release.jks \
-  -alias neckguardian -keyalg RSA -keysize 2048 -validity 10000
+> ✅ **本机已完成配置**（2026-09-15）。密钥、口令、Gradle 挂接都已就位，直接跑 `npm run cap:build:release` 即可。
 
-# 2) 在 android/keystore.properties 里登记（该文件不要入库）
-#    storeFile=E:/AndroidDev/neckguardian-release.jks
-#    storePassword=xxx
+#### 现状
+
+| 项 | 位置 / 值 |
+|---|---|
+| keystore | `E:/AndroidDev/keystore/neckguardian-release.jks`（PKCS12，RSA 2048，有效期 10000 天） |
+| 别名 alias | `neckguardian` |
+| 口令 | `E:/AndroidDev/keystore/STORE_PASSWORD.txt` |
+| 证书主体 | `CN=NeckGuardian, OU=Mobile, O=NeckGuardian, L=Shenzhen, ST=Guangdong, C=CN` |
+| Gradle 读取 | `android/keystore.properties`（已被 `android/.gitignore` 忽略） |
+
+🔴 **keystore 与口令务必离线备份**（网盘 / U 盘 / 密码管理器）。丢了就**永远无法给已安装的用户推送更新**——
+安卓只认签名一致的包，换密钥等于换了个 App，用户必须先卸载（数据全丢）才能装新版。
+
+#### 从零重做（换机器时）
+
+```bash
+JAVA_HOME="E:/AndroidDev/jdk/jdk-17.0.20.1+1"
+
+# 1) 生成密钥（只做一次）
+"$JAVA_HOME/bin/keytool.exe" -genkeypair -v \
+  -keystore E:/AndroidDev/keystore/neckguardian-release.jks \
+  -alias neckguardian -keyalg RSA -keysize 2048 -validity 10000 \
+  -storetype PKCS12 -storepass "<口令>" -keypass "<口令>" \
+  -dname "CN=NeckGuardian, OU=Mobile, O=NeckGuardian, L=Shenzhen, ST=Guangdong, C=CN"
+
+# 2) 登记到 android/keystore.properties（不要入库）
+#    storeFile=E:/AndroidDev/keystore/neckguardian-release.jks
+#    storePassword=<口令>
 #    keyAlias=neckguardian
-#    keyPassword=xxx
+#    keyPassword=<口令>
 ```
 
-然后在 `android/app/build.gradle` 的 `android { }` 里挂上 `signingConfigs.release` 并在 `buildTypes.release` 引用它。配好后跑 `npm run cap:build:release` 即可产出已签名的 release 包。
+3) `android/app/build.gradle` 已在文件顶部读取该 properties 并挂接：
 
-> 当前交付的 `release2/NeckGuardian-1.3.1-debug.apk` 用的是 **Android 调试密钥**，可以直接装到手机上试，但**不适合对外分发**（调试密钥是公开的，且换机会不兼容）。
+```gradle
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) keystoreProps.load(new FileInputStream(keystorePropsFile))
+
+android {
+    signingConfigs { release { /* storeFile / storePassword / keyAlias / keyPassword */ } }
+    buildTypes     { release { signingConfig signingConfigs.release } }
+}
+```
+
+**设计要点**：`keystore.properties` 缺失时（如新克隆仓库的人）自动降级 ——
+`release` 仍能构建出未签名包，`assembleDebug` 完全不受影响，不会因为缺密钥直接构建失败。
+
+#### 出包与验签
+
+```bash
+npm run cap:build:release
+# 产物：android/app/build/outputs/apk/release/app-release.apk
+
+# 验签：确认不是 "Android Debug"，且 CN 是自己填的主体
+"E:/AndroidDev/sdk/build-tools/34.0.0/apksigner.bat" verify --print-certs \
+  android/app/build/outputs/apk/release/app-release.apk | head -6
+```
+
+> ⚠️ debug 包与 release 包**签名不同，不能互相覆盖安装**。手机上装了 debug 版的话，
+> 装 release 版之前必须先卸载（应用内数据会清空）。
 
 ### 3.5 直接装到手机调试
 

@@ -156,19 +156,28 @@ const task = wantRelease ? 'assembleRelease' : 'assembleDebug'
 console.log(`\n[android-build] 3/3 gradle ${task}`)
 run(tc.gradleExe, ['--no-daemon', '--console=plain', task], androidDir)
 
-const apk = path.join(
+const outDir = path.join(
   androidDir,
   'app',
   'build',
   'outputs',
   'apk',
-  wantRelease ? 'release' : 'debug',
-  wantRelease ? 'app-release-unsigned.apk' : 'app-debug.apk'
+  wantRelease ? 'release' : 'debug'
 )
-if (exists(apk)) {
+// 已配置签名时为 app-release.apk；未配置签名时 Gradle 产出 app-release-unsigned.apk
+const candidates = wantRelease ? ['app-release.apk', 'app-release-unsigned.apk'] : ['app-debug.apk']
+const apk = candidates.map((n) => path.join(outDir, n)).find(exists)
+
+if (apk) {
   const mb = (fs.statSync(apk).size / 1048576).toFixed(1)
   console.log(`\n[android-build] ✅ 出包成功：${path.relative(root, apk)}  (${mb} MB)`)
+  if (wantRelease && apk.endsWith('-unsigned.apk')) {
+    console.log(
+      '[android-build] ⚠️ 这是**未签名**包，不能分发。请在 android/keystore.properties ' +
+        '配置签名后重跑（见 docs/ANDROID_BUILD.md §3.4）。'
+    )
+  }
 } else {
-  console.log(`\n[android-build] 构建已结束，但未在预期路径找到 APK：${path.relative(root, apk)}`)
-  console.log('                请检查 android/app/build/outputs/apk/ 下的实际产物。')
+  console.log(`\n[android-build] 构建已结束，但未找到预期产物：${path.relative(root, outDir)}`)
+  console.log('                请检查该目录下的实际文件。')
 }
