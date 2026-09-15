@@ -176,10 +176,15 @@ npm run android
 | 别名 alias | `neckguardian` |
 | 口令 | `E:/AndroidDev/keystore/STORE_PASSWORD.txt` |
 | 证书主体 | `CN=NeckGuardian, OU=Mobile, O=NeckGuardian, L=Shenzhen, ST=Guangdong, C=CN` |
+| 证书有效期 | 2026-09-15 → 2054-01-31 |
+| 证书指纹 SHA-256 | `9A:DA:A8:B2:0C:38:4E:AE:1A:6E:D4:F5:7D:BD:2D:98:B3:96:58:38:F0:66:1C:2B:88:FC:A3:03:1B:3A:2B:D5` |
+| APK 签名指纹（小写无冒号） | `9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5` |
+| 备份包 | `E:/AndroidDev/keystore/NeckGuardian-keystore-backup.zip`（jks + 口令 + 证书信息 + 恢复说明） |
 | Gradle 读取 | `android/keystore.properties`（已被 `android/.gitignore` 忽略） |
 
-🔴 **keystore 与口令务必离线备份**（网盘 / U 盘 / 密码管理器）。丢了就**永远无法给已安装的用户推送更新**——
-安卓只认签名一致的包，换密钥等于换了个 App，用户必须先卸载（数据全丢）才能装新版。
+🔴 **keystore 与口令务必离线备份**（网盘 / U 盘 / 密码管理器）—— 直接复制上面那个备份 zip 即可。
+丢了就**永远无法给已安装的用户推送更新**：安卓只认签名一致的包，换密钥等于换了个 App，
+用户必须先卸载（数据全丢）才能装新版。备份 zip 的 SHA-256：`3eaa2ce150eb027687efa931e520003769fa9bea74c8f5a61e7bcadcebdc7db1`。
 
 #### 从零重做（换机器时）
 
@@ -369,9 +374,21 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
 ## 七、发布正式包 checklist
 
 - [ ] `package.json` 版本号与 `android/app/build.gradle` 的 `versionName` 一致
-- [ ] `versionCode` 已递增
+- [ ] `versionCode` 已递增（Android 强制要求，否则无法覆盖安装）
 - [ ] `npm run cap:sync` 成功（内含 `tsc` 类型检查，须无报错）
 - [ ] `android/app/src/main/assets/public/mediapipe/models/pose_landmarker_full.task` 存在（约 9.4MB）
 - [ ] `android/app/src/main/assets/public/mediapipe/wasm/` 下 4 个 wasm/js 文件齐全
-- [ ] 用自有签名证书生成 `release` 包（`Build → Generate Signed Bundle / APK…`）
+- [ ] `npm run cap:build:release` 产出 **已签名**的 `app-release.apk`
+- [ ] `apksigner verify --print-certs` 通过，且指纹与 §3.4 记录的一致（不是 `Android Debug`）
+- [ ] APK 内无 `assets/public/main.js` / `preload.js`（确认是纯移动端构建）
 - [ ] 真机安装测试：相机、评分、提醒、设置四项主流程走一遍
+- [ ] 上传 GitHub Release，并用**匿名** curl 确认 `Content-Type: application/vnd.android.package-archive`
+
+> 一条命令跑完前 8 项的辅助验证：
+> ```bash
+> APK=android/app/build/outputs/apk/release/app-release.apk
+> BT=E:/AndroidDev/sdk/build-tools/34.0.0
+> "$BT/apksigner.bat" verify --print-certs "$APK" | head -2
+> "$BT/aapt2.exe" dump badging "$APK" | grep -E "^(package|uses-permission)"
+> tar -tf "$APK" | grep "^assets/public/mediapipe"
+> ```
