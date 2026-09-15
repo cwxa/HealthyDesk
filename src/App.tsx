@@ -2,10 +2,15 @@ import { useState, useEffect, useCallback } from 'react'
 import { HashRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import Sidebar from './components/Sidebar'
+import BottomTabs from './components/BottomTabs'
 import Dashboard from './pages/Dashboard'
 import NeckActivity from './pages/NeckActivity'
 import Settings from './pages/Settings'
 import { useApi } from './hooks/useApi'
+import { isMobile } from './platform/runtime'
+import { localReminder } from './platform/localReminder'
+import { data } from './platform/dataLayer'
+import { NeckIcon } from './components/icons'
 
 function AppShell() {
   const [backendReady, setBackendReady] = useState(false)
@@ -13,6 +18,7 @@ function AppShell() {
   const [isStartupReminder, setIsStartupReminder] = useState(false)
   const navigate = useNavigate()
   const { post, get } = useApi()
+  const mobile = isMobile()
 
   const speak = (text: string) => {
     if ('speechSynthesis' in window) {
@@ -27,9 +33,10 @@ function AppShell() {
     window.electronAPI?.onBackendReady((data) => {
       setBackendReady(true)
     })
-    const timer = setTimeout(() => setBackendReady(true), 5000)
+    // 移动端没有 Electron 后端进程；稍作延时确保本地数据层可用
+    const timer = setTimeout(() => setBackendReady(true), mobile ? 300 : 5000)
     return () => clearTimeout(timer)
-  }, [])
+  }, [mobile])
 
   useEffect(() => {
     if (window.electronAPI) {
@@ -52,8 +59,40 @@ function AppShell() {
             speak('该活动一下了！请你活动肩颈。')
           })
       })
+    } else if (mobile) {
+      // 移动端：本地定时器驱动提醒（无 Python APScheduler）
+      localReminder.start(({ isStartup }) => {
+        setIsStartupReminder(isStartup)
+        navigate('/')
+        setReminderVisible(true)
+        speak(isStartup ? '欢迎使用健康桌面！请你开始肩颈活动。' : '该活动一下了！请你活动肩颈。')
+      })
+      return () => localReminder.stop()
     }
-  }, [navigate, get])
+  }, [navigate, get, mobile])
+
+  // 提醒间隔设置变更时，热更新移动端调度器
+  useEffect(() => {
+    if (!mobile) return
+    const handler = (e: Event) => {
+      const m = (e as CustomEvent<{ minutes: number }>).detail?.minutes
+      if (m) localReminder.updateInterval(m)
+    }
+    window.addEventListener('reminder-interval-changed', handler)
+    return () => window.removeEventListener('reminder-interval-changed', handler)
+  }, [mobile])
+
+  // 移动端使用时长计时：桌面版由后端 APScheduler 每分钟 +1，
+  // 这里用定时器复刻同样行为，App 在前台时每分钟累加 1 分钟。
+  useEffect(() => {
+    if (!mobile) return
+    const tick = () => {
+      if (document.hidden) return
+      data.addUsageMinutes(1).catch(() => {})
+    }
+    const timer = window.setInterval(tick, 60_000)
+    return () => window.clearInterval(timer)
+  }, [mobile])
 
   useEffect(() => {
     const handleShowReminder = async () => {
@@ -76,6 +115,10 @@ function AppShell() {
 
   const dismissReminder = useCallback(async () => {
     setReminderVisible(false)
+    if (mobile) {
+      localReminder.snooze(5)
+      return
+    }
     try {
       const status = await get<{is_startup_reminder?: boolean}>('/api/reminder/status')
       if (status.is_startup_reminder) {
@@ -86,21 +129,25 @@ function AppShell() {
     } catch (e) {
       console.error('Snooze failed:', e)
     }
-  }, [post, get])
+  }, [post, get, mobile])
 
   const acceptReminder = useCallback(async () => {
     setReminderVisible(false)
-    try {
-      await post('/api/reminder/end', {})
-    } catch (e) {
-      console.error('End break failed:', e)
+    if (mobile) {
+      localReminder.beginBreak()
+    } else {
+      try {
+        await post('/api/reminder/end', {})
+      } catch (e) {
+        console.error('End break failed:', e)
+      }
     }
     // 用 sessionStorage 兜底：若 NeckActivity 尚未挂载（用户在其他页），
     // 事件会丢失，标记可让该页挂载后自行进入练习模式。
     sessionStorage.setItem('neckguardian:start-exercise', '1')
     window.dispatchEvent(new CustomEvent('start-exercise-mode'))
     navigate('/')
-  }, [post, navigate])
+  }, [post, navigate, mobile])
 
   if (!backendReady) {
     return (
@@ -115,11 +162,111 @@ function AppShell() {
           borderTopColor: '#4CAF50',
           animation: 'spin 1s linear infinite',
         }} />
-        <p style={{ color: '#607D8B', fontSize: 14 }}>正在启动服务...</p>
+        <p style={{ color: '#607D8B', fontSize: 14 }}>{mobile ? '正在启动...' : '正在启动服务...'}</p>
       </div>
     )
   }
 
+  const reminderModal = (
+    <AnimatePresence>
+      {reminderVisible && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100, padding: 20,
+          }}
+          onClick={dismissReminder}
+        >
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0, y: 30 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.8, opacity: 0, y: 30 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'linear-gradient(145deg, #FFF9C4 0%, #FFF8E1 100%)',
+              borderRadius: 24, padding: '40px 36px 28px',
+              maxWidth: 420, width: '100%', textAlign: 'center',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              border: '2px solid #FFD54F',
+            }}
+          >
+            <div style={{ fontSize: 56, marginBottom: 12 }}>{isStartupReminder ? '👋' : '⏰'}</div>
+            <h3 style={{ fontSize: 22, fontWeight: 800, color: '#E65100', marginBottom: 6 }}>
+              {isStartupReminder ? '欢迎使用健康桌面！' : '该活动一下了！'}
+            </h3>
+            <p style={{ fontSize: 14, color: '#BF360C', lineHeight: 1.7, marginBottom: 28 }}>
+              {isStartupReminder
+                ? '请你开始肩颈活动。'
+                : '你已经连续工作了一段时间。请你活动肩颈。'}
+            </p>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              {!isStartupReminder && (
+                <button
+                  onClick={dismissReminder}
+                  style={{
+                    padding: '10px 28px', borderRadius: 12, border: '2px solid #FFCC80',
+                    background: 'transparent', color: '#E65100', fontSize: 14, fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  稍后提醒
+                </button>
+              )}
+              <button
+                onClick={acceptReminder}
+                style={{
+                  padding: '10px 28px', borderRadius: 12, border: 'none',
+                  background: 'linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%)',
+                  color: '#fff', fontSize: 14, fontWeight: 700,
+                  cursor: 'pointer', boxShadow: '0 4px 16px rgba(76,175,80,0.4)',
+                }}
+              >
+                🧘 {isStartupReminder ? '开始初始活动' : '开始活动'}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+
+  // ---- 移动端布局：紧凑顶栏 + 内容 + 底部标签栏 ----
+  if (mobile) {
+    return (
+      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
+        <header style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '12px 16px',
+          paddingTop: 'calc(12px + env(safe-area-inset-top))',
+          borderBottom: '1px solid var(--border)', background: 'var(--bg-card)',
+        }}>
+          <NeckIcon size={24} color="#4CAF50" />
+          <h1 style={{ fontSize: 17, fontWeight: 700, color: 'var(--primary-dark)' }}>NeckGuardian</h1>
+        </header>
+
+        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg)', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ padding: '16px 14px 24px' }}>
+            <Routes>
+              <Route path="/" element={<NeckActivity />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
+          </div>
+        </main>
+
+        <BottomTabs />
+        {reminderModal}
+      </div>
+    )
+  }
+
+  // ---- 桌面端布局：侧边栏 + 内容 ----
   return (
     <div style={{ height: '100vh', display: 'flex' }}>
       <Sidebar />
@@ -136,73 +283,7 @@ function AppShell() {
         </div>
       </main>
 
-      {/* Global reminder modal */}
-      <AnimatePresence>
-        {reminderVisible && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: 'fixed', inset: 0,
-              background: 'rgba(0,0,0,0.55)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              zIndex: 100,
-            }}
-            onClick={dismissReminder}
-          >
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0, y: 30 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.8, opacity: 0, y: 30 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                background: 'linear-gradient(145deg, #FFF9C4 0%, #FFF8E1 100%)',
-                borderRadius: 24, padding: '40px 36px 28px',
-                maxWidth: 420, width: '90%', textAlign: 'center',
-                boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
-                border: '2px solid #FFD54F',
-              }}
-            >
-              <div style={{ fontSize: 56, marginBottom: 12 }}>{isStartupReminder ? '👋' : '⏰'}</div>
-              <h3 style={{ fontSize: 22, fontWeight: 800, color: '#E65100', marginBottom: 6 }}>
-                {isStartupReminder ? '欢迎使用健康桌面！' : '该活动一下了！'}
-              </h3>
-              <p style={{ fontSize: 14, color: '#BF360C', lineHeight: 1.7, marginBottom: 28 }}>
-                {isStartupReminder 
-                  ? '请你开始肩颈活动。' 
-                  : '你已经连续工作了一段时间。请你活动肩颈。'}
-              </p>
-              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-                {!isStartupReminder && (
-                  <button
-                    onClick={dismissReminder}
-                    style={{
-                      padding: '10px 28px', borderRadius: 12, border: '2px solid #FFCC80',
-                      background: 'transparent', color: '#E65100', fontSize: 14, fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    稍后提醒
-                  </button>
-                )}
-                <button
-                  onClick={acceptReminder}
-                  style={{
-                    padding: '10px 28px', borderRadius: 12, border: 'none',
-                    background: 'linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%)',
-                    color: '#fff', fontSize: 14, fontWeight: 700,
-                    cursor: 'pointer', boxShadow: '0 4px 16px rgba(76,175,80,0.4)',
-                  }}
-                >
-                  🧘 {isStartupReminder ? '开始初始活动' : '开始活动'}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {reminderModal}
     </div>
   )
 }

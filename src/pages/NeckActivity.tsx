@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { usePoseEngine } from '../hooks/usePoseEngine'
 import { useApi } from '../hooks/useApi'
+import { data } from '../platform/dataLayer'
+import { isMobile } from '../platform/runtime'
+import { localReminder } from '../platform/localReminder'
 import PostureSkeleton from '../components/PostureSkeleton'
 import ScoreGauge from '../components/ScoreGauge'
 import ExercisePanel, { exercises, type ExerciseState } from '../components/ExercisePanel'
@@ -18,7 +21,7 @@ export default function NeckActivity() {
   const [cameraError, setCameraError] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connect, disconnect, connected, sendFrame, onPoseResult, backendError, resetBackendError } = useWebSocket()
+  const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect } = usePoseEngine()
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
@@ -54,19 +57,24 @@ export default function NeckActivity() {
       }
       setCameraReady(true)
       setCameraError('')
-      connect()
+      // 桌面端连 Python 后端；移动端启动本地姿态引擎
+      if (isMobile() && videoRef.current) {
+        attachVideo(videoRef.current)
+      } else {
+        connect()
+      }
     } catch {
       if (!cameraAbortRef.current) setCameraError('无法访问摄像头，请检查权限设置')
     }
-  }, [connect])
+  }, [connect, attachVideo])
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
     setCameraReady(false)
-    disconnect()
-  }, [disconnect])
+    stop()
+  }, [stop])
 
   useEffect(() => {
     cameraAbortRef.current = false
@@ -80,8 +88,9 @@ export default function NeckActivity() {
     }
   }, [startCamera, stopCamera])
 
-  // Frame capture
+  // Frame capture（仅桌面端：移动端由本地引擎直接读取 video 元素）
   const captureAndSend = useCallback(() => {
+    if (isMobile()) return
     if (!canvasRef.current || !videoRef.current || !connected) return
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
@@ -93,6 +102,7 @@ export default function NeckActivity() {
   }, [connected, sendFrame])
 
   useEffect(() => {
+    if (isMobile()) return
     if (!cameraReady || !connected) return
     intervalRef.current = window.setInterval(captureAndSend, 200)
     return () => clearInterval(intervalRef.current)
@@ -113,12 +123,12 @@ export default function NeckActivity() {
         const now = Date.now()
         if (now - lastRecordRef.current >= 1500) {
           lastRecordRef.current = now
-          post('/api/posture/record', {
+          data.recordPosture({
             timestamp: result.timestamp,
-            head_angle: result.head_angle,
-            shoulder_diff: result.shoulder_diff,
-            spine_angle: result.spine_angle,
-            score: result.score,
+            head_angle: result.head_angle!,
+            shoulder_diff: result.shoulder_diff!,
+            spine_angle: result.spine_angle!,
+            score: result.score!,
           }).catch(() => {})
         }
       }
@@ -167,7 +177,7 @@ export default function NeckActivity() {
   // Start exercise
   const startExercise = useCallback(async () => {
     try {
-      await post('/api/reminder/end', {})
+      await data.endBreak()
     } catch (e) {
       console.error('End break failed:', e)
     }
@@ -176,8 +186,9 @@ export default function NeckActivity() {
     setExTimeLeft(exercises[0].duration)
     setExScores([])
     exScoresRef.current = []
+    if (isMobile()) localReminder.beginBreak()
     speak('请跟随引导完成肩颈活动')
-  }, [post])
+  }, [])
 
   const finishExercise = useCallback(async () => {
     clearInterval(exTimerRef.current)
@@ -186,19 +197,20 @@ export default function NeckActivity() {
     const avg = ss.length > 0 ? Math.round(ss.reduce((a, b) => a + b, 0) / ss.length) : 0
     const dur = exercises.reduce((s, e) => s + e.duration, 0)
     speak('活动完成！')
+    if (isMobile()) localReminder.endBreak()
     try {
-      await post('/api/activity/record', {
+      await data.recordActivity({
         timestamp: new Date().toISOString(),
         activity_type: 'exercise',
         exercise_count: exercises.length,
         duration_sec: dur,
         avg_score: avg,
       })
-      await post('/api/reminder/end', {})
+      await data.endBreak()
     } catch (e) {
       console.error('Activity record failed:', e)
     }
-  }, [post])
+  }, [])
 
   // 用 ref 持有最新的 finishExercise，供计时器回调调用，避免 stale closure
   const finishRef = useRef(finishExercise)
@@ -265,7 +277,7 @@ export default function NeckActivity() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2 style={{ fontSize: 24, fontWeight: 700 }}>🧘 肩颈活动</h2>
+        <h2 style={{ fontSize: isMobile() ? 20 : 24, fontWeight: 700 }}>🧘 肩颈活动</h2>
         {cameraError && (
           <button onClick={() => { setCameraError(''); startCamera() }} style={{
             padding: '10px 24px', borderRadius: 8, border: 'none',
@@ -276,11 +288,17 @@ export default function NeckActivity() {
       </div>
 
       {/* Camera + Side Panel */}
-      <div style={{ display: 'flex', gap: 16, height: 570 }}>
+      <div style={
+        isMobile()
+          ? { display: 'flex', flexDirection: 'column', gap: 14 }
+          : { display: 'flex', gap: 16, height: 570 }
+      }>
         {/* Camera panel */}
         <div style={{
-          flex: 1, position: 'relative', background: '#1a1a2e',
-          borderRadius: 12, overflow: 'hidden', height: '100%',
+          flex: isMobile() ? undefined : 1, position: 'relative', background: '#1a1a2e',
+          borderRadius: 12, overflow: 'hidden',
+          height: isMobile() ? '56vh' : '100%',
+          width: '100%',
           boxShadow: '0 2px 16px rgba(0,0,0,0.08)',
         }}>
           {!cameraReady && (
@@ -318,7 +336,7 @@ export default function NeckActivity() {
 
           {!connected && cameraReady && !backendError && (
             <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,167,38,0.9)', color: '#fff', padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500, zIndex: 10 }}>
-              正在连接后端...
+              {isMobile() ? '正在加载姿态模型...' : '正在连接后端...'}
             </div>
           )}
 
@@ -329,9 +347,11 @@ export default function NeckActivity() {
               padding: '10px 16px', borderRadius: 12, fontSize: 12, zIndex: 10,
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
             }}>
-              <span style={{ lineHeight: 1.6 }}>⚠ 姿态识别服务异常：{backendError}</span>
+              <span style={{ lineHeight: 1.6 }}>
+                ⚠ {isMobile() ? '姿态模型加载异常' : '姿态识别服务异常'}：{backendError}
+              </span>
               <button
-                onClick={() => { resetBackendError(); connect() }}
+                onClick={() => { resetBackendError(); if (!isMobile()) connect() }}
                 style={{
                   flexShrink: 0, padding: '6px 16px', borderRadius: 8, border: 'none',
                   background: 'rgba(255,255,255,0.9)', color: '#C62828',
@@ -367,7 +387,11 @@ export default function NeckActivity() {
         </div>
 
         {/* Right panel */}
-        <div style={{ width: 300, minWidth: 300, height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={
+          isMobile()
+            ? { width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }
+            : { width: 300, minWidth: 300, height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }
+        }>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' }}>
           {mode === 'monitor' ? (
             <>

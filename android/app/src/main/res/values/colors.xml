@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AppTheme 引用的主题色（styles.xml 依赖）。青绿色系与桌面端品牌一致。 -->
+    <color name="colorPrimary">#0FA37F</color>
+    <color name="colorPrimaryDark">#0B7A5F</color>
+    <color name="colorAccent">#22C08D</color>
+</resources>

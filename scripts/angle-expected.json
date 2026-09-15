@@ -1,0 +1,258 @@
+[
+  {
+    "name": "perfect_upright_frontal",
+    "landmarks": {
+      "left_ear": [
+        0.42,
+        0.2
+      ],
+      "right_ear": [
+        0.58,
+        0.2
+      ],
+      "left_shoulder": [
+        0.35,
+        0.35
+      ],
+      "right_shoulder": [
+        0.65,
+        0.35
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 0.0
+  },
+  {
+    "name": "head_tilt_10deg",
+    "landmarks": {
+      "left_ear": [
+        0.4,
+        0.21
+      ],
+      "right_ear": [
+        0.6,
+        0.185
+      ],
+      "left_shoulder": [
+        0.35,
+        0.35
+      ],
+      "right_shoulder": [
+        0.65,
+        0.35
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 7.13,
+    "shoulder_diff": 0.0,
+    "spine_angle": 0.0
+  },
+  {
+    "name": "shoulders_tilted",
+    "landmarks": {
+      "left_ear": [
+        0.42,
+        0.2
+      ],
+      "right_ear": [
+        0.58,
+        0.2
+      ],
+      "left_shoulder": [
+        0.35,
+        0.34
+      ],
+      "right_shoulder": [
+        0.65,
+        0.38
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 13.33,
+    "spine_angle": 0.0
+  },
+  {
+    "name": "spine_leaning",
+    "landmarks": {
+      "left_ear": [
+        0.46,
+        0.2
+      ],
+      "right_ear": [
+        0.62,
+        0.2
+      ],
+      "left_shoulder": [
+        0.4,
+        0.35
+      ],
+      "right_shoulder": [
+        0.7,
+        0.35
+      ],
+      "left_hip": [
+        0.44,
+        0.7
+      ],
+      "right_hip": [
+        0.68,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 1.64
+  },
+  {
+    "name": "ears_too_close_dx_guard",
+    "landmarks": {
+      "left_ear": [
+        0.495,
+        0.2
+      ],
+      "right_ear": [
+        0.505,
+        0.25
+      ],
+      "left_shoulder": [
+        0.35,
+        0.35
+      ],
+      "right_shoulder": [
+        0.65,
+        0.35
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 0.0
+  },
+  {
+    "name": "shoulders_almost_same_x_guard",
+    "landmarks": {
+      "left_ear": [
+        0.42,
+        0.2
+      ],
+      "right_ear": [
+        0.58,
+        0.2
+      ],
+      "left_shoulder": [
+        0.5,
+        0.35
+      ],
+      "right_shoulder": [
+        0.505,
+        0.4
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 0.44
+  },
+  {
+    "name": "head_tilt_beyond_30_guard",
+    "landmarks": {
+      "left_ear": [
+        0.45,
+        0.2
+      ],
+      "right_ear": [
+        0.55,
+        0.45
+      ],
+      "left_shoulder": [
+        0.35,
+        0.35
+      ],
+      "right_shoulder": [
+        0.65,
+        0.35
+      ],
+      "left_hip": [
+        0.38,
+        0.7
+      ],
+      "right_hip": [
+        0.62,
+        0.7
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 0.0
+  },
+  {
+    "name": "spine_dy_zero_guard",
+    "landmarks": {
+      "left_ear": [
+        0.42,
+        0.2
+      ],
+      "right_ear": [
+        0.58,
+        0.2
+      ],
+      "left_shoulder": [
+        0.35,
+        0.5
+      ],
+      "right_shoulder": [
+        0.65,
+        0.5
+      ],
+      "left_hip": [
+        0.38,
+        0.5
+      ],
+      "right_hip": [
+        0.62,
+        0.5
+      ]
+    },
+    "head_angle": 0.0,
+    "shoulder_diff": 0.0,
+    "spine_angle": 90.0
+  }
+]

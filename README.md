@@ -2,7 +2,33 @@
 
 🧘‍♂️ **守护您的肩颈健康，让工作更高效、生活更舒适**
 
-NeckGuardian 是一款智能肩颈健康监测与活动提醒桌面应用，通过摄像头实时监测用户姿势，结合 AI 健康建议，帮助您养成良好的工作习惯。
+NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄像头实时监测用户姿势，帮助您养成良好的工作习惯。
+
+**支持两大平台：**
+- 🖥️ **桌面版（Windows）** - Electron + Python 后端，带 DeepSeek AI 分析
+- 📱 **安卓版** - Capacitor 套壳，**手机本地完成姿态推理，无需后端、无需联网**
+
+---
+
+## 📱 安卓版快速上手
+
+安卓版把姿态检测整个搬进了手机（MediaPipe WASM/GPU 本地推理），摄像头画面**不出设备**。
+
+```bash
+# 1. 安装依赖
+npm install
+
+# 2. 编译前端并同步到安卓工程
+npm run cap:sync
+
+# 3. 用 Android Studio 打开并出包
+npm run cap:open
+# 之后在 Android Studio 里：Build → Build APK(s)
+```
+
+详细的构建流程、权限配置与常见问题见 **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**。
+
+> 前提：需要 Android Studio（自带 JDK 17 / Android SDK 34）。
 
 ---
 
@@ -88,7 +114,30 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 | `Ctrl+-` | 缩小窗口 |
 | `Ctrl+0` | 恢复默认缩放 |
 
-### 1.4 常见问题
+> 以上为桌面版快捷键；安卓版无键盘快捷键，改用底部标签栏切换页面。
+
+### 1.4 安卓版使用说明
+
+安卓版界面针对触屏与竖屏做了精简（顶部栏 + 内容 + 底部标签栏）：
+
+| 差异点 | 桌面版 | 安卓版 |
+|--------|--------|--------|
+| 导航 | 左侧边栏 | 底部标签栏（肩颈活动 / 仪表盘 / 设置） |
+| 姿态检测 | 连接本地 Python 后端 | **手机本地推理**，无需后端 |
+| 摄像头画面 | 上传到本机后端处理 | **完全不出设备** |
+| 数据存储 | 本机 SQLite | 应用内 IndexedDB（卸载即清除） |
+| AI 分析 | 支持 DeepSeek | 本期不提供（设置页已隐藏入口） |
+| 开机自启动 | 支持 | 不提供 |
+
+**首次使用**：打开 App 会弹出「允许使用摄像头？」，点**允许**。若误点拒绝，
+去「系统设置 → 应用 → NeckGuardian → 权限 → 相机」手动打开。
+
+**已知限制**：
+- 切到后台或锁屏后，姿态检测与提醒会暂停（安卓系统会冻结后台 WebView）；
+- 中低端机型推理帧率较低（GPU 不可用时自动回退 CPU）；
+- 语音播报依赖系统中文语音包，缺失时会静默失败。
+
+### 1.5 常见问题
 
 **Q: 摄像头无法启动怎么办？**
 - 请检查系统隐私设置，确保已授予摄像头权限
@@ -97,10 +146,12 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 **Q: 提醒功能不工作？**
 - 检查设置中的提醒间隔是否设置合理
 - 确保应用在系统托盘中正常运行（未被系统休眠）
+- 安卓端请保持 App 在前台，后台会被系统暂停计时
 
 **Q: 如何退出应用？**
 - 右键点击系统托盘图标，选择"退出"
 - 或在设置页面点击"退出应用"
+- 安卓端：从最近任务列表划掉，或系统设置中强制停止
 
 ---
 
@@ -194,31 +245,57 @@ HealthyDesk/
 ├── src/                       # React 前端 (渲染进程)
 │   ├── components/            # 可复用 UI 组件
 │   │   ├── AIAnalysisPanel.tsx   # AI 肩颈分析面板
+│   │   ├── BottomTabs.tsx        # 移动端底部标签栏
 │   │   ├── BreathingCircle.tsx   # 呼吸练习动画组件
 │   │   ├── ExerciseGuide.tsx     # 活动指导组件
 │   │   ├── ExercisePanel.tsx     # 活动面板容器
 │   │   ├── Markdown.tsx          # 轻量 Markdown 渲染
 │   │   ├── PostureSkeleton.tsx   # 骨架动画渲染
 │   │   ├── ScoreGauge.tsx        # 环形评分仪表盘
-│   │   ├── Sidebar.tsx           # 侧边导航栏
+│   │   ├── Sidebar.tsx           # 侧边导航栏（桌面端）
 │   │   └── TrendChart.tsx        # 趋势图表组件
 │   ├── hooks/                 # 自定义 React Hooks
 │   │   ├── useAI.ts           # AI 配置 / 分析请求封装
-│   │   ├── useApi.ts          # API 请求封装
-│   │   └── useWebSocket.ts    # WebSocket 连接管理
+│   │   ├── useApi.ts          # API 请求封装（按平台分流）
+│   │   ├── usePoseEngine.ts   # 统一姿态检测（桌面 WS / 移动本地）
+│   │   └── useWebSocket.ts    # WebSocket 连接管理（桌面端）
+│   ├── platform/              # 平台抽象层（桌面 / 移动端差异收敛处）
+│   │   ├── runtime.ts         # 平台判定（electron / android / web）
+│   │   ├── dataLayer.ts       # 统一数据层（HTTP vs IndexedDB）
+│   │   ├── localDb.ts         # 移动端 IndexedDB 封装
+│   │   ├── localStats.ts      # 移动端统计聚合（对齐后端 SQL）
+│   │   ├── localPoseEngine.ts # 移动端本地 MediaPipe 推理与评分
+│   │   └── localReminder.ts   # 移动端本地提醒调度器
 │   ├── pages/                 # 页面级组件
 │   │   ├── Dashboard.tsx      # 数据统计页
 │   │   ├── NeckActivity.tsx   # 肩颈活动主页面
 │   │   └── Settings.tsx       # 设置页
 │   ├── utils/                 # 工具函数
 │   │   └── speech.ts          # 语音播报封装
-│   ├── App.tsx                # 应用根组件
+│   ├── App.tsx                # 应用根组件（含移动端布局分流）
 │   ├── main.tsx               # React 入口
 │   └── types.ts               # TypeScript 类型定义
-├── public/                    # 静态资源 (图标等)
+├── android/                   # Capacitor 安卓工程（Android Studio 打开）
+│   └── app/src/main/
+│       ├── java/com/neckguardian/app/MainActivity.java  # 摄像头权限覆写
+│       ├── assets/public/     # 由 cap sync 拷入的 Web 产物（含媒体模型）
+│       └── res/               # 图标、主题、颜色资源
+├── public/                    # 桌面端静态资源（会被 Vite 全量复制进 dist/）
+├── mediapipe-assets/          # 安卓端 MediaPipe 资源（不入 public/，避免污染桌面包）
+│   └── models/                #   pose_landmarker_full.task（9.4MB，随包内置）
 ├── scripts/                   # 辅助脚本
+│   ├── cap-build.js           # 移动端构建（tsc + vite build + 拷贝 MediaPipe 资源）
+│   ├── gen-android-icons.py   # 安卓图标生成
+│   ├── gen-scoring-cases.py   # 生成评分期望值（Python 侧）
+│   ├── gen-angle-cases.py     # 生成角度期望值（Python 侧）
+│   ├── verify-scoring.mjs     # 评分等价性验证
+│   └── verify-angles.mjs      # 角度等价性验证
+├── docs/                      # 文档
+│   ├── ANDROID_BUILD.md       # 安卓构建指南
+│   └── TROUBLESHOOTING.md     # 故障排查
+├── capacitor.config.ts        # Capacitor 配置
 ├── package.json               # 前端依赖配置
-├── vite.config.ts             # Vite 构建配置
+├── vite.config.ts             # Vite 构建配置（双目标：桌面 / 移动）
 ├── tsconfig.json              # TypeScript 配置
 └── electron-builder.yml       # Electron 打包配置
 ```
@@ -386,8 +463,9 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | Node.js | >= 18.x | 前端运行时 |
-| Python | >= 3.10 | 后端运行时 |
+| Python | >= 3.10 | 后端运行时（桌面版） |
 | npm | >= 9.x | 包管理器 |
+| Android Studio | 最新 | 出安卓 APK（自带 JDK 17 + SDK 34） |
 
 #### 开发流程
 
@@ -399,7 +477,7 @@ npm run python:install
 # 2. 启动开发服务器
 npm run start
 
-# 3. 构建生产版本
+# 3. 构建桌面版
 npm run build
 
 # 4. 仅启动后端（调试用）
@@ -407,6 +485,12 @@ npm run python:start
 
 # 5. 仅启动前端（调试用）
 npm run dev
+
+# ---- 安卓端 ----
+npm run cap:sync      # 编译前端 + 同步进安卓工程
+npm run cap:open      # 用 Android Studio 打开 android/
+npm run android       # = cap:sync + cap:open
+npm run verify:parity # 验证移动端推理与后端数值一致
 ```
 
 #### 打包配置
@@ -416,7 +500,57 @@ npm run dev
 - **资源打包**：backend 目录、public 资源
 - **图标配置**：支持多种分辨率
 
-### 2.7 安全性考虑
+### 2.7 安卓端架构（Capacitor）
+
+安卓端复用同一套 React 前端，通过 **平台抽象层** 在运行时分流：桌面走 Python 后端，移动端走本地实现。
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│              React 前端（同一份代码，两端复用）                │
+│   NeckActivity / Dashboard / Settings / 组件库                │
+└───────────────────────────┬──────────────────────────────────┘
+                            │  runtime.ts: getPlatform()
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+   ┌────────────────────┐      ┌────────────────────────────┐
+   │ 桌面端 (electron)   │      │ 移动端 (android)            │
+   │ useWebSocket        │      │ usePoseEngine + LocalPoseEngine │
+   │   ↓                 │      │   ↓ MediaPipe WASM/GPU      │
+   │ Python 后端         │      │ IndexedDB（本地存储）        │
+   │  · MediaPipe 推理   │      │ LocalReminderScheduler      │
+   │  · SQLite           │      │   （本地定时提醒）           │
+   │  · APScheduler      │      │ 摄像头画面不出设备           │
+   └────────────────────┘      └────────────────────────────┘
+```
+
+**平台能力对照：**
+
+| 能力 | 桌面端 | 安卓端 | 代码位置 |
+|------|--------|--------|----------|
+| 平台判定 | `window.electronAPI` | Capacitor 平台 | `src/platform/runtime.ts` |
+| 姿态推理 | Python + MediaPipe | 浏览器内 MediaPipe（WASM/GPU） | `src/platform/localPoseEngine.ts` |
+| 视频流 | WebSocket 传帧 | 本地 `<video>` 直读 | `src/hooks/usePoseEngine.ts` |
+| 数据存储 | SQLite（后端） | IndexedDB | `src/platform/localDb.ts` |
+| 统计聚合 | 后端 SQL | 前端 JS 重写（数字口径一致） | `src/platform/localStats.ts` |
+| 定时提醒 | APScheduler | JS 定时器 | `src/platform/localReminder.ts` |
+| 统一数据接口 | HTTP `/api/*` | 同上接口的本地实现 | `src/platform/dataLayer.ts` |
+| AI 分析 | DeepSeek | 本期不支持（设置页隐藏） | — |
+
+**模型离线内置**：MediaPipe WASM 与 `pose_landmarker_full.task`（约 9.4 MB）随包打进 APK，安装后无需联网。
+
+**数值一致性保障**：前端本地推理的角度计算与评分逻辑，与 Python 后端 **逐行等价**，并用脚本做回归验证：
+
+```bash
+python scripts/gen-scoring-cases.py > scripts/scoring-expected.json
+python scripts/gen-angle-cases.py   > scripts/angle-expected.json
+node scripts/verify-scoring.mjs   # 评分：13 条用例
+node scripts/verify-angles.mjs    # 角度：8 条用例（含边界保护）
+# 或一键：npm run verify:parity
+```
+
+> 该验证曾发现一处真实的跨语言差异：Python `round()` 用「银行家舍入」（`round(32.5)=32`），而 JS `Math.round` 会进位到 33。已通过 `pyRound()` 对齐，确保同一姿势在手机和电脑上得分完全一致。
+
+### 2.8 安全性考虑
 
 | 安全措施 | 实现位置 | 说明 |
 |----------|----------|------|

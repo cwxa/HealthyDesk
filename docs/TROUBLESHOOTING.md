@@ -245,10 +245,66 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 
 ---
 
-## 五、经验教训
+## 五、安卓端（Capacitor）
+
+### 6. 跨语言数值不一致：Python 的「银行家舍入」 🔴（本轮发现）
+
+**现象**：把姿态评分从 Python 后端搬到前端 TS（移动端本地推理）后，同一姿势在手机和电脑上
+偶尔差 1 分。
+
+**根因**：Python 内置 `round()` 采用**银行家舍入（round-half-to-even）**：
+`round(32.5) == 32`、`round(33.5) == 34`；而 JS 的 `Math.round` 是「四舍五入」，
+`Math.round(32.5) == 33`。当扣分总额恰为 `.5` 时（例如 head=30/shoulder=50/spine=60 →
+扣 67.5 分），两端结果就会差 1。
+
+**修复**：在 `src/platform/localPoseEngine.ts` 和 `localStats.ts` 中实现 `pyRound()`，
+复刻 Python 语义，替换所有涉及评分的 `Math.round`。
+
+**防回归**：新增 `scripts/verify-scoring.mjs` + `verify-angles.mjs`，从 Python 侧生成期望值，
+逐条比对前端实现（当前 13 + 8 条用例全通过）。改动评分/角度公式后务必重跑 `npm run verify:parity`。
+
+### 7. Capacitor WebView 打不开摄像头 🔴
+
+**现象**：APK 装上后进检测页，摄像头黑屏 / `getUserMedia` 直接失败。
+
+**根因**：Capacitor 默认的 `WebChromeClient` **拒绝**网页的媒体权限请求。
+
+**修复**（两处缺一不可）：
+1. `AndroidManifest.xml` 声明 `CAMERA` 权限；
+2. `MainActivity.java` 覆写 `WebChromeClient.onPermissionRequest`，把 WebView 的媒体请求
+   映射到系统运行时权限，用户授权后 `request.grant(...)`。
+
+### 8. `indexedDB.open(name)` 无版本号会创建空库 🔴
+
+**现象**：移动端仪表盘数据全为 0，或 `readAll` 抛 `NotFoundError`。
+
+**根因**：`localStats.ts` 早期用 `indexedDB.open('neckguardian')`（**不带版本号**）读取。
+若该库尚未由 `localDb.ts` 创建，这句会创建一个 **v1 且没有任何 object store 的空库**；
+之后 `localDb` 用 `open(name, 1)` 打开时版本相同，**不会触发 `onupgradeneeded`**，
+导致所有 store 永远建不出来。
+
+**修复**：`localDb.ts` 导出 `readAllRows()`，所有读取统一走它（复用同一套带版本的 openDb）。
+
+### 9. 构建期常见问题
+
+| 问题 | 现象 | 解决 |
+|------|------|------|
+| 本机无 JDK/SDK | `gradlew` 报 `JAVA_HOME is not set` | 用 Android Studio（自带 JDK 17 + SDK 34），或单独装 |
+| `values/colors.xml` 缺失 | 资源编译失败：找不到 `@color/colorPrimary` | 已补 `android/app/src/main/res/values/colors.xml` |
+| android 依赖缺失 | `MainActivity` 用到 `androidx.core` 却未声明 | 已在 `app/build.gradle` 显式加 `androidx.core:core` |
+| 改前端不生效 | App 里看不到改动 | Capacitor 无热更新，必须重新 `npm run cap:sync` 再 Rebuild |
+| Gradle 下载慢 | 首次 Sync 卡住 | `android/build.gradle` 换阿里云 Maven 镜像 |
+
+---
+
+## 六、经验教训
 
 1. **打包产物必须实测启动**，"能打出包"不等于"包能用"。UPX 问题正是因为没有实测才长期潜伏。
 2. **配置文件要入库**，`.gitignore` 的宽泛规则（如 `*.spec`）容易误伤关键配置。
 3. **前端开关要打通到后端**，否则只是"看起来很能用的假开关"。
 4. **异步 + 组件卸载**是前端资源泄漏高发区，StrictMode 会放大此类问题。
 5. **沙箱环境**下优先用 PowerShell 做文件操作，命令行工具易受 PATH / shim 干扰。
+6. **跨语言移植算法必须做数值等价性验证**——同样的公式、不同的语言，`round()` 这样的小差异
+   也会造成 1 分偏差。用「Python 生成期望值 → JS 比对」的脚本固化下来，比人眼审查可靠。
+7. **Capacitor 套壳的坑集中在 WebView 权限与本地存储**：摄像头要覆写 `onPermissionRequest`；
+   IndexedDB 要复用同一套版本化 `openDb`，不能各开各的。

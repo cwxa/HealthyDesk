@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
 import { useAI } from '../hooks/useAI'
+import { isMobile } from '../platform/runtime'
 import type { Settings as SettingsType } from '../types'
 import { EyeIcon, EyeOffIcon } from '../components/icons'
 
@@ -64,6 +65,11 @@ export default function Settings() {
       await put('/api/settings', { key, value })
       if (key === 'auto_start') {
         window.electronAPI?.setAutoStart(value === 'true')
+      }
+      if (key === 'reminder_interval' && isMobile()) {
+        window.dispatchEvent(new CustomEvent('reminder-interval-changed', {
+          detail: { minutes: parseInt(value) || 30 },
+        }))
       }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -157,28 +163,31 @@ export default function Settings() {
             </div>
           </SettingRow>
 
-          <SettingRow
-            label="AI 增强模式"
-            description="连接 DeepSeek 大模型，对肩颈情况生成个性化分析与建议"
-          >
-            <label style={switchContainer}>
-              <input
-                type="checkbox"
-                checked={settings.ai_enabled === 'true'}
-                onChange={(e) => updateSetting('ai_enabled', e.target.checked ? 'true' : 'false')}
-                style={{ display: 'none' }}
-              />
-              <span style={{
-                ...switchTrack,
-                background: settings.ai_enabled === 'true' ? 'var(--primary)' : '#ccc',
-              }}>
-                <motion.span
-                  animate={{ x: settings.ai_enabled === 'true' ? 20 : 0 }}
-                  style={switchThumb}
+          {/* AI 增强模式仅桌面端有效（移动端无后端，本期不支持 AI） */}
+          {!isMobile() && (
+            <SettingRow
+              label="AI 增强模式"
+              description="连接 DeepSeek 大模型，对肩颈情况生成个性化分析与建议"
+            >
+              <label style={switchContainer}>
+                <input
+                  type="checkbox"
+                  checked={settings.ai_enabled === 'true'}
+                  onChange={(e) => updateSetting('ai_enabled', e.target.checked ? 'true' : 'false')}
+                  style={{ display: 'none' }}
                 />
-              </span>
-            </label>
-          </SettingRow>
+                <span style={{
+                  ...switchTrack,
+                  background: settings.ai_enabled === 'true' ? 'var(--primary)' : '#ccc',
+                }}>
+                  <motion.span
+                    animate={{ x: settings.ai_enabled === 'true' ? 20 : 0 }}
+                    style={switchThumb}
+                  />
+                </span>
+              </label>
+            </SettingRow>
+          )}
 
           <SettingRow
             label="语音提醒"
@@ -203,31 +212,34 @@ export default function Settings() {
             </label>
           </SettingRow>
 
-          <SettingRow
-            label="开机自启动"
-            description="系统启动时自动运行 NeckGuardian"
-          >
-            <label style={switchContainer}>
-              <input
-                type="checkbox"
-                checked={settings.auto_start === 'true'}
-                onChange={(e) => updateSetting('auto_start', e.target.checked ? 'true' : 'false')}
-                style={{ display: 'none' }}
-              />
-              <span style={{
-                ...switchTrack,
-                background: settings.auto_start === 'true' ? 'var(--primary)' : '#ccc',
-              }}>
-                <motion.span
-                  animate={{ x: settings.auto_start === 'true' ? 20 : 0 }}
-                  style={switchThumb}
+          {!isMobile() && (
+            <SettingRow
+              label="开机自启动"
+              description="系统启动时自动运行 NeckGuardian"
+            >
+              <label style={switchContainer}>
+                <input
+                  type="checkbox"
+                  checked={settings.auto_start === 'true'}
+                  onChange={(e) => updateSetting('auto_start', e.target.checked ? 'true' : 'false')}
+                  style={{ display: 'none' }}
                 />
-              </span>
-            </label>
-          </SettingRow>
+                <span style={{
+                  ...switchTrack,
+                  background: settings.auto_start === 'true' ? 'var(--primary)' : '#ccc',
+                }}>
+                  <motion.span
+                    animate={{ x: settings.auto_start === 'true' ? 20 : 0 }}
+                    style={switchThumb}
+                  />
+                </span>
+              </label>
+            </SettingRow>
+          )}
         </motion.div>
 
-        {/* ---- DeepSeek 大模型配置 ---- */}
+        {/* ---- DeepSeek 大模型配置（仅桌面版） ---- */}
+        {!isMobile() && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -330,6 +342,7 @@ export default function Settings() {
             </div>
           </div>
         </motion.div>
+        )}
 
         {saved && (
           <motion.p
@@ -350,9 +363,11 @@ export default function Settings() {
           <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>关于 NeckGuardian</p>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
             版本：{appVersion || '1.3.1'}<br />
-            技术栈：Electron + React + TypeScript + Python FastAPI + MediaPipe<br />
-            数据存储：本地 SQLite，所有数据不上传<br />
-            隐私保护：摄像头画面仅在本地处理；仅在启用 AI 分析时，将匿名的姿态指标与统计数据发送至 DeepSeek
+            技术栈：{isMobile()
+              ? 'Capacitor + React + TypeScript + MediaPipe(本地推理)'
+              : 'Electron + React + TypeScript + Python FastAPI + MediaPipe'}<br />
+            数据存储：{isMobile() ? '本机 IndexedDB，所有数据不上传' : '本地 SQLite，所有数据不上传'}<br />
+            隐私保护：摄像头画面仅在本地处理，{isMobile() ? '姿态推理全程在本机完成。' : '仅在启用 AI 分析时，将匿名的姿态指标与统计数据发送至 DeepSeek'}
           </p>
         </motion.div>
       </div>

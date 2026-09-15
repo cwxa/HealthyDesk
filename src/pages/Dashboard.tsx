@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
+import { isMobile } from '../platform/runtime'
 import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
 import AIAnalysisPanel from '../components/AIAnalysisPanel'
@@ -55,7 +56,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile() ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 14 }}>
         <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon={TrendingUpIcon} delay={0} />
         <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon={ActivityIcon} delay={0.04} />
         <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon={BarChart2Icon} delay={0.08} />
@@ -76,10 +77,11 @@ export default function Dashboard() {
       )}
 
       {/* AI 肩颈分析 */}
-      <AIAnalysisPanel buildPayload={buildAIPayload} />
+      {/* AI 分析仅桌面端提供（移动端无后端，本期不支持） */}
+      {!isMobile() && <AIAnalysisPanel buildPayload={buildAIPayload} />}
 
       {/* Bottom: 2x2 grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile() ? '1fr' : '1fr 1fr', gap: 14 }}>
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
