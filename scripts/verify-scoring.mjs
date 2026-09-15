@@ -19,7 +19,7 @@
  * 核心不变量 d) 是评分模型的约束，也是「提醒了却还显示 95 分」这类问题的根源，
  * 所以它不是"顺便看看"，而是必须拦住发布的一条断言。
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -95,6 +95,13 @@ export const __constants = {
   const out = join(tmpdir(), `neckguardian-frontend-${process.pid}.mjs`)
   writeFileSync(out, built.outputFiles[0].text)
   const mod = await import(pathToFileURL(out).href)
+  // 文件名带 pid 是必要的：避免 node 的 ESM 缓存导致第二次运行仍用旧 bundle。
+  // 导入完成后即可删除（模块已在内存里），不往系统临时目录堆垃圾。
+  try {
+    unlinkSync(out)
+  } catch {
+    /* 删除失败不影响校验结果 */
+  }
   return { computeScore: mod.__computeScore, PoseSmoother: mod.__PoseSmoother, constants: mod.__constants }
 }
 
