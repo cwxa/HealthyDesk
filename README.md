@@ -14,18 +14,20 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 
 | 平台 | 文件 | 大小 | 说明 |
 |------|------|------|------|
-| 🖥️ Windows | [NeckGuardian Setup 1.3.1.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian.Setup.1.3.1.exe) | 196 MB | 安装包；首次启动会请求摄像头权限 |
+| 🖥️ Windows | [NeckGuardian Setup 1.3.6.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.6/NeckGuardian.Setup.1.3.6.exe) | 196 MB | 安装包（内含自包含后端，无需装 Python）；首次启动会请求摄像头权限 |
 | 📱 Android | [NeckGuardian-Android-1.3.6.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.6/NeckGuardian-Android-1.3.6.apk) | 16.6 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
 
 > 📱 安卓包签名指纹（SHA-256）：`9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5`
 > 后续升级必须用同一把密钥签名，否则老用户无法覆盖安装（密钥位置与备份要求见 [docs/ANDROID_BUILD.md §3.4](docs/ANDROID_BUILD.md)）。
 
-最新版本：安卓 **[v1.3.6](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.6)** ｜ Windows **[v1.3.1](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.1)** ｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+最新版本：**[v1.3.6](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.6)**（Windows 与 Android 同为 1.3.6）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
 
 > ⚠️ v1.3.6 起评分模型有调整（详见下方「评分算法」）。旧版本记录的历史分数由旧公式产生，
-> 统计图表在跨版本处会有落差；Windows 安装包（v1.3.1）仍使用旧评分，需要新评分请等桌面包更新。
-
-> Windows 端安装包自 v1.3.1 起未再出包，功能与安卓端一致（同源码），仍可正常使用。
+> 统计图表在跨版本处会有落差，这是预期内的，不是数据出错。
+>
+> ✅ **同一姿势在 Windows 与 Android 上得到完全相同的分数**：两端的角度计算、EMA 平滑、
+> 评分三套逻辑逐位等价，由 `npm run verify:parity` 守卫（21 项常量 + 80 条评分用例 +
+> 439 帧平滑序列 + 8 条角度用例）。
 
 ---
 

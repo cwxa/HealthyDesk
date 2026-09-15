@@ -278,14 +278,24 @@ Capacitor 默认的 `WebView` 会**拒绝**网页的 `getUserMedia` 请求，表
 | JDK | 17 | `android/app/capacitor.build.gradle` |
 | WebView 调试 | 开启 | `capacitor.config.ts` 的 `server.webContentsDebuggingEnabled` |
 
-### 4.3 安卓包版本号
+### 4.3 版本号（两端同版本，共四处要同步）
 
-修改 `android/app/build.gradle`：
+Windows 与 Android 发布的是**同一套源码、同一个版本号**，改版本号时必须四处同时改，漏一处就会出现
+「一端的界面/接口报告的版本号与安装包不符」：
+
+| 位置 | 字段 | 说明 |
+|------|------|------|
+| `package.json` | `version` | 决定 Windows 安装包文件名与 exe 元数据 |
+| `backend/config.py` | `APP_VERSION` | `/api/health` 返回值，前端据此显示后端版本 |
+| `src/pages/Settings.tsx` | 兜底字符串 | 后端不可达（如安卓无后端）时页面显示的版本 |
+| `android/app/build.gradle` | `versionName` / `versionCode` | `versionCode` 必须**递增**，否则无法覆盖安装 |
+
+`android/app/build.gradle` 里还要同步 `versionCode`（整数，每次发版 +1）：
 
 ```gradle
 defaultConfig {
-    versionCode 1        // 整数，每次发版 +1（应用商店按此判断升级）
-    versionName "1.3.1"  // 展示给用户的版本号
+    versionCode 6        // 整数，每次发版 +1（Android 强制要求，否则无法覆盖安装）
+    versionName "1.3.6"  // 展示给用户的版本号，与上面三处保持一致
 }
 ```
 
@@ -373,13 +383,18 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
 
 ## 七、发布正式包 checklist
 
-- [ ] `package.json` 版本号与 `android/app/build.gradle` 的 `versionName` 一致
+- [ ] `npm run verify:parity` 通过（两端角度/平滑/评分逐位一致，含不变量断言）
+- [ ] 版本号四处一致：`package.json`、`backend/config.py:APP_VERSION`、`src/pages/Settings.tsx` 兜底串、
+      `android/app/build.gradle` 的 `versionName`（见 §4.3）
 - [ ] `versionCode` 已递增（Android 强制要求，否则无法覆盖安装）
 - [ ] `npm run cap:sync` 成功（内含 `tsc` 类型检查，须无报错）
 - [ ] `android/app/src/main/assets/public/mediapipe/models/pose_landmarker_full.task` 存在（约 9.4MB）
 - [ ] `android/app/src/main/assets/public/mediapipe/wasm/` 下 4 个 wasm/js 文件齐全
 - [ ] `npm run cap:build:release` 产出 **已签名**的 `app-release.apk`
 - [ ] `apksigner verify --print-certs` 通过，且指纹与 §3.4 记录的一致（不是 `Android Debug`）
+- [ ] **产物同源核验**（防"测试全绿但发出去的包是旧的"）：
+      解包 APK 里的 `assets/public/assets/index-*.js`，与 `dist/assets/` 同名文件 **md5 一致**；
+      再用 `grep -o` 从压缩产物里读出新公式的特征串（如评分加权系数）确认一遍
 - [ ] APK 内无 `assets/public/main.js` / `preload.js`（确认是纯移动端构建）
 - [ ] 真机安装测试：相机、评分、提醒、设置四项主流程走一遍
 - [ ] 上传 GitHub Release，并用**匿名** curl 确认 `Content-Type: application/vnd.android.package-archive`
