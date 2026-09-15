@@ -502,18 +502,60 @@ export default function NeckActivity() {
             </div>
           )}
 
+          {/* ⚠ 姿态问题提示（手机端）—— 刻意做成**画面内浮层**而非摄像头之外的流式元素：
+              它是随姿态结果高频出现/消失的，一旦参与布局就会不断改变摄像头高度，
+              表现为画面上下跳动。浮层 + 淡入淡出可以彻底消除这种抖动。
+              key 固定为字符串，避免 issues 内容变化时重播进出动画。 */}
+          {mobile && mode === 'monitor' && !backendError && (
+            <AnimatePresence>
+              {issues.length > 0 && (
+                <motion.div
+                  key="issues-overlay"
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.18 }}
+                  style={{
+                    position: 'absolute', top: 10, left: 10, right: 10, zIndex: 12,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    background: 'rgba(198,40,40,0.88)', backdropFilter: 'blur(6px)',
+                    borderRadius: 10, padding: '6px 10px',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: '#fff', flexShrink: 0 }}>⚠</span>
+                  <span style={{
+                    flex: 1, fontSize: 12, color: '#fff', lineHeight: 1.4,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{issues.join(' · ')}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+
+          {/* 未检测到人体：放画面垂直居中，避开底部指标条（原来贴底会和指标叠在一起） */}
           {cameraReady && connected && latestResult?.type === 'no_pose' && (
-            <div style={{ position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '8px 20px', borderRadius: 20, fontSize: 13, zIndex: 10 }}>
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '8px 20px',
+              borderRadius: 20, fontSize: 13, zIndex: 10,
+              whiteSpace: 'nowrap', maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
               未检测到人体，请面向摄像头
             </div>
           )}
 
-          {/* Posture metrics overlay */}
+          {/* Posture metrics overlay —— 手机端用紧凑等分模式铺满一行，两端都不会与浮层打架 */}
           {cameraReady && (
-            <div style={{ position: 'absolute', bottom: 16, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 16, zIndex: 10 }}>
-              <MetricBadge label="头部侧倾" value={latestResult?.type === 'pose' ? latestResult.head_angle : undefined} unit="°" warn={5} critical={17} />
-              <MetricBadge label="肩部高差" value={latestResult?.type === 'pose' ? latestResult.shoulder_diff : undefined} unit="%" warn={4} critical={8} />
-              <MetricBadge label="脊柱倾斜" value={latestResult?.type === 'pose' ? latestResult.spine_angle : undefined} unit="°" warn={10} critical={20} />
+            <div style={{
+              position: 'absolute', bottom: mobile ? 8 : 16,
+              left: mobile ? 8 : 0, right: mobile ? 8 : 0,
+              display: 'flex', justifyContent: 'center',
+              gap: mobile ? 6 : 16, zIndex: 10,
+            }}>
+              <MetricBadge compact={mobile} label="头部侧倾" value={latestResult?.type === 'pose' ? latestResult.head_angle : undefined} unit="°" warn={5} critical={17} />
+              <MetricBadge compact={mobile} label="肩部高差" value={latestResult?.type === 'pose' ? latestResult.shoulder_diff : undefined} unit="%" warn={4} critical={8} />
+              <MetricBadge compact={mobile} label="脊柱倾斜" value={latestResult?.type === 'pose' ? latestResult.spine_angle : undefined} unit="°" warn={10} critical={20} />
             </div>
           )}
         </div>
@@ -629,31 +671,20 @@ export default function NeckActivity() {
               </div>
             )}
 
-            {/* 问题提示：压成一行，不再单独占一块卡片 */}
-            {mode === 'monitor' && issues.length > 0 && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                background: '#FFF5F5', border: '1px solid #FFCDD2', borderRadius: 10,
-                padding: '6px 10px',
-              }}>
-                <span style={{ fontSize: 12, color: '#EF5350', flexShrink: 0 }}>⚠</span>
-                <span style={{
-                  flex: 1, fontSize: 12, color: '#C62828',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                }}>{issues.join(' · ')}</span>
-              </div>
-            )}
+            {/* 问题提示已改为摄像头画面内的浮层（见 cameraPanel），
+                不再作为摄像头之外的独立一行 —— 它出现/消失会改变摄像头高度导致画面跳动 */}
 
             {/* 摄像头：吃掉剩余高度 */}
             <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
               {cameraPanel}
+              {/* 动作示意：放画面右上角并缩小。原来在右下角会和底部那排指标徽章重叠 */}
               {mode === 'exercise' && (
                 <div style={{
-                  position: 'absolute', right: 10, bottom: 10, zIndex: 11,
-                  background: 'rgba(255,255,255,0.92)', borderRadius: 12, padding: 6,
+                  position: 'absolute', right: 8, top: 8, zIndex: 11,
+                  background: 'rgba(255,255,255,0.92)', borderRadius: 12, padding: 4,
                   boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
                 }}>
-                  <ExerciseGuide exerciseIndex={exCurrent} color={exercises[exCurrent].color} size={88} />
+                  <ExerciseGuide exerciseIndex={exCurrent} color={exercises[exCurrent].color} size={72} />
                 </div>
               )}
             </div>
@@ -818,8 +849,8 @@ function MetricRow({ icon, label, value, warn, okRange }: {
   )
 }
 
-function MetricBadge({ label, value, unit, warn, critical }: {
-  label: string; value: number | undefined; unit: string; warn: number; critical: number
+function MetricBadge({ label, value, unit, warn, critical, compact }: {
+  label: string; value: number | undefined; unit: string; warn: number; critical: number; compact?: boolean
 }) {
   const num = value ?? 0
   const hasValue = value !== undefined
@@ -828,9 +859,24 @@ function MetricBadge({ label, value, unit, warn, critical }: {
   const border = status === 'danger' ? 'rgba(239,83,80,0.5)' : status === 'warn' ? 'rgba(255,167,38,0.5)' : 'rgba(255,255,255,0.1)'
 
   return (
-    <div style={{ background: bg, backdropFilter: 'blur(8px)', borderRadius: 10, padding: '8px 16px', textAlign: 'center', minWidth: 80, border: `1px solid ${border}`, transition: 'all 0.3s' }}>
-      <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', marginBottom: 3 }}>{label}</p>
-      <p style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>{hasValue ? `${num.toFixed(1)}${unit}` : '--'}</p>
+    <div style={{
+      background: bg, backdropFilter: 'blur(8px)', borderRadius: 10,
+      padding: compact ? '5px 4px' : '8px 16px',
+      textAlign: 'center',
+      // 紧凑模式：不给最小宽度，交给 flex 等分，否则三个徽章总宽会超出手机画面
+      minWidth: compact ? 0 : 80,
+      flex: compact ? 1 : undefined,
+      border: `1px solid ${border}`,
+      transition: 'background 0.3s, border-color 0.3s',
+    }}>
+      <p style={{
+        fontSize: compact ? 9 : 10, color: 'rgba(255,255,255,0.7)',
+        marginBottom: compact ? 1 : 3, whiteSpace: 'nowrap',
+      }}>{label}</p>
+      <p style={{
+        fontSize: compact ? 14 : 18, fontWeight: 700, color: '#fff',
+        fontVariantNumeric: 'tabular-nums', lineHeight: 1.25,
+      }}>{hasValue ? `${num.toFixed(1)}${unit}` : '--'}</p>
     </div>
   )
 }
