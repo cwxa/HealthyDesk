@@ -261,7 +261,8 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 复刻 Python 语义，替换所有涉及评分的 `Math.round`。
 
 **防回归**：新增 `scripts/verify-scoring.mjs` + `verify-angles.mjs`，从 Python 侧生成期望值，
-逐条比对前端实现（当前 13 + 8 条用例全通过）。改动评分/角度公式后务必重跑 `npm run verify:parity`。
+逐条比对前端实现（当前 80 + 8 条用例全通过）。`verify-scoring.mjs` 还会断言评分模型的核心不变量
+「**有提醒 ⟺ 分数 < 80**」，改动评分/角度公式后务必重跑 `npm run verify:parity`。
 
 ### 7. Capacitor WebView 打不开摄像头 🔴
 

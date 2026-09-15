@@ -545,7 +545,9 @@ export default function NeckActivity() {
             </div>
           )}
 
-          {/* Posture metrics overlay —— 手机端用紧凑等分模式铺满一行，两端都不会与浮层打架 */}
+          {/* Posture metrics overlay —— 手机端用紧凑等分模式铺满一行，两端都不会与浮层打架。
+              warn / critical 必须与 scorer 的档位边界一致（warn=阈值，critical=严重档起点=阈值+「明显」上界），
+              这样徽章颜色和提醒等级说的是同一件事。 */}
           {cameraReady && (
             <div style={{
               position: 'absolute', bottom: mobile ? 8 : 16,
@@ -554,8 +556,8 @@ export default function NeckActivity() {
               gap: mobile ? 6 : 16, zIndex: 10,
             }}>
               <MetricBadge compact={mobile} label="头部侧倾" value={latestResult?.type === 'pose' ? latestResult.head_angle : undefined} unit="°" warn={5} critical={17} />
-              <MetricBadge compact={mobile} label="肩部高差" value={latestResult?.type === 'pose' ? latestResult.shoulder_diff : undefined} unit="%" warn={4} critical={8} />
-              <MetricBadge compact={mobile} label="脊柱倾斜" value={latestResult?.type === 'pose' ? latestResult.spine_angle : undefined} unit="°" warn={10} critical={20} />
+              <MetricBadge compact={mobile} label="肩部高差" value={latestResult?.type === 'pose' ? latestResult.shoulder_diff : undefined} unit="%" warn={4} critical={14} />
+              <MetricBadge compact={mobile} label="脊柱倾斜" value={latestResult?.type === 'pose' ? latestResult.spine_angle : undefined} unit="°" warn={10} critical={26} />
             </div>
           )}
         </div>

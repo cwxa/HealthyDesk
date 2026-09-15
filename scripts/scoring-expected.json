@@ -1,153 +1,875 @@
-[
-  {
-    "input": {
-      "head": 0.0,
-      "shoulder": 0.0,
-      "spine": 0.0
-    },
-    "score": 100,
-    "issues": []
+{
+  "constants": {
+    "HEAD_TILT_THRESHOLD": 5.0,
+    "SHOULDER_DIFF_THRESHOLD": 4.0,
+    "SPINE_ANGLE_THRESHOLD": 10.0,
+    "WARN_ZONE_RATIO": 0.6,
+    "WARN_ZONE_MAX": 6.0,
+    "SECONDARY_WEIGHT": 0.3,
+    "MILD_BASE": 22.0,
+    "MILD_MAX": 28.0,
+    "MODERATE_BASE": 34.0,
+    "MODERATE_MAX": 46.0,
+    "SEVERE_BASE": 52.0,
+    "SEVERE_MAX": 65.0,
+    "SCORE_MIN": 20,
+    "SCORE_MAX": 100,
+    "HEAD_MILD_HI": 6.0,
+    "HEAD_MODERATE_HI": 12.0,
+    "SHOULDER_MILD_HI": 5.0,
+    "SHOULDER_MODERATE_HI": 10.0,
+    "SPINE_MILD_HI": 8.0,
+    "SPINE_MODERATE_HI": 16.0
   },
-  {
-    "input": {
-      "head": 3.0,
-      "shoulder": 2.0,
-      "spine": 5.0
+  "cases": [
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 0.0,
+        "spine": 0.0
+      },
+      "score": 100,
+      "issues": []
     },
-    "score": 100,
-    "issues": []
-  },
-  {
-    "input": {
-      "head": 5.0,
-      "shoulder": 4.0,
-      "spine": 10.0
+    {
+      "input": {
+        "head": 3.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
     },
-    "score": 100,
-    "issues": []
-  },
-  {
-    "input": {
-      "head": 5.01,
-      "shoulder": 4.01,
-      "spine": 10.01
+    {
+      "input": {
+        "head": 5.0,
+        "shoulder": 4.0,
+        "spine": 10.0
+      },
+      "score": 90,
+      "issues": []
     },
-    "score": 100,
-    "issues": [
-      "头部轻微侧倾",
-      "肩部略不平衡",
-      "脊柱轻微倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 8.0,
-      "shoulder": 6.0,
-      "spine": 12.0
+    {
+      "input": {
+        "head": 5.01,
+        "shoulder": 4.01,
+        "spine": 10.01
+      },
+      "score": 65,
+      "issues": [
+        "头部轻微侧倾",
+        "肩部略不平衡",
+        "脊柱轻微倾斜"
+      ]
     },
-    "score": 95,
-    "issues": [
-      "头部轻微侧倾",
-      "肩部略不平衡",
-      "脊柱轻微倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 12.0,
-      "shoulder": 8.0,
-      "spine": 15.0
+    {
+      "input": {
+        "head": 8.0,
+        "shoulder": 6.0,
+        "spine": 12.0
+      },
+      "score": 61,
+      "issues": [
+        "头部轻微侧倾",
+        "肩部略不平衡",
+        "脊柱轻微倾斜"
+      ]
     },
-    "score": 89,
-    "issues": [
-      "头部明显侧倾",
-      "肩部略不平衡",
-      "脊柱轻微倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 18.0,
-      "shoulder": 14.0,
-      "spine": 20.0
+    {
+      "input": {
+        "head": 12.0,
+        "shoulder": 8.0,
+        "spine": 15.0
+      },
+      "score": 48,
+      "issues": [
+        "头部明显侧倾",
+        "肩部略不平衡",
+        "脊柱轻微倾斜"
+      ]
     },
-    "score": 77,
-    "issues": [
-      "头部严重侧倾",
-      "肩部明显不平衡",
-      "脊柱明显倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 30.0,
-      "shoulder": 50.0,
-      "spine": 60.0
+    {
+      "input": {
+        "head": 18.0,
+        "shoulder": 14.0,
+        "spine": 20.0
+      },
+      "score": 22,
+      "issues": [
+        "头部严重侧倾",
+        "肩部明显不平衡",
+        "脊柱明显倾斜"
+      ]
     },
-    "score": 32,
-    "issues": [
-      "头部严重侧倾",
-      "肩部严重不平衡",
-      "脊柱严重倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 100.0,
-      "shoulder": 100.0,
-      "spine": 100.0
+    {
+      "input": {
+        "head": 30.0,
+        "shoulder": 50.0,
+        "spine": 60.0
+      },
+      "score": 20,
+      "issues": [
+        "头部严重侧倾",
+        "肩部严重不平衡",
+        "脊柱严重倾斜"
+      ]
     },
-    "score": 20,
-    "issues": [
-      "头部严重侧倾",
-      "肩部严重不平衡",
-      "脊柱严重倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 5.5,
-      "shoulder": 4.5,
-      "spine": 10.5
+    {
+      "input": {
+        "head": 100.0,
+        "shoulder": 100.0,
+        "spine": 100.0
+      },
+      "score": 20,
+      "issues": [
+        "头部严重侧倾",
+        "肩部严重不平衡",
+        "脊柱严重倾斜"
+      ]
     },
-    "score": 99,
-    "issues": [
-      "头部轻微侧倾",
-      "肩部略不平衡",
-      "脊柱轻微倾斜"
-    ]
-  },
-  {
-    "input": {
-      "head": 11.0,
-      "shoulder": 3.0,
-      "spine": 9.0
+    {
+      "input": {
+        "head": 5.5,
+        "shoulder": 4.5,
+        "spine": 10.5
+      },
+      "score": 64,
+      "issues": [
+        "头部轻微侧倾",
+        "肩部略不平衡",
+        "脊柱轻微倾斜"
+      ]
     },
-    "score": 96,
-    "issues": [
-      "头部轻微侧倾"
-    ]
-  },
-  {
-    "input": {
-      "head": 2.0,
-      "shoulder": 12.0,
-      "spine": 4.0
+    {
+      "input": {
+        "head": 11.0,
+        "shoulder": 3.0,
+        "spine": 9.0
+      },
+      "score": 70,
+      "issues": [
+        "头部轻微侧倾"
+      ]
     },
-    "score": 94,
-    "issues": [
-      "肩部明显不平衡"
-    ]
-  },
-  {
-    "input": {
-      "head": 1.0,
-      "shoulder": 1.0,
-      "spine": 18.0
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 12.0,
+        "spine": 4.0
+      },
+      "score": 59,
+      "issues": [
+        "肩部明显不平衡"
+      ]
     },
-    "score": 94,
-    "issues": [
-      "脊柱轻微倾斜"
-    ]
-  }
-]
+    {
+      "input": {
+        "head": 1.0,
+        "shoulder": 1.0,
+        "spine": 18.0
+      },
+      "score": 72,
+      "issues": [
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.99,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 3.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 3.01,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 4.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 97,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 4.9,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 5.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 5.01,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 78,
+      "issues": [
+        "头部轻微侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 5.5,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 78,
+      "issues": [
+        "头部轻微侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 8.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 75,
+      "issues": [
+        "头部轻微侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 10.99,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 72,
+      "issues": [
+        "头部轻微侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 11.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 72,
+      "issues": [
+        "头部轻微侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 11.01,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 66,
+      "issues": [
+        "头部明显侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 13.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 62,
+      "issues": [
+        "头部明显侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 16.99,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 54,
+      "issues": [
+        "头部明显侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 17.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 54,
+      "issues": [
+        "头部明显侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 17.01,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 48,
+      "issues": [
+        "头部严重侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 20.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 45,
+      "issues": [
+        "头部严重侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 29.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 35,
+      "issues": [
+        "头部严重侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 40.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 35,
+      "issues": [
+        "头部严重侧倾"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 0.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.39,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.4,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.41,
+        "spine": 5.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 3.0,
+        "spine": 5.0
+      },
+      "score": 98,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 3.9,
+        "spine": 5.0
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 4.0,
+        "spine": 5.0
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 4.01,
+        "spine": 5.0
+      },
+      "score": 78,
+      "issues": [
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 4.5,
+        "spine": 5.0
+      },
+      "score": 77,
+      "issues": [
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 6.0,
+        "spine": 5.0
+      },
+      "score": 76,
+      "issues": [
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 8.99,
+        "spine": 5.0
+      },
+      "score": 72,
+      "issues": [
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 9.0,
+        "spine": 5.0
+      },
+      "score": 72,
+      "issues": [
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 9.01,
+        "spine": 5.0
+      },
+      "score": 66,
+      "issues": [
+        "肩部明显不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 11.0,
+        "spine": 5.0
+      },
+      "score": 61,
+      "issues": [
+        "肩部明显不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 13.99,
+        "spine": 5.0
+      },
+      "score": 54,
+      "issues": [
+        "肩部明显不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 14.0,
+        "spine": 5.0
+      },
+      "score": 54,
+      "issues": [
+        "肩部明显不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 14.01,
+        "spine": 5.0
+      },
+      "score": 48,
+      "issues": [
+        "肩部严重不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 18.0,
+        "spine": 5.0
+      },
+      "score": 43,
+      "issues": [
+        "肩部严重不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 24.0,
+        "spine": 5.0
+      },
+      "score": 35,
+      "issues": [
+        "肩部严重不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 30.0,
+        "spine": 5.0
+      },
+      "score": 35,
+      "issues": [
+        "肩部严重不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 0.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 4.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 5.99
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 6.0
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 6.01
+      },
+      "score": 100,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 8.0
+      },
+      "score": 97,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 9.9
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 10.0
+      },
+      "score": 94,
+      "issues": []
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 10.01
+      },
+      "score": 78,
+      "issues": [
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 12.0
+      },
+      "score": 76,
+      "issues": [
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 17.99
+      },
+      "score": 72,
+      "issues": [
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 18.0
+      },
+      "score": 72,
+      "issues": [
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 18.01
+      },
+      "score": 66,
+      "issues": [
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 20.0
+      },
+      "score": 63,
+      "issues": [
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 25.99
+      },
+      "score": 54,
+      "issues": [
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 26.0
+      },
+      "score": 54,
+      "issues": [
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 26.01
+      },
+      "score": 48,
+      "issues": [
+        "脊柱严重倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 34.0
+      },
+      "score": 42,
+      "issues": [
+        "脊柱严重倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 42.0
+      },
+      "score": 35,
+      "issues": [
+        "脊柱严重倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 2.0,
+        "shoulder": 2.0,
+        "spine": 60.0
+      },
+      "score": 35,
+      "issues": [
+        "脊柱严重倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 6.0,
+        "shoulder": 5.0,
+        "spine": 8.0
+      },
+      "score": 69,
+      "issues": [
+        "头部轻微侧倾",
+        "肩部略不平衡"
+      ]
+    },
+    {
+      "input": {
+        "head": 12.0,
+        "shoulder": 10.0,
+        "spine": 16.0
+      },
+      "score": 45,
+      "issues": [
+        "头部明显侧倾",
+        "肩部明显不平衡",
+        "脊柱轻微倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 17.0,
+        "shoulder": 14.0,
+        "spine": 26.0
+      },
+      "score": 26,
+      "issues": [
+        "头部明显侧倾",
+        "肩部明显不平衡",
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 11.5,
+        "shoulder": 9.5,
+        "spine": 18.5
+      },
+      "score": 44,
+      "issues": [
+        "头部明显侧倾",
+        "肩部明显不平衡",
+        "脊柱明显倾斜"
+      ]
+    },
+    {
+      "input": {
+        "head": 20.0,
+        "shoulder": 16.0,
+        "spine": 30.0
+      },
+      "score": 20,
+      "issues": [
+        "头部严重侧倾",
+        "肩部严重不平衡",
+        "脊柱严重倾斜"
+      ]
+    }
+  ]
+}

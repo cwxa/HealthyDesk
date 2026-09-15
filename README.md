@@ -15,12 +15,15 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 | 平台 | 文件 | 大小 | 说明 |
 |------|------|------|------|
 | 🖥️ Windows | [NeckGuardian Setup 1.3.1.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.1/NeckGuardian.Setup.1.3.1.exe) | 196 MB | 安装包；首次启动会请求摄像头权限 |
-| 📱 Android | [NeckGuardian-Android-1.3.5.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.5/NeckGuardian-Android-1.3.5.apk) | 16.6 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
+| 📱 Android | [NeckGuardian-Android-1.3.6.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.6/NeckGuardian-Android-1.3.6.apk) | 16.6 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
 
 > 📱 安卓包签名指纹（SHA-256）：`9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5`
 > 后续升级必须用同一把密钥签名，否则老用户无法覆盖安装（密钥位置与备份要求见 [docs/ANDROID_BUILD.md §3.4](docs/ANDROID_BUILD.md)）。
 
-最新版本：安卓 **[v1.3.5](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.5)** ｜ Windows **[v1.3.1](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.1)** ｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+最新版本：安卓 **[v1.3.6](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.6)** ｜ Windows **[v1.3.1](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.1)** ｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+
+> ⚠️ v1.3.6 起评分模型有调整（详见下方「评分算法」）。旧版本记录的历史分数由旧公式产生，
+> 统计图表在跨版本处会有落差；Windows 安装包（v1.3.1）仍使用旧评分，需要新评分请等桌面包更新。
 
 > Windows 端安装包自 v1.3.1 起未再出包，功能与安卓端一致（同源码），仍可正常使用。
 
@@ -337,10 +340,24 @@ HealthyDesk/
 - **肩部高度差**：双肩关键点的垂直距离（阈值 4% 肩宽）
 - **脊柱弯曲角度**：颈部与背部关键点的连线角度（阈值 ±10°）
 
-**评分算法**（`backend/services/scorer.py`）：
-```python
-score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
-```
+**评分算法**（`backend/services/scorer.py`，手机端在 `src/platform/localPoseEngine.ts` 逐行等价实现）：
+
+评分与姿态提醒**严格绑定**，核心不变量：
+
+> **出现任何提醒 ⟺ 分数低于 80**
+
+每项指标按超标量分「轻微 / 明显 / 严重」三档，扣分与提醒文案一一对应；最差的一项算满，
+其余两项按 0.3 权重递减叠加（三个指标来自同一组关键点、彼此强相关，直接相加会过度惩罚）。
+阈值内另有一段「预警区」，接近阈值时轻微扣分，避免「刚好合格 = 100 分、刚超标 = 78 分」的突变。
+
+| 头部侧倾（阈值 5°） | 分数 | 提醒 |
+|---|---|---|
+| ≤ 5° | 90 – 100 | — |
+| 5° – 11° | 72 – 78 | 头部轻微侧倾 |
+| 11° – 17° | 54 – 66 | 头部明显侧倾 |
+| > 17° | 35 – 48 | 头部严重侧倾 |
+
+两端一致性由 `npm run verify:parity` 保证（80 条评分用例 + 8 条角度用例，含上述不变量的断言）。
 
 #### 2.3.2 实时通信架构
 

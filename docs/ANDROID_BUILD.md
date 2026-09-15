@@ -335,7 +335,7 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
 |------|------|
 | 打开 App | 进入「肩颈活动」页，自动请求相机权限并启动本地姿态检测 |
 | 姿态推理 | 全部在手机本地完成（MediaPipe WASM/GPU），**视频帧不上传任何服务器** |
-| 评分口径 | 与桌面端逐行一致（`HEAD_TILT=5.0` / `SHOULDER_DIFF=4.0` / `SPINE_ANGLE=10.0`，扣分率 0.7） |
+| 评分口径 | 与桌面端逐行一致（`HEAD_TILT=5.0` / `SHOULDER_DIFF=4.0` / `SPINE_ANGLE=10.0`，分档扣分见 `scorer.py`）；核心不变量：**有提醒 ⟺ 分数 < 80** |
 | 数据存储 | IndexedDB，本地持久化，卸载即清除 |
 | 提醒 | 前台定时提醒（默认 30 分钟），可在设置页调整；后台提醒受系统限制可能不准 |
 | 语音播报 | 依赖 WebView 的 `speechSynthesis`；部分机型中文语音包缺失会静默失败 |

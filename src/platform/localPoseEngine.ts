@@ -21,9 +21,30 @@ import type { Landmarks, PoseResult } from '../types'
 const HEAD_TILT_THRESHOLD = 5.0
 const SHOULDER_DIFF_THRESHOLD = 4.0
 const SPINE_ANGLE_THRESHOLD = 10.0
-const DEDUCTION_RATE = 0.7
 const MIN_VISIBILITY = 0.5
 const EMA_ALPHA = 0.35
+
+// ---- 评分模型的常量，必须与 backend/services/scorer.py 完全一致 ----
+// 唯一约束：出现任何姿态提醒（issues 非空） ⟺ 分数 < 80
+const WARN_ZONE_RATIO = 0.6
+const WARN_ZONE_MAX = 6.0
+// 叠加权重：只把最差项算满，其余两项按此权重递减叠加（三项直接相加会过度惩罚）
+const SECONDARY_WEIGHT = 0.3
+const MILD_BASE = 22.0
+const MILD_MAX = 28.0
+const MODERATE_BASE = 34.0
+const MODERATE_MAX = 46.0
+const SEVERE_BASE = 52.0
+const SEVERE_MAX = 65.0
+const SCORE_MIN = 20
+const SCORE_MAX = 100
+// 档位边界：超出阈值多少算「明显 / 严重」，与 issues 的分档判断共用
+const HEAD_MILD_HI = 6.0
+const HEAD_MODERATE_HI = 12.0
+const SHOULDER_MILD_HI = 5.0
+const SHOULDER_MODERATE_HI = 10.0
+const SPINE_MILD_HI = 8.0
+const SPINE_MODERATE_HI = 16.0
 
 const NOSE = 0
 const LEFT_EAR = 7
@@ -113,32 +134,60 @@ function spineAngle(leftShoulder: LM, rightShoulder: LM, leftHip: LM, rightHip: 
   return Math.abs((Math.atan2(dx, dy) * 180) / Math.PI)
 }
 
+/**
+ * 单项扣分，分段与 issues 的三档严格一致。
+ * 等价于 scorer.py 的 `_deduction()`。
+ */
+function metricDeduction(value: number, threshold: number, mildHi: number, moderateHi: number): number {
+  const excess = value - threshold
+  if (excess <= 0) {
+    // 未超标：仅在接近阈值时轻微扣分
+    const zoneStart = threshold * WARN_ZONE_RATIO
+    if (value <= zoneStart) return 0
+    return (WARN_ZONE_MAX * (value - zoneStart)) / (threshold - zoneStart)
+  }
+  if (excess <= mildHi) {
+    return MILD_BASE + (MILD_MAX - MILD_BASE) * (excess / mildHi)
+  }
+  if (excess <= moderateHi) {
+    return MODERATE_BASE + (MODERATE_MAX - MODERATE_BASE) * ((excess - mildHi) / (moderateHi - mildHi))
+  }
+  return (
+    SEVERE_BASE +
+    Math.min(SEVERE_MAX - SEVERE_BASE, (SEVERE_MAX - SEVERE_BASE) * ((excess - moderateHi) / moderateHi))
+  )
+}
+
 /** 评分（与 scorer.py 等价）。 */
 function computeScore(head: number, shoulder: number, spine: number) {
   const headExcess = Math.max(0, head - HEAD_TILT_THRESHOLD)
   const shoulderExcess = Math.max(0, shoulder - SHOULDER_DIFF_THRESHOLD)
   const spineExcess = Math.max(0, spine - SPINE_ANGLE_THRESHOLD)
 
-  const headDeduction = Math.min(35, headExcess * DEDUCTION_RATE)
-  const shoulderDeduction = Math.min(25, shoulderExcess * DEDUCTION_RATE)
-  const spineDeduction = Math.min(25, spineExcess * DEDUCTION_RATE)
+  // 运算顺序与 Python 保持一致，避免浮点尾差影响取整
+  const deductions = [
+    metricDeduction(head, HEAD_TILT_THRESHOLD, HEAD_MILD_HI, HEAD_MODERATE_HI),
+    metricDeduction(shoulder, SHOULDER_DIFF_THRESHOLD, SHOULDER_MILD_HI, SHOULDER_MODERATE_HI),
+    metricDeduction(spine, SPINE_ANGLE_THRESHOLD, SPINE_MILD_HI, SPINE_MODERATE_HI),
+  ].sort((a, b) => b - a)
+  const totalDeduction = deductions[0] + SECONDARY_WEIGHT * (deductions[1] + deductions[2])
 
-  const score = Math.max(20, Math.min(100, pyRound(100 - (headDeduction + shoulderDeduction + spineDeduction))))
+  const score = Math.max(SCORE_MIN, Math.min(SCORE_MAX, pyRound(SCORE_MAX - totalDeduction)))
 
   const issues: string[] = []
   if (headExcess > 0) {
-    if (headExcess > 12) issues.push('头部严重侧倾')
-    else if (headExcess > 6) issues.push('头部明显侧倾')
+    if (headExcess > HEAD_MODERATE_HI) issues.push('头部严重侧倾')
+    else if (headExcess > HEAD_MILD_HI) issues.push('头部明显侧倾')
     else issues.push('头部轻微侧倾')
   }
   if (shoulderExcess > 0) {
-    if (shoulderExcess > 10) issues.push('肩部严重不平衡')
-    else if (shoulderExcess > 5) issues.push('肩部明显不平衡')
+    if (shoulderExcess > SHOULDER_MODERATE_HI) issues.push('肩部严重不平衡')
+    else if (shoulderExcess > SHOULDER_MILD_HI) issues.push('肩部明显不平衡')
     else issues.push('肩部略不平衡')
   }
   if (spineExcess > 0) {
-    if (spineExcess > 16) issues.push('脊柱严重倾斜')
-    else if (spineExcess > 8) issues.push('脊柱明显倾斜')
+    if (spineExcess > SPINE_MODERATE_HI) issues.push('脊柱严重倾斜')
+    else if (spineExcess > SPINE_MILD_HI) issues.push('脊柱明显倾斜')
     else issues.push('脊柱轻微倾斜')
   }
 
