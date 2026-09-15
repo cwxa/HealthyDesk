@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasLocalBackend } from '../platform/runtime'
 import { useWebSocket } from './useWebSocket'
 import { localPoseEngine } from '../platform/localPoseEngine'
+import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
 
 /**
@@ -18,6 +19,19 @@ import type { PoseResult } from '../types'
 export function usePoseEngine() {
   const useLocal = !hasLocalBackend()
   const ws = useWebSocket()
+
+  // ⚠️ 必须把用到的成员单独取出来依赖。
+  // `useWebSocket()` 每次渲染返回的是**新的对象字面量**，若把 `ws` 整个写进依赖数组，
+  // 下游所有 useCallback 都会每渲染失效 → NeckActivity 的挂载 effect 每渲染重跑一次
+  // → 反复「掐掉摄像头再重新取流」，表现为永远卡在「正在启动摄像头...」。
+  const wsConnect = ws.connect
+  const wsDisconnect = ws.disconnect
+  const wsSendFrame = ws.sendFrame
+  const wsResetBackendError = ws.resetBackendError
+  const wsOnPoseResult = ws.onPoseResult
+  const wsConnected = ws.connected
+  const wsPoseResult = ws.poseResult
+  const wsBackendError = ws.backendError
 
   const [connected, setConnected] = useState(false)
   const [poseResult, setPoseResult] = useState<PoseResult | null>(null)
@@ -36,16 +50,16 @@ export function usePoseEngine() {
   // ---- 桌面端：直接复用 useWebSocket ----
   useEffect(() => {
     if (!useLocal) {
-      setConnected(ws.connected)
-      setPoseResult(ws.poseResult)
-      setBackendError(ws.backendError)
+      setConnected(wsConnected)
+      setPoseResult(wsPoseResult)
+      setBackendError(wsBackendError)
     }
-  }, [useLocal, ws.connected, ws.poseResult, ws.backendError])
+  }, [useLocal, wsConnected, wsPoseResult, wsBackendError])
 
   useEffect(() => {
     if (useLocal) return
-    ws.onPoseResult((r) => onPoseRef.current?.(r))
-  }, [useLocal, ws])
+    wsOnPoseResult((r) => onPoseRef.current?.(r))
+  }, [useLocal, wsOnPoseResult])
 
   // ---- 移动端：本地推理循环 ----
   const localLoop = useCallback(() => {
@@ -75,13 +89,10 @@ export function usePoseEngine() {
     setConnected(false)
     setBackendError(null)
     try {
-      await localPoseEngine.init()
-      // 安卓 WebView 中 video 未必自动播放，需显式 play() 并等待就绪
-      try {
-        await video.play()
-      } catch {
-        // 若被浏览器策略拦截，可依赖用户手势触发；不影响后续 readyState 轮询
-      }
+      // 模型来自本地打包资源（apk 内 mediapipe/），加超时避免加载失败时无限等待
+      await withTimeout(localPoseEngine.init(), 45000, '姿态模型加载')
+      // 安卓 WebView 中 video 未必自动播放；不阻塞主流程，本地引擎按 readyState 取帧
+      void Promise.resolve(video.play()).catch(() => {})
       runningRef.current = true
       setConnected(true)
       emit({ type: 'ready', timestamp: new Date().toISOString(), message: '本地姿态引擎就绪' })
@@ -90,8 +101,11 @@ export function usePoseEngine() {
       // 用 timeupdate 事件保证视频有新画面时至少处理一次
       video.addEventListener('timeupdate', onVideoTimeUpdate)
     } catch (e) {
+      const name = (e as { name?: string })?.name ?? 'Error'
       console.error('Local pose engine init failed:', e)
-      setBackendError('本地姿态模型加载失败，请检查网络后重试')
+      setBackendError(
+        name === 'TimeoutError' ? '本地姿态模型加载超时，请重试' : '本地姿态模型加载失败，请重试'
+      )
       setConnected(false)
     }
   }, [useLocal, localLoop, emit, onVideoTimeUpdate])
@@ -104,9 +118,9 @@ export function usePoseEngine() {
     if (useLocal) {
       setConnected(false)
     } else {
-      ws.disconnect()
+      wsDisconnect()
     }
-  }, [useLocal, ws, onVideoTimeUpdate])
+  }, [useLocal, wsDisconnect, onVideoTimeUpdate])
 
   const resetBackendError = useCallback(() => {
     setBackendError(null)
@@ -115,10 +129,10 @@ export function usePoseEngine() {
       const video = videoRef.current
       if (video) attachVideo(video)
     } else {
-      ws.resetBackendError()
-      ws.connect()
+      wsResetBackendError()
+      wsConnect()
     }
-  }, [useLocal, ws, attachVideo])
+  }, [useLocal, wsResetBackendError, wsConnect, attachVideo])
 
   const onPoseResult = useCallback((cb: (r: PoseResult) => void) => {
     onPoseRef.current = cb
@@ -140,9 +154,9 @@ export function usePoseEngine() {
     attachVideo,
     stop,
     /** 兼容桌面端旧签名 */
-    connect: ws.connect,
-    disconnect: ws.disconnect,
-    sendFrame: ws.sendFrame,
+    connect: wsConnect,
+    disconnect: wsDisconnect,
+    sendFrame: wsSendFrame,
     isLocal: useLocal,
   }
 }

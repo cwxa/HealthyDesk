@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { HashRouter, Routes, Route, useNavigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import Sidebar from './components/Sidebar'
 import BottomTabs from './components/BottomTabs'
@@ -17,8 +17,10 @@ function AppShell() {
   const [reminderVisible, setReminderVisible] = useState(false)
   const [isStartupReminder, setIsStartupReminder] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const { post, get } = useApi()
   const mobile = isMobile()
+  const activityRoute = location.pathname === '/'
 
   const speak = (text: string) => {
     if ('speechSynthesis' in window) {
@@ -250,8 +252,21 @@ function AppShell() {
           <h1 style={{ fontSize: 17, fontWeight: 700, color: 'var(--primary-dark)' }}>NeckGuardian</h1>
         </header>
 
-        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg)', WebkitOverflowScrolling: 'touch' }}>
-          <div style={{ padding: '16px 14px 24px' }}>
+        {/* 「肩颈活动」页是固定高度的整屏布局（摄像头自适应剩余空间，不需要滚动），
+            其余页面维持常规的纵向滚动。 */}
+        <main style={{
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+          background: 'var(--bg)',
+        }}>
+          <div
+            className={activityRoute ? undefined : 'no-scrollbar'}
+            style={{
+              flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+              padding: activityRoute ? '10px 14px 10px' : '16px 14px 24px',
+              overflowY: activityRoute ? 'hidden' : 'auto',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
             <Routes>
               <Route path="/" element={<NeckActivity />} />
               <Route path="/dashboard" element={<Dashboard />} />

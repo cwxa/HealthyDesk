@@ -15,6 +15,12 @@ export type RuntimePlatform = 'electron' | 'android' | 'ios' | 'web'
 
 export function getPlatform(): RuntimePlatform {
   if (typeof window !== 'undefined' && window.electronAPI) return 'electron'
+  // 开发辅助：在桌面浏览器里打开 `?platform=android` 即可强制走移动端分支，
+  // 用来调手机端 UI 而不必每次都装 APK。安卓包内 URL 不带该参数，正式环境无影响。
+  if (typeof window !== 'undefined') {
+    const forced = new URLSearchParams(window.location.search).get('platform')
+    if (forced === 'android' || forced === 'ios' || forced === 'web') return forced
+  }
   const native = Capacitor.getPlatform() // 'android' | 'ios' | 'web'
   if (native === 'android' || native === 'ios') return native
   return 'web'
