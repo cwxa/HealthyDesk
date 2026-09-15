@@ -18,17 +18,19 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 # 1. 安装依赖
 npm install
 
-# 2. 编译前端并同步到安卓工程
-npm run cap:sync
+# 2. 一条命令出 APK（编译前端 + 同步 + Gradle 打包）
+npm run cap:build
+# 产物：android/app/build/outputs/apk/debug/app-debug.apk（约 18MB）
 
-# 3. 用 Android Studio 打开并出包
-npm run cap:open
-# 之后在 Android Studio 里：Build → Build APK(s)
+# 想用图形界面：
+npm run cap:open      # = npm run cap:sync && cap open android
+# 然后在 Android Studio 里：Build → Build APK(s)
 ```
 
 详细的构建流程、权限配置与常见问题见 **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**。
 
-> 前提：需要 Android Studio（自带 JDK 17 / Android SDK 34）。
+> 前提：本机需要 JDK 17 + Android SDK 34（可用 Android Studio 自带，也可纯命令行装）。
+> **本仓库的开发机已在 `E:\AndroidDev` 装好整套命令行工具链**，`npm run cap:build` 开箱即用，详见文档 §2.1。
 
 ---
 
@@ -465,7 +467,7 @@ score = 100 - (head_tilt_penalty + shoulder_penalty + spine_penalty)
 | Node.js | >= 18.x | 前端运行时 |
 | Python | >= 3.10 | 后端运行时（桌面版） |
 | npm | >= 9.x | 包管理器 |
-| Android Studio | 最新 | 出安卓 APK（自带 JDK 17 + SDK 34） |
+| JDK 17 + Android SDK 34 | — | 出安卓 APK（本机已装在 `E:\AndroidDev`，或用 Android Studio 自带） |
 
 #### 开发流程
 
@@ -487,7 +489,8 @@ npm run python:start
 npm run dev
 
 # ---- 安卓端 ----
-npm run cap:sync      # 编译前端 + 同步进安卓工程
+npm run cap:build     # 一条命令出 debug APK（前端构建 + sync + gradle）
+npm run cap:sync      # 只编译前端 + 同步进安卓工程
 npm run cap:open      # 用 Android Studio 打开 android/
 npm run android       # = cap:sync + cap:open
 npm run verify:parity # 验证移动端推理与后端数值一致

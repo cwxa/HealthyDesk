@@ -23,7 +23,8 @@
     "cap:web": "node scripts/cap-build.js",
     "cap:sync": "npm run cap:web && cap sync android",
     "cap:open": "cap open android",
-    "cap:build": "npm run cap:web && cap sync android && cd android && gradlew.bat assembleDebug",
+    "cap:build": "node scripts/android-build.js",
+    "cap:build:release": "node scripts/android-build.js --release",
     "android": "npm run cap:sync && npm run cap:open",
     "verify:parity": "node scripts/verify-scoring.mjs && node scripts/verify-angles.mjs"
   },

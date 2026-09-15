@@ -31,32 +31,67 @@
 
 ### 2.1 本机开发环境（当前机器）
 
-已验证可用：
-- Node.js（项目用 `node_modules` 内的依赖）
-- 前端依赖已安装（`npm install` 完成）
+**工具链已装好，无需再装任何东西。** 为节省 C 盘空间，全部装在 **E 盘**：
 
-当前机器**未安装** JDK / Android SDK / Gradle，因此**无法在本机直接 `gradlew assemble`**，需要用 Android Studio 出包。
+| 组件 | 版本 | 路径 |
+|------|------|------|
+| JDK | Temurin 17.0.20.1 | `E:\AndroidDev\jdk\jdk-17.0.20.1+1` |
+| Android SDK | cmdline-tools 12.0 + platform-tools + platforms;android-34 + build-tools;34.0.0 | `E:\AndroidDev\sdk` |
+| Gradle | 8.2.1（免 wrapper 下载） | `E:\AndroidDev\gradle-8.2.1` |
+| Gradle 缓存 | — | `E:\AndroidDev\gradle-home` |
+| 下载的安装包 | — | `E:\AndroidDev\downloads`（可删，约 470MB） |
 
-### 2.2 出 APK 需要的环境
+`android/local.properties` 已写好 `sdk.dir=E:/AndroidDev/sdk`（该文件不入库）。
 
-任选其一：
+于是**本机可以直接出 APK**，不必安装 Android Studio：
 
-**方案 A：Android Studio（推荐，最省事）**
+```bash
+npm run cap:build          # debug 包（一键：前端构建 + sync + gradle）
+```
+
+详见 §3.3。
+
+### 2.2 想自己装工具链 / 换台机器
+
+**方案 A：Android Studio（图形化，最省事）**
 1. 下载并安装 [Android Studio](https://developer.android.com/studio)
 2. 首次启动时，安装向导会自动装好 **JDK 17**、**Android SDK**、**Gradle**
 3. 在 SDK Manager 里确认已装 **Android SDK Platform 34**（compileSdk 34）
 
-**方案 B：命令行（需自行装工具链）**
-- JDK 17（如 [Adoptium Temurin 17](https://adoptium.net/temurin/releases/?version=17)）
-- Android SDK Command-line Tools，设置 `ANDROID_HOME` 指向 SDK 目录
-- 装 `platforms;android-34` 与 `build-tools;34.0.0`
-
+**方案 B：纯命令行（本机就是这套，装在 E 盘）**
 ```bash
-# 方案 B 的环境变量示例
-export JAVA_HOME="/c/Program Files/Eclipse Adoptium/jdk-17.x.x-hotspot"
-export ANDROID_HOME="$LOCALAPPDATA/Android/Sdk"
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+# 1) JDK 17（Adoptium zip，免安装、免管理员权限）
+curl -L -o jdk17.zip "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse"
+tar -xf jdk17.zip -C E:/AndroidDev/jdk
+
+# 2) Android 命令行工具
+curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"
+tar -xf cmdline-tools.zip -C E:/AndroidDev/sdk/cmdline-tools
+# 注意：必须把解压出的 cmdline-tools/ 重命名为 latest/，sdkmanager 才认识
+mv E:/AndroidDev/sdk/cmdline-tools/cmdline-tools E:/AndroidDev/sdk/cmdline-tools/latest
+
+# 3) 接受许可 + 装组件（国内建议挂代理）
+export JAVA_HOME="E:/AndroidDev/jdk/jdk-17.0.20.1+1"
+SDKM="E:/AndroidDev/sdk/cmdline-tools/latest/bin/sdkmanager.bat"
+printf 'y\ny\ny\ny\ny\ny\ny\ny\ny\ny\n' | "$SDKM" --sdk_root="E:/AndroidDev/sdk" \
+  --proxy=http --proxy_host=127.0.0.1 --proxy_port=7897 --licenses
+"$SDKM" --sdk_root="E:/AndroidDev/sdk" --proxy=http --proxy_host=127.0.0.1 --proxy_port=7897 \
+  "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+# 4) Gradle 8.2.1（直接下载，绕开 wrapper 的代理问题）
+curl -L -o gradle.zip "https://services.gradle.org/distributions/gradle-8.2.1-bin.zip"
+tar -xf gradle.zip -C E:/AndroidDev
 ```
+
+SDK 的三个包约 **420MB**，Gradle 约 **130MB**，JDK 约 **190MB**。
+
+> 国内网络建议在 `E:\AndroidDev\gradle-home\gradle.properties` 里配代理，否则 AGP/AndroidX 依赖会拉不动：
+> ```properties
+> systemProp.http.proxyHost=127.0.0.1
+> systemProp.http.proxyPort=7897
+> systemProp.https.proxyHost=127.0.0.1
+> systemProp.https.proxyPort=7897
+> ```
 
 ---
 
@@ -80,7 +115,41 @@ npm run cap:sync
 > ⚠️ 桌面端构建（`npm run build` / `npm run electron:build`）也会写 `dist/`，但会额外生成 `dist/main.js`、`dist/preload.js`，且**不含** `dist/mediapipe/`。
 > 所以：**先跑 `npm run cap:sync` 再打开 Android Studio**，保证 `dist/` 是纯 Web + MediaPipe 的移动端产物。
 
-### 3.2 用 Android Studio 出包（推荐）
+### 3.2 命令行出包（推荐，本机已可用）
+
+**一条命令搞定**：
+
+```bash
+npm run cap:build
+# = node scripts/android-build.js
+#   1) node scripts/cap-build.js   → 类型检查 + 前端构建 + 暂存 MediaPipe 资源
+#   2) cap sync android            → 拷进 android/app/src/main/assets/public/
+#   3) gradle assembleDebug        → 产出 APK
+```
+
+产物：`android/app/build/outputs/apk/debug/app-debug.apk`（当前约 **18.3 MB**）。
+
+其它用法：
+
+```bash
+npm run cap:build -- --skip-web     # 只跑 gradle（前端没改动时最快，约 50 秒）
+npm run cap:build:release           # 出 release 包（需先配好签名，见 §3.4）
+```
+
+`scripts/android-build.js` 会自动定位工具链：
+
+| 环境变量 | 默认值 |
+|----------|--------|
+| `JAVA_HOME` | `E:\AndroidDev\jdk\<版本目录>` |
+| `ANDROID_HOME` | `E:\AndroidDev\sdk` |
+| `GRADLE_USER_HOME` | `E:\AndroidDev\gradle-home` |
+| `NECKGUARDIAN_DEV_ROOT` | `E:/AndroidDev`（改它可整体搬家） |
+
+若这些环境变量已由 Android Studio 配好，脚本会优先用它们，并自动改用工程自带的 `gradlew`。
+
+> 首次构建约 **2 分钟**（要下载 AGP + AndroidX 依赖）；之后走缓存约 **50 秒**。
+
+### 3.3 用 Android Studio 出包（图形化）
 
 ```bash
 npm run android
@@ -89,30 +158,42 @@ npm run android
 
 这会自动同步前端产物，并用 Android Studio 打开 `android/` 工程。然后：
 
-1. 等待 Gradle Sync 完成（首次会下载 Gradle 8.2.1 与依赖，比较慢）
+1. 等待 Gradle Sync 完成
 2. **调试包**：菜单 `Build → Build Bundle(s) / APK(s) → Build APK(s)`
-   - 产物：`android/app/build/outputs/apk/debug/app-debug.apk`
 3. **正式包**：`Build → Generate Signed Bundle / APK…`，按向导创建/选择签名证书，选 `release`
 
-### 3.3 命令行出包（需方案 B 环境）
+### 3.4 release 包签名
+
+发布给别人的包必须用**你自己的**密钥签名，且**此后每次升级都要用同一把密钥**，否则用户无法覆盖安装。
 
 ```bash
-npm run cap:sync
-cd android
-./gradlew assembleDebug      # Windows: gradlew.bat assembleDebug
-# 产物：app/build/outputs/apk/debug/app-debug.apk
+# 1) 生成密钥（只做一次，务必妥善备份 keystore 与密码！）
+"E:/AndroidDev/jdk/jdk-17.0.20.1+1/bin/keytool.exe" -genkeypair -v \
+  -keystore E:/AndroidDev/neckguardian-release.jks \
+  -alias neckguardian -keyalg RSA -keysize 2048 -validity 10000
+
+# 2) 在 android/keystore.properties 里登记（该文件不要入库）
+#    storeFile=E:/AndroidDev/neckguardian-release.jks
+#    storePassword=xxx
+#    keyAlias=neckguardian
+#    keyPassword=xxx
 ```
 
-`npm run cap:build` 已封装「同步 + assembleDebug」两步。
+然后在 `android/app/build.gradle` 的 `android { }` 里挂上 `signingConfigs.release` 并在 `buildTypes.release` 引用它。配好后跑 `npm run cap:build:release` 即可产出已签名的 release 包。
 
-### 3.4 直接装到手机调试
+> 当前交付的 `release2/NeckGuardian-1.3.1-debug.apk` 用的是 **Android 调试密钥**，可以直接装到手机上试，但**不适合对外分发**（调试密钥是公开的，且换机会不兼容）。
+
+### 3.5 直接装到手机调试
 
 手机开启「开发者选项 → USB 调试」，连上电脑：
 
 ```bash
-adb devices                       # 确认设备已识别
-cd android && ./gradlew installDebug   # 或 adb install -r app-debug.apk
+ADB="E:/AndroidDev/sdk/platform-tools/adb.exe"
+"$ADB" devices                          # 确认设备已识别
+"$ADB" install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+或者把 APK 传到手机上，用文件管理器点击安装（需允许「安装未知来源应用」）。
 
 ---
 
