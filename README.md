@@ -21,22 +21,26 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 
 | 平台 | 文件 | 大小 | 说明 |
 |------|------|------|------|
-| 🖥️ Windows | [NeckGuardian Setup 1.3.7.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian.Setup.1.3.7.exe) | 197 MB | 安装包（内含自包含后端，无需装 Python）；首次启动会请求摄像头权限 |
+| 🖥️ Windows | [NeckGuardian Setup 1.3.7.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian.Setup.1.3.7.exe) | 188 MB | 安装包（内含自包含后端，无需装 Python）；首次启动会请求摄像头权限 |
+| 🍎 macOS（M 系列） | [NeckGuardian-1.3.7-mac-arm64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-1.3.7-mac-arm64.dmg) | 208 MB | 拖入「应用程序」。**未签名**，首次需右键 →「打开」 |
+| 🍎 macOS（Intel） | [NeckGuardian-1.3.7-mac-x64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-1.3.7-mac-x64.dmg) | 241 MB | 同上 |
 | 📱 Android | [NeckGuardian-Android-1.3.7.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-Android-1.3.7.apk) | 16.9 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
-| 🍎 macOS | 构建中 | — | 需 macOS 编译（后端不可交叉编译），见 [docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md) §3.2 |
-| 📱 iOS | 构建中 | — | 需 macOS + Xcode，见 [docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md) §3.4 |
+| 📱 iOS | [NeckGuardian.xcarchive.tgz](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian.xcarchive.tgz) | 16.8 MB | **未签名归档，不能直接安装**，仅供开发者 |
 
 > 📱 安卓包签名指纹（SHA-256）：`9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5`
 > 后续升级必须用同一把密钥签名，否则老用户无法覆盖安装（密钥位置与备份要求见 [docs/ANDROID_BUILD.md §3.4](docs/ANDROID_BUILD.md)）。
 
-最新版本：**[v1.3.7](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.7)**（Windows 与 Android 同为 1.3.7）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+下载后用 `SHA256SUMS.txt` 校验完整性：`sha256sum -c SHA256SUMS.txt`
 
-> 🍎 **macOS / iOS 需要 macOS 构建**：iOS 的编译链只有 macOS 有；macOS 包要内置
-> 一个 macOS 原生的 Python 后端，而 PyInstaller 不能交叉编译。
-> 两条路：用 CI（`.github/workflows/build.yml` 会在 GitHub 的 macOS runner 上出包），
-> 或在一台真实 Mac 上构建。
-> 打 `v*` tag 时 CI 会构建四端并自动创建 **draft Release**（含 `SHA256SUMS.txt`），
+最新版本：**[v1.3.7](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.7)**（四端同为 1.3.7）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+
+> 🍎 **macOS 与 iOS 的包由 CI 在 macOS runner 上构建**（本机产不出：iOS 编译链只有 macOS 有；
+> macOS 包要内置 macOS 原生的 Python 后端，而 PyInstaller 不能交叉编译）。
+> 打 `v*` tag 时 CI 会构建四端并创建 **draft Release**（含 `SHA256SUMS.txt`），
 > 人工确认无误后再 `gh release edit <tag> --draft=false --latest` 公开。
+>
+> ⚠️ **mac / iOS 产物尚未做真机验证**，只证明「可编译、可打包」。macOS 包未签名（会被 Gatekeeper 拦，
+> 首次右键打开即可），iOS 归档是未签名的，需要自备开发者证书重签才能装到设备上。
 
 > ✨ **v1.3.7 是架构版本**：平台差异收敛为「能力矩阵」，补齐 macOS / iOS 两端，修掉若干跨平台
 > 静默 bug。**评分与提醒逻辑一个字没改**，同一姿势的分数与 v1.3.6 完全一致。
