@@ -1,0 +1,39 @@
+# 跨平台行尾约定
+#
+# 背景：本仓库要在 Windows / macOS / Linux 三处构建。Windows 上检出时若把 shell 脚本
+# 变成 CRLF，Linux/macOS 上会直接报 `bad interpreter: No such file or directory`；
+# 这类问题在 Windows 本地永远复现不出来，只会炸在 CI 里。
+#
+# 约定：仓库内一律存 LF，只有 Windows 专用脚本例外。
+
+# ---- 必须是 LF：Unix 可执行脚本 / 构建配置 ----
+*.sh      text eol=lf
+gradlew   text eol=lf
+Podfile   text eol=lf
+
+# ---- 必须是 CRLF：Windows 专用脚本 ----
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+# ---- 明确为二进制：不要做任何行尾或编码转换 ----
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.icns      binary
+*.task      binary
+*.jar       binary
+*.jks       binary
+*.keystore  binary
+*.ttf       binary
+*.woff      binary
+*.woff2     binary
+*.zip       binary
+*.dmg       binary
+*.exe       binary
+
+# ---- 工程文件：用 LF 存，避免 Xcode / Git 反复改写 ----
+*.pbxproj text eol=lf
+*.plist   text eol=lf

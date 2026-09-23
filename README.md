@@ -4,9 +4,16 @@
 
 NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄像头实时监测用户姿势，帮助您养成良好的工作习惯。
 
-**支持两大平台：**
-- 🖥️ **桌面版（Windows）** - Electron + Python 后端，带 DeepSeek AI 分析
-- 📱 **安卓版** - Capacitor 套壳，**手机本地完成姿态推理，无需后端、无需联网**
+**支持四端，同一份前端代码：**
+
+| | 形态 | 推理位置 | 数据存储 | 产物 |
+|---|---|---|---|---|
+| 🖥️ **Windows** | 桌面 | Python 后端 | 后端 SQLite | NSIS `.exe` |
+| 🍎 **macOS** | 桌面 | Python 后端 | 后端 SQLite | `.dmg` / `.zip` |
+| 📱 **Android** | 移动 | WebView 内 wasm | 本机 IndexedDB | `.apk` |
+| 📱 **iOS** | 移动 | WKWebView 内 wasm | 本机 IndexedDB | `.xcarchive` / `.ipa` |
+
+> 移动端**无需后端、无需联网**，姿态检测全程在本机完成，摄像头画面不出设备。
 
 ---
 
@@ -16,46 +23,57 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 |------|------|------|------|
 | 🖥️ Windows | [NeckGuardian Setup 1.3.6.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.6/NeckGuardian.Setup.1.3.6.exe) | 196 MB | 安装包（内含自包含后端，无需装 Python）；首次启动会请求摄像头权限 |
 | 📱 Android | [NeckGuardian-Android-1.3.6.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.6/NeckGuardian-Android-1.3.6.apk) | 16.6 MB | 已用自有密钥签名，可直接分发；需允许「未知来源应用」 |
+| 🍎 macOS | 构建中 | — | 需 macOS 编译（后端不可交叉编译），见 [docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md) §3.2 |
+| 📱 iOS | 构建中 | — | 需 macOS + Xcode，见 [docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md) §3.4 |
 
 > 📱 安卓包签名指纹（SHA-256）：`9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5`
 > 后续升级必须用同一把密钥签名，否则老用户无法覆盖安装（密钥位置与备份要求见 [docs/ANDROID_BUILD.md §3.4](docs/ANDROID_BUILD.md)）。
 
 最新版本：**[v1.3.6](https://github.com/cwxa/HealthyDesk/releases/tag/v1.3.6)**（Windows 与 Android 同为 1.3.6）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
 
+> 🍎 **macOS / iOS 需要 macOS 构建**：iOS 的编译链只有 macOS 有；macOS 包要内置
+> 一个 macOS 原生的 Python 后端，而 PyInstaller 不能交叉编译。
+> 两条路：用 CI（`.github/workflows/build.yml` 会在 GitHub 的 macOS runner 上出包），
+> 或在一台真实 Mac 上构建。
+
 > ⚠️ v1.3.6 起评分模型有调整（详见下方「评分算法」）。旧版本记录的历史分数由旧公式产生，
 > 统计图表在跨版本处会有落差，这是预期内的，不是数据出错。
 >
-> ✅ **同一姿势在 Windows 与 Android 上得到完全相同的分数**：两端的角度计算、EMA 平滑、
+> ✅ **同一姿势在四个平台上得到完全相同的分数**：各端的角度计算、EMA 平滑、
 > 评分三套逻辑逐位等价，由 `npm run verify:parity` 守卫（21 项常量 + 80 条评分用例 +
 > 439 帧平滑序列 + 8 条角度用例）。
 
 ---
 
-## 📱 安卓版快速上手
+## 📱 移动端快速上手（Android / iOS）
 
-安卓版把姿态检测整个搬进了手机（MediaPipe WASM/GPU 本地推理），摄像头画面**不出设备**。
+移动端把姿态检测整个搬进了手机（MediaPipe WASM/GPU 本地推理），摄像头画面**不出设备**。
 
 ```bash
 # 1. 安装依赖
 npm install
 
-# 2. 一条命令出 APK（编译前端 + 同步 + Gradle 打包）
+# ---- Android ----
 npm run cap:build            # debug 包，自测用
 npm run cap:build:release    # release 包，已配置签名，用于分发
 # 产物：android/app/build/outputs/apk/{debug,release}/app-{debug,release}.apk
+npm run cap:build -- --skip-web   # 只改了原生代码时跳过前端构建，快一倍
+npm run cap:open             # = npm run cap:sync && cap open android
 
-# 只改了原生代码时可跳过前端构建，快一倍：
-npm run cap:build -- --skip-web
-
-# 想用图形界面：
-npm run cap:open      # = npm run cap:sync && cap open android
-# 然后在 Android Studio 里：Build → Build APK(s)
+# ---- iOS（只能在 macOS 上跑）----
+node scripts/ios-build.js            # 未签名归档（验证可编译）
+node scripts/ios-build.js --export   # 导出 IPA（需签名配置）
+npm run ios                          # = npm run cap:sync:ios && cap open ios
 ```
 
-详细的构建流程、权限配置、签名与常见问题见 **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**。
+详细的构建流程、权限配置、签名与常见问题：
 
-> 前提：本机需要 JDK 17 + Android SDK 34（可用 Android Studio 自带，也可纯命令行装）。
+- 安卓 → **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**
+- iOS / macOS、平台矩阵、CI → **[docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md)**
+
+> 前提：Android 需要 JDK 17 + Android SDK 34（可用 Android Studio 自带，也可纯命令行装）。
 > **本仓库的开发机已在 `E:\AndroidDev` 装好整套命令行工具链与 release 签名密钥**，`npm run cap:build` 开箱即用，详见文档 §2.1 / §3.4。
+> iOS 需要 Xcode + CocoaPods。
 
 ---
 
@@ -141,13 +159,13 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 | `Ctrl+-` | 缩小窗口 |
 | `Ctrl+0` | 恢复默认缩放 |
 
-> 以上为桌面版快捷键；安卓版无键盘快捷键，改用底部标签栏切换页面。
+> 以上为桌面端快捷键；移动端（Android / iOS）无键盘快捷键，改用底部标签栏切换页面。
 
-### 1.4 安卓版使用说明
+### 1.4 移动端使用说明（Android / iOS）
 
-安卓版界面针对触屏与竖屏做了精简（顶部栏 + 内容 + 底部标签栏）：
+移动端界面针对触屏与竖屏做了精简（顶部栏 + 内容 + 底部标签栏）：
 
-| 差异点 | 桌面版 | 安卓版 |
+| 差异点 | 桌面端 | 移动端（Android / iOS） |
 |--------|--------|--------|
 | 导航 | 左侧边栏 | 底部标签栏（肩颈活动 / 仪表盘 / 设置） |
 | 姿态检测 | 连接本地 Python 后端 | **手机本地推理**，无需后端 |
@@ -157,10 +175,10 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 | 开机自启动 | 支持 | 不提供 |
 
 **首次使用**：打开 App 会弹出「允许使用摄像头？」，点**允许**。若误点拒绝，
-去「系统设置 → 应用 → NeckGuardian → 权限 → 相机」手动打开。
+Android 去「系统设置 → 应用 → NeckGuardian → 权限 → 相机」，iOS 去「设置 → NeckGuardian → 相机」手动打开。
 
 **已知限制**：
-- 切到后台或锁屏后，姿态检测与提醒会暂停（安卓系统会冻结后台 WebView）；
+- 切到后台或锁屏后，姿态检测与提醒会暂停（手机系统会冻结后台 WebView）；
 - 中低端机型推理帧率较低（GPU 不可用时自动回退 CPU）；
 - 语音播报依赖系统中文语音包，缺失时会静默失败。
 
@@ -173,12 +191,12 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 **Q: 提醒功能不工作？**
 - 检查设置中的提醒间隔是否设置合理
 - 确保应用在系统托盘中正常运行（未被系统休眠）
-- 安卓端请保持 App 在前台，后台会被系统暂停计时
+- 移动端请保持 App 在前台，后台会被系统暂停计时
 
 **Q: 如何退出应用？**
 - 右键点击系统托盘图标，选择"退出"
 - 或在设置页面点击"退出应用"
-- 安卓端：从最近任务列表划掉，或系统设置中强制停止
+- 安卓 / iOS：从最近任务列表划掉，或系统设置中强制停止
 
 ---
 
@@ -186,59 +204,60 @@ AI 会结合您的**实时姿态指标**（头部侧倾、肩部高差、脊柱�
 
 ### 2.1 系统架构
 
+四端（Windows / macOS / Android / iOS）是**同一份 React 前端 + 一个平台能力层**：
+页面、组件、业务 Hook 完全共用，差异只在「谁来推理、数据存哪、提醒怎么发」三件事上，
+而这三件事全部收敛在 `src/platform/` 一处。
+
+#### 平台矩阵
+
+| 端 | 运行壳 | 姿态推理 | 数据存储 | 提醒通道 |
+|---|---|---|---|---|
+| Windows | Electron（托盘 / 开机自启） | Python 后端 + MediaPipe | 后端 SQLite | 后端调度器 → IPC 弹窗 |
+| macOS | Electron（菜单栏 Template 图标） | 同上 | 同上 | 同上 |
+| Android | Capacitor WebView | 前端本地 MediaPipe **wasm** | IndexedDB | 本地定时器 + 系统通知 |
+| iOS | Capacitor WKWebView | 同上 | 同上 | 同上 |
+
 #### 整体架构图
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     NeckGuardian 三层架构                           │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    表示层 (Presentation Layer)               │   │
-│  │  ┌────────────────┐    IPC    ┌─────────────────────────┐  │   │
-│  │  │   Electron     │◄─────────►│   React + TypeScript    │  │   │
-│  │  │  主进程        │          │   渲染进程               │  │   │
-│  │  │  (main.ts)     │          │   (App.tsx)             │  │   │
-│  │  └────────────────┘          └─────────────────────────┘  │   │
-│  │         │ HTTP/WebSocket          │                        │   │
-│  └─────────┼─────────────────────────┼────────────────────────┘   │
-│            │                         │                            │
-│            ▼                         ▼                            │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    业务逻辑层 (Service Layer)               │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │   │
-│  │  │  API    │ │  WS     │ │  AI     │ │ Task    │          │   │
-│  │  │ Router  │ │ Camera  │ │ Advisor │ │ Scheduler│         │   │
-│  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘          │   │
-│  │       │           │           │           │                 │   │
-│  │       └───────────┴─────┬─────┴───────────┘                 │   │
-│  │                         │                                   │   │
-│  │                 ┌───────┴───────┐                           │   │
-│  │                 │  Pose Detector│                           │   │
-│  │                 │   (MediaPipe) │                           │   │
-│  │                 └───────────────┘                           │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                    │
-│                              ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    数据层 (Data Layer)                      │   │
-│  │              ┌─────────────────────┐                        │   │
-│  │              │      SQLite         │                        │   │
-│  │              │  (neckguardian.db)  │                        │   │
-│  │              └─────────────────────┘                        │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│               共用前端  React + TypeScript（四端同一份产物）            │
+│     pages / components / hooks / usePoseEngine —— 业务代码零平台分支    │
+└────────────────────────────────┬──────────────────────────────────────┘
+                                 │  只问能力，不问平台
+                                 ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│        平台能力层  src/platform/     ← 全部平台差异的唯一收敛处         │
+│  runtime.ts         能力矩阵 supports('localBackend')；平台 ⊥ 宿主 OS   │
+│  dataLayer.ts       HTTP(REST + WebSocket)  ⇄  IndexedDB               │
+│  localPoseEngine.ts 本地 MediaPipe wasm 推理 + 评分（与 scorer.py 等价）│
+│  localDb / localStats / localReminder / nativeDiag                     │
+└────────┬──────────────────────────────────────────┬───────────────────┘
+         │ supports('localBackend') === true        │ false
+         ▼                                          ▼
+┌────────────────────────────────┐  ┌────────────────────────────────────┐
+│      Windows / macOS 桌面       │  │        Android / iOS 移动           │
+│  Electron 主进程                │  │  Capacitor WebView（无后端）        │
+│   · 窗口 / 托盘 / 自启 / 弹窗    │  │   · 摄像头 → wasm 推理 → IndexedDB  │
+│         │ HTTP + WebSocket      │  │   · 提醒 = 本地定时器 + 系统通知     │
+│         ▼                       │  │   · 权限：原生桥（Android）/         │
+│  Python FastAPI 后端（内嵌）     │  │           WKWebView（iOS）          │
+│   MediaPipe / SQLite / 调度器    │  └────────────────────────────────────┘
+└────────────────────────────────┘
 ```
 
 #### 架构特点
 
 | 特性 | 说明 |
 |------|------|
-| **分层设计** | 清晰的三层架构，职责分离 |
-| **进程隔离** | Electron 主进程与渲染进程隔离，安全可靠 |
-| **实时通信** | WebSocket 实现低延迟的姿势数据流 |
-| **异步处理** | FastAPI + asyncio 支持高并发请求 |
+| **能力矩阵而非平台分支** | 业务层问 `supports('systemTray')`，不写 `platform === 'electron'`；新增平台只改一张表 |
+| **平台与宿主 OS 正交** | `RuntimePlatform`（electron/android/ios/web）与 `HostOS`（windows/macos/…）独立，桌面文案随 OS 变 |
+| **单一数值实现** | 评分/角度/平滑各端逐位等价，由 `npm run verify:parity` 守住（详见 2.3.1） |
+| **进程隔离** | 桌面端 Electron 主进程与渲染进程隔离，后端作为独立子进程运行 |
+| **实时通信** | 桌面走 WebSocket 低延迟数据流；移动端在页面内直接推理，无网络往返 |
+| **全程离线** | 移动端无后端依赖，桌面端后端为本地进程，不依赖任何云服务 |
+
+> 端到端的构建、签名与权限配置见 **[docs/MULTIPLATFORM.md](docs/MULTIPLATFORM.md)**。
 
 ### 2.2 目录结构与职责
 
@@ -266,9 +285,9 @@ HealthyDesk/
 │   ├── config.py              # 全局配置管理
 │   ├── main.py                # FastAPI 应用入口
 │   └── requirements.txt       # Python 依赖清单
-├── electron/                  # Electron 主进程
-│   ├── main.ts                # 主进程入口，窗口管理
-│   └── preload.ts             # 预加载脚本，API 桥接
+├── electron/                  # Electron 主进程（Windows / macOS / Linux 通用）
+│   ├── main.ts                # 主进程入口：窗口/托盘/自启/后端子进程（平台分支集中在此）
+│   └── preload.ts             # 预加载脚本，API 桥接（同时暴露平台与架构信息）
 ├── src/                       # React 前端 (渲染进程)
 │   ├── components/            # 可复用 UI 组件
 │   │   ├── AIAnalysisPanel.tsx   # AI 肩颈分析面板
@@ -286,8 +305,9 @@ HealthyDesk/
 │   │   ├── useApi.ts          # API 请求封装（按平台分流）
 │   │   ├── usePoseEngine.ts   # 统一姿态检测（桌面 WS / 移动本地）
 │   │   └── useWebSocket.ts    # WebSocket 连接管理（桌面端）
-│   ├── platform/              # 平台抽象层（桌面 / 移动端差异收敛处）
-│   │   ├── runtime.ts         # 平台判定（electron / android / web）
+│   ├── platform/              # 平台能力层（四端差异的唯一收敛处）
+│   │   ├── runtime.ts         # 平台 / 宿主 OS 判定 + 能力矩阵（唯一真相来源）
+│   │   ├── nativeDiag.ts      # 原生权限诊断（Android 原生桥 · iOS/Web Permissions API）
 │   │   ├── dataLayer.ts       # 统一数据层（HTTP vs IndexedDB）
 │   │   ├── localDb.ts         # 移动端 IndexedDB 封装
 │   │   ├── localStats.ts      # 移动端统计聚合（对齐后端 SQL）
@@ -306,25 +326,40 @@ HealthyDesk/
 │   └── app/src/main/
 │       ├── java/com/neckguardian/app/MainActivity.java  # 摄像头权限覆写
 │       ├── assets/public/     # 由 cap sync 拷入的 Web 产物（含媒体模型）
-│       └── res/               # 图标、主题、颜色资源
+│       └── res/               # 图标、启动图、主题、颜色资源
+├── ios/                       # Capacitor iOS 工程（Xcode 打开，必须在 macOS 上构建）
+│   └── App/App/
+│       ├── Info.plist         # NSCameraUsageDescription 等权限声明
+│       └── Assets.xcassets/   # AppIcon / LaunchScreen（由生成脚本产出）
+├── macos/                     # macOS 打包资源
+│   ├── entitlements.mac.plist          # 主进程权限（JIT / 摄像头等）
+│   └── entitlements.mac.inherit.plist  # 子进程权限（仅 JIT 相关）
 ├── public/                    # 桌面端静态资源（会被 Vite 全量复制进 dist/）
-├── mediapipe-assets/          # 安卓端 MediaPipe 资源（不入 public/，避免污染桌面包）
+├── mediapipe-assets/          # 移动端 MediaPipe 资源（不入 public/，避免污染桌面包）
 │   └── models/                #   pose_landmarker_full.task（9.4MB，随包内置）
-├── scripts/                   # 辅助脚本
-│   ├── cap-build.js           # 移动端构建（tsc + vite build + 拷贝 MediaPipe 资源）
+├── scripts/                   # 构建与校验脚本
+│   ├── cap-build.js           # 移动端 Web 构建（tsc + vite build + 拷贝 MediaPipe 资源）
+│   ├── android-build.js       # 安卓出包（cap sync → gradle assemble）
+│   ├── ios-build.js           # iOS 出包（仅 macOS：cap sync → pod install → xcodebuild）
+│   ├── set-version.js         # 五处版本号统一写入 / --check 校验
+│   ├── verify-backend-binary.js  # 校验后端产物格式与架构是否匹配目标平台
+│   ├── gen-mac-icons.js       # ICNS / 菜单栏 Template 图 / iOS 图标与启动图
+│   ├── gen-android-splash.js  # 安卓启动图重绘
 │   ├── gen-android-icons.py   # 安卓图标生成
 │   ├── gen-scoring-cases.py   # 生成评分期望值（Python 侧）
 │   ├── gen-angle-cases.py     # 生成角度期望值（Python 侧）
 │   ├── verify-scoring.mjs     # 评分等价性验证
 │   └── verify-angles.mjs      # 角度等价性验证
 ├── docs/                      # 文档
+│   ├── MULTIPLATFORM.md       # 四端架构与构建总览（含 mac 签名公证、iOS 权限链）
 │   ├── ANDROID_BUILD.md       # 安卓构建指南
 │   └── TROUBLESHOOTING.md     # 故障排查
-├── capacitor.config.ts        # Capacitor 配置
-├── package.json               # 前端依赖配置
-├── vite.config.ts             # Vite 构建配置（双目标：桌面 / 移动）
+├── .github/workflows/         # CI：四端构建 + 一致性校验
+├── capacitor.config.ts        # Capacitor 配置（android / ios）
+├── package.json               # 前端依赖与脚本矩阵
+├── vite.config.ts             # Vite 构建配置（双目标：桌面 / 移动，注入版本与构建目标）
 ├── tsconfig.json              # TypeScript 配置
-└── electron-builder.yml       # Electron 打包配置
+└── electron-builder.yml       # Electron 打包配置（win / mac / linux）
 ```
 
 ### 2.3 核心技术组件
@@ -359,7 +394,7 @@ HealthyDesk/
 | 11° – 17° | 54 – 66 | 头部明显侧倾 |
 | > 17° | 35 – 48 | 头部严重侧倾 |
 
-两端一致性由 `npm run verify:parity` 保证（80 条评分用例 + 42 条 / 439 帧平滑序列 +
+各端一致性由 `npm run verify:parity` 保证（80 条评分用例 + 42 条 / 439 帧平滑序列 +
 8 条角度用例，含上述不变量的断言；前端侧直接 bundle **真实源码**执行，不用内联副本）。
 
 > 阈值处有一处**有意的台阶**：`head` 从 5.00° 到 5.01°，分数由 94 掉到 78。这是
@@ -512,6 +547,12 @@ HealthyDesk/
 | Python | >= 3.10 | 后端运行时（桌面版） |
 | npm | >= 9.x | 包管理器 |
 | JDK 17 + Android SDK 34 | — | 出安卓 APK（本机已装在 `E:\AndroidDev`，或用 Android Studio 自带） |
+| macOS + Xcode | — | **出 macOS 包与 iOS 包必需**（见下方说明） |
+
+> 🔴 **Windows 上只能构建 Windows 与 Android**。macOS 与 iOS 都必须在 macOS 上构建：
+> iOS 需要 Xcode / clang / 代码签名（没有非 macOS 实现）；macOS 安装包里要内置一个
+> **macOS 原生的 Python 后端**，而 PyInstaller 不能交叉编译。
+> 没有 Mac 机器时走 CI（`.github/workflows/build.yml`，已在仓库里配好）。
 
 #### 开发流程
 
@@ -524,64 +565,80 @@ npm run python:install
 npm run start
 
 # 3. 构建桌面版
-npm run build
+npm run build          # 按当前系统出包
+npm run build:win      # Windows（NSIS 安装包）
+npm run build:mac      # macOS（dmg + zip；须在 macOS 上执行）
+npm run build:linux    # Linux（AppImage + deb）
 
-# 4. 仅启动后端（调试用）
+# 4. 仅启动后端 / 仅启动前端（调试用）
 npm run python:start
-
-# 5. 仅启动前端（调试用）
 npm run dev
 
-# ---- 安卓端 ----
-npm run cap:build     # 一条命令出 debug APK（前端构建 + sync + gradle）
-npm run cap:sync      # 只编译前端 + 同步进安卓工程
-npm run cap:open      # 用 Android Studio 打开 android/
-npm run android       # = cap:sync + cap:open
-npm run verify:parity # 验证移动端推理与后端数值一致
+# ---- 移动端 ----
+npm run cap:build          # 安卓 debug APK（一条命令：前端构建 + sync + gradle）
+npm run cap:build:release  # 安卓正式包（需 android/keystore.properties）
+npm run cap:sync           # 只编译前端 + 同步进安卓工程
+npm run cap:open           # 用 Android Studio 打开 android/
+npm run android            # = cap:sync + cap:open
+
+npm run cap:build:ios      # iOS 未签名归档（须在 macOS 上执行）
+npm run cap:sync:ios       # 只编译前端 + 同步进 iOS 工程
+npm run ios                # = cap:sync:ios + cap:open:ios（用 Xcode 打开）
+
+npm run verify:all         # 数值一致性 + 版本号五处一致性
 ```
 
 #### 打包配置
 
 `electron-builder.yml` 关键配置：
-- **目标平台**：Windows (NSIS)
-- **资源打包**：backend 目录、public 资源
-- **图标配置**：支持多种分辨率
+- **目标平台**：Windows (NSIS) / macOS (dmg + zip，x64 与 arm64 各出一份) / Linux (AppImage + deb)
+- **资源打包**：backend 目录（PyInstaller 产物）、dist 资源
+- **macOS 权限**：`macos/entitlements.mac.plist`（JIT、摄像头、库校验豁免）
+- **图标配置**：`public/icon.ico` / `public/icon.icns`；菜单栏另有 `tray-iconTemplate.png`
 
-### 2.7 安卓端架构（Capacitor）
+### 2.7 移动端架构（Capacitor：Android + iOS）
 
-安卓端复用同一套 React 前端，通过 **平台抽象层** 在运行时分流：桌面走 Python 后端，移动端走本地实现。
+移动端复用同一套 React 前端，通过 **平台能力层** 在运行时分流：桌面走 Python 后端，
+移动端把推理、存储、提醒全部下沉到 WebView 本地。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│              React 前端（同一份代码，两端复用）                │
+│          React 前端（同一份代码，四端复用）                    │
 │   NeckActivity / Dashboard / Settings / 组件库                │
 └───────────────────────────┬──────────────────────────────────┘
-                            │  runtime.ts: getPlatform()
+                            │ runtime.ts: supports('localBackend')
               ┌─────────────┴─────────────┐
               ▼                           ▼
-   ┌────────────────────┐      ┌────────────────────────────┐
-   │ 桌面端 (electron)   │      │ 移动端 (android)            │
-   │ useWebSocket        │      │ usePoseEngine + LocalPoseEngine │
-   │   ↓                 │      │   ↓ MediaPipe WASM/GPU      │
-   │ Python 后端         │      │ IndexedDB（本地存储）        │
-   │  · MediaPipe 推理   │      │ LocalReminderScheduler      │
-   │  · SQLite           │      │   （本地定时提醒）           │
-   │  · APScheduler      │      │ 摄像头画面不出设备           │
-   └────────────────────┘      └────────────────────────────┘
+   ┌────────────────────┐      ┌─────────────────────────────────┐
+   │ 桌面 Windows/macOS │      │ 移动 Android / iOS               │
+   │ useWebSocket        │      │ usePoseEngine + LocalPoseEngine  │
+   │   ↓                 │      │   ↓ MediaPipe WASM/GPU           │
+   │ Python 后端         │      │ IndexedDB（本地存储）             │
+   │  · MediaPipe 推理   │      │ LocalReminderScheduler           │
+   │  · SQLite           │      │   （本地定时提醒）                │
+   │  · APScheduler      │      │ 摄像头画面不出设备                 │
+   └────────────────────┘      └─────────────────────────────────┘
 ```
 
 **平台能力对照：**
 
-| 能力 | 桌面端 | 安卓端 | 代码位置 |
-|------|--------|--------|----------|
-| 平台判定 | `window.electronAPI` | Capacitor 平台 | `src/platform/runtime.ts` |
-| 姿态推理 | Python + MediaPipe | 浏览器内 MediaPipe（WASM/GPU） | `src/platform/localPoseEngine.ts` |
-| 视频流 | WebSocket 传帧 | 本地 `<video>` 直读 | `src/hooks/usePoseEngine.ts` |
-| 数据存储 | SQLite（后端） | IndexedDB | `src/platform/localDb.ts` |
-| 统计聚合 | 后端 SQL | 前端 JS 重写（数字口径一致） | `src/platform/localStats.ts` |
-| 定时提醒 | APScheduler | JS 定时器 | `src/platform/localReminder.ts` |
-| 统一数据接口 | HTTP `/api/*` | 同上接口的本地实现 | `src/platform/dataLayer.ts` |
-| AI 分析 | DeepSeek | 本期不支持（设置页隐藏） | — |
+| 能力 | Windows / macOS | Android | iOS | 代码位置 |
+|------|--------|--------|--------|----------|
+| 平台判定 | `window.electronAPI` | Capacitor `android` | Capacitor `ios` | `src/platform/runtime.ts` |
+| 姿态推理 | Python + MediaPipe | 浏览器内 MediaPipe（WASM/GPU） | 同 Android | `src/platform/localPoseEngine.ts` |
+| 视频流 | WebSocket 传帧 | 本地 `<video>` 直读 | 同 Android | `src/hooks/usePoseEngine.ts` |
+| 数据存储 | SQLite（后端） | IndexedDB | IndexedDB | `src/platform/localDb.ts` |
+| 统计聚合 | 后端 SQL | 前端 JS 重写（数字口径一致） | 同 Android | `src/platform/localStats.ts` |
+| 定时提醒 | APScheduler | JS 定时器 + 系统通知 | 同 Android | `src/platform/localReminder.ts` |
+| 统一数据接口 | HTTP `/api/*` | 同上接口的本地实现 | 同 Android | `src/platform/dataLayer.ts` |
+| AI 分析 | DeepSeek | 本期不支持（设置页隐藏） | 同 Android | — |
+
+**摄像头权限**（两端机制完全不同，是移动端最容易踩的坑）：
+
+| 端 | 机制 | 关键点 |
+|----|------|--------|
+| Android | `WebChromeClient.onPermissionRequest` | 必须在启动阶段**预申请** CAMERA，持有权限时在回调内**同步** `grant()`；诊断走 `addJavascriptInterface` 暴露的只读 `NeckGuardianNative.diagnostics()` |
+| iOS | `WKUIDelegate.requestMediaCapturePermissionFor` | Capacitor 已内置授权回调与 `allowsInlineMediaPlayback`，**唯一要手配的是 `Info.plist` 的 `NSCameraUsageDescription`** —— 缺了会被系统直接终止进程（表现为闪退） |
 
 **模型离线内置**：MediaPipe WASM 与 `pose_landmarker_full.task`（约 9.4 MB）随包打进 APK，安装后无需联网。
 
@@ -596,7 +653,7 @@ node scripts/verify-angles.mjs    # 角度：8 条用例（含边界保护）
 ```
 
 > 校验脚本用 esbuild 把 `src/platform/localPoseEngine.ts` **真实源码**打出来执行，
-> 而不是维护一份内联副本——副本一旦漂移，「两端一致」就成了自我安慰。
+> 而不是维护一份内联副本——副本一旦漂移，「各端一致」就成了自我安慰。
 
 > 该验证曾发现两处真实的跨语言差异：
 > 1. Python `round()` 用「银行家舍入」（`round(32.5)=32`），而 JS `Math.round` 会进位到 33。

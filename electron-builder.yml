@@ -23,8 +23,17 @@ extraResources:
       - '!**/*.pyc'
   # 自包含的后端可执行文件（PyInstaller 产物，由 `npm run backend:build` 生成）。
   # 打包进安装包后，目标机器无需安装 Python 即可运行后端。
+  #
+  # 🔴 这个产物是**按平台编译**的，不能跨平台复用：
+  #   - Windows → neckguardian-backend.exe（PE）
+  #   - macOS   → neckguardian-backend（Mach-O）
+  # 因此 macOS 安装包**必须在 macOS 上构建**（GitHub Actions 的 macos runner），
+  # 在 Windows 上打 mac 包会把一个 PE 文件塞进 .app，运行时必然起不来。
+  # 构建前用 `npm run verify:backend` 自检产物格式与目标平台是否匹配。
   - from: build/neckguardian-backend
     to: neckguardian-backend
+
+# ---------------- Windows ----------------
 win:
   target:
     - target: nsis
@@ -32,25 +41,75 @@ win:
         - x64
   icon: public/icon.ico
   requestedExecutionLevel: asInvoker
+  # ⚠️ 文件名里有空格：GitHub Release 的下载 URL 会把空格转成点
+  # （`NeckGuardian Setup 1.3.6.exe` → `NeckGuardian.Setup.1.3.6.exe`），
+  # 写 README/脚本时以点号形式为准。这里显式固定，避免依赖 electron-builder 默认值。
+  artifactName: NeckGuardian Setup ${version}.exe
+
+# ---------------- macOS ----------------
+# ⚠️ 必须在 macOS 上构建（见上面 extraResources 的说明），本机 Windows 出不了 mac 包。
 mac:
   target:
+    # dmg 给最终用户；zip 供 electron-updater / 手动解压，也便于 CI 存档
     - target: dmg
       arch:
         - x64
         - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  # 🔴 **不做 universal 包**：内置的 Python 后端是单架构 Mach-O，
+  # 强行 universal 合并会让另一半架构上的后端跑不起来。
+  # 两种架构分别出包，各自带对应架构的后端。
+  artifactName: NeckGuardian-${version}-mac-${arch}.${ext}
   icon: public/icon.icns
   category: public.app-category.healthcare-fitness
   darkModeSupport: true
+  minimumSystemVersion: '10.15'
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: macos/entitlements.mac.plist
+  entitlementsInherit: macos/entitlements.mac.inherit.plist
+  # 公证默认关闭：没有 Apple 开发者账号时开启会直接让构建失败。
+  # 需要在 CI 上开启时用 CLI 覆盖：`electron-builder --mac -c.mac.notarize=true`，
+  # 并准备好 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID 三个环境变量。
+  notarize: false
+  extendInfo:
+    # 🔴 macOS 上访问摄像头**必须**有这条，否则请求权限时进程直接被系统终止。
+    NSCameraUsageDescription: NeckGuardian 需要访问摄像头以进行肩颈姿态检测。画面仅在本机处理，不会上传。
+    NSMicrophoneUsageDescription: NeckGuardian 仅在语音提示功能中使用音频输出，不进行录音。
+    # 声明未使用非豁免加密，避免每次上传 App Store Connect 都被问一遍
+    ITSAppUsesNonExemptEncryption: false
+    # macOS 10.15+ 深色模式
+    NSRequiresAquaSystemAppearance: false
+
+dmg:
+  artifactName: NeckGuardian-${version}-mac-${arch}.dmg
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ---------------- Linux ----------------
+# Electron 天然支持，顺手出包；后端同样需要在 Linux 上编译。
 linux:
   target:
+    - target: AppImage
+      arch:
+        - x64
     - target: deb
       arch:
         - x64
-    - target: tar.gz
-      arch:
-        - x64
+  artifactName: NeckGuardian-${version}-linux-${arch}.${ext}
   icon: public/icons
   category: Utility
+  synopsis: 肩颈健康助手
+
+# ---------------- NSIS ----------------
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

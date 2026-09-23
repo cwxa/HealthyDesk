@@ -23,6 +23,12 @@ const path = require('path')
 const root = path.resolve(__dirname, '..')
 const androidDir = path.join(root, 'android')
 const isWin = process.platform === 'win32'
+/**
+ * Java 可执行文件名：Windows 是 `java.exe`，macOS / Linux 是 `java`。
+ * ⚠️ 这里写死 `java.exe` 会让脚本在 macOS/Linux 上**永远判定 JAVA_HOME 无效**
+ * （CI 的 ubuntu / macos runner 全都命中），随后报"找不到 JDK"。
+ */
+const javaBin = isWin ? 'java.exe' : 'java'
 const args = process.argv.slice(2)
 const wantRelease = args.includes('--release')
 const skipWeb = args.includes('--skip-web')
@@ -50,9 +56,9 @@ function findSingleSubdir(dir) {
 function resolveToolchain() {
   // JAVA_HOME：优先环境变量，其次 <DEV_ROOT>/jdk/<version>
   let javaHome = process.env.JAVA_HOME
-  if (!javaHome || !exists(path.join(javaHome, 'bin', 'java.exe'))) {
+  if (!javaHome || !exists(path.join(javaHome, 'bin', javaBin))) {
     const candidate = findSingleSubdir(path.join(DEV_ROOT, 'jdk'))
-    if (candidate && exists(path.join(candidate, 'bin', 'java.exe'))) javaHome = candidate
+    if (candidate && exists(path.join(candidate, 'bin', javaBin))) javaHome = candidate
   }
 
   // ANDROID_HOME：优先环境变量，其次 <DEV_ROOT>/sdk
@@ -62,10 +68,16 @@ function resolveToolchain() {
     if (exists(path.join(candidate, 'platforms'))) androidHome = candidate
   }
 
-  const gradleUserHome =
-    process.env.GRADLE_USER_HOME && exists(process.env.GRADLE_USER_HOME)
-      ? process.env.GRADLE_USER_HOME
-      : path.join(DEV_ROOT, 'gradle-home')
+  // Gradle 缓存目录：只在真的存在时才指定。
+  // ⚠️ 不能无条件设成 <DEV_ROOT>/gradle-home —— 在 CI（Linux/macOS）上
+  // DEV_ROOT 默认是 Windows 风格的 `E:/AndroidDev`，会被 Gradle 当成相对路径
+  // 在当前目录下造出一个 `E:/AndroidDev/gradle-home` 的垃圾目录，
+  // 同时丢掉 runner 上 `~/.gradle` 的缓存复用。
+  let gradleUserHome = process.env.GRADLE_USER_HOME || null
+  if (!gradleUserHome || !exists(gradleUserHome)) {
+    const candidate = path.join(DEV_ROOT, 'gradle-home')
+    gradleUserHome = exists(candidate) ? candidate : null
+  }
 
   // Gradle 可执行文件：本地发行版 > 工程自带 wrapper
   let gradleExe = null
@@ -120,14 +132,15 @@ const env = {
   JAVA_HOME: tc.javaHome,
   ANDROID_HOME: tc.androidHome,
   ANDROID_SDK_ROOT: tc.androidHome,
-  GRADLE_USER_HOME: tc.gradleUserHome,
   PATH: `${path.join(tc.javaHome, 'bin')}${path.delimiter}${process.env.PATH || ''}`,
 }
+// 只在解析到有效目录时才覆盖，否则让 Gradle 用默认的 ~/.gradle
+if (tc.gradleUserHome) env.GRADLE_USER_HOME = tc.gradleUserHome
 
 console.log('[android-build] 工具链')
 console.log(`  JAVA_HOME        = ${tc.javaHome}`)
 console.log(`  ANDROID_HOME     = ${tc.androidHome}`)
-console.log(`  GRADLE_USER_HOME = ${tc.gradleUserHome}`)
+console.log(`  GRADLE_USER_HOME = ${tc.gradleUserHome || '(默认 ~/.gradle)'}`)
 console.log(`  gradle           = ${tc.gradleExe}`)
 
 function run(cmd, cmdArgs, cwd, extraEnv = {}) {

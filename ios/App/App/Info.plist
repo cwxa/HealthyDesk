@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+        <string>NeckGuardian</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!--
+		⚠️ 摄像头权限描述：**必须存在**，否则 WKWebView 调用 getUserMedia 请求权限时
+		iOS 会**直接终止进程**（不是抛 JS 错误，是闪退）。
+
+		WebView 侧的授权链 Capacitor 6.2.2 已经处理好了（内置
+		`allowsInlineMediaPlayback = true` 与 `requestMediaCapturePermissionFor → .grant`），
+		所以 iOS 端**唯一**缺的就是这条描述 —— 但少了它整个功能直接不可用。
+
+		这段文案会原样展示在系统授权弹窗里，Apple 审核也会看，别写空话。
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>NeckGuardian 需要访问摄像头，用于在本机实时检测你的肩颈姿态并给出评分。画面仅在本机处理，不会上传或保存。</string>
+
+	<!--
+		故意**不声明** NSMicrophoneUsageDescription：
+		取流约束固定为 `audio: false`，语音提示走 Web Speech 的 speechSynthesis（纯播放），
+		全程不采集音频。声明用不到的权限会平白多一道系统弹窗，也会被 App Store 审核追问。
+	-->
+
+	<!-- 未使用非豁免加密算法；声明后免去每次上传 App Store Connect 的合规问答 -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.healthcare-fitness</string>
+
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>

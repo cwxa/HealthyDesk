@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    子进程（Helper / GPU / Renderer）的 entitlements。
+
+    Electron 的每个子进程都是独立的 Mach-O，各自需要 JIT 相关权限；
+    不继承会表现为「主进程起来了但窗口全白 / 渲染进程崩溃」。
+    ⚠️ 这里**故意不含** camera / network 权限：子进程不需要，给多了会被
+    公证（notarization）审核挑刺。
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

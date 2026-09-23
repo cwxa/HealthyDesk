@@ -245,7 +245,7 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 
 ---
 
-## 五、安卓端（Capacitor）
+## 五、移动端（Capacitor：Android / iOS）
 
 ### 6. 跨语言数值不一致：Python 的「银行家舍入」 🔴（本轮发现）
 
@@ -255,7 +255,7 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 **根因**：Python 内置 `round()` 采用**银行家舍入（round-half-to-even）**：
 `round(32.5) == 32`、`round(33.5) == 34`；而 JS 的 `Math.round` 是「四舍五入」，
 `Math.round(32.5) == 33`。当扣分总额恰为 `.5` 时（例如 head=30/shoulder=50/spine=60 →
-扣 67.5 分），两端结果就会差 1。
+扣 67.5 分），各端结果就会差 1。
 
 **修复**：在 `src/platform/localPoseEngine.ts` 和 `localStats.ts` 中实现 `pyRound()`，
 复刻 Python 语义，替换所有涉及评分的 `Math.round`。

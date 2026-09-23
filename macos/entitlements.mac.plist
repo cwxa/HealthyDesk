@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    主进程 entitlements（hardened runtime）。
+
+    Electron 的 V8 需要 JIT 与可写可执行内存，缺了这两条 hardened runtime 下会直接崩溃。
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!--
+    内置的是 PyInstaller 打出来的 Python 后端（独立可执行文件 + 一堆 .so）。
+    这些嵌套二进制由 electron-builder 一并签名，但 PyInstaller 的加载方式会触发
+    库校验，因此需要关掉 library validation，否则后端启动即被系统杀掉。
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- 摄像头 / 麦克风：姿态检测要摄像头；语音播报走 Web Speech，不录音但一并声明 -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- 后端监听 127.0.0.1:18920，渲染进程要连它 -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

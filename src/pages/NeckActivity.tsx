@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { usePoseEngine } from '../hooks/usePoseEngine'
 import { useApi } from '../hooks/useApi'
 import { data } from '../platform/dataLayer'
-import { isMobile } from '../platform/runtime'
+import { isMobile, platformLabel } from '../platform/runtime'
 import { localReminder } from '../platform/localReminder'
 import PostureSkeleton from '../components/PostureSkeleton'
 import ScoreGauge from '../components/ScoreGauge'
 import ExercisePanel, { exercises, type ExerciseState } from '../components/ExercisePanel'
 import ExerciseGuide from '../components/ExerciseGuide'
 import { speakPostureIssue, speak } from '../utils/speech'
-import { nativeDiag, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
+import { nativeDiagAsync, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
 import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
 
@@ -77,10 +77,13 @@ async function buildCameraDiag(e: unknown): Promise<string> {
   const message = (e as { message?: string })?.message
   parts.push(`错误 ${name}${message ? `: ${message}` : ''}`)
   parts.push(`安全上下文 ${window.isSecureContext ? '是' : '否'}`)
-  const d = nativeDiag()
+  const d = await nativeDiagAsync()
   if (d) {
-    parts.push(describePermission(d.cameraPermission))
-    if (d.version) parts.push(`构建 v${d.version}(${d.versionCode ?? '?'})`)
+    if (d.cameraPermission !== 'unknown') parts.push(describePermission(d.cameraPermission))
+    if (d.version) {
+      parts.push(`构建 v${d.version}${d.versionCode != null ? `(${d.versionCode})` : ''}`)
+    }
+    parts.push(`平台 ${platformLabel()}`)
   }
   try {
     const devices = await navigator.mediaDevices.enumerateDevices()
@@ -182,8 +185,14 @@ export default function NeckActivity() {
   }, [stop])
 
   useEffect(() => {
-    const d = nativeDiag()
-    if (d?.version) setBuildTag(`v${d.version}(${d.versionCode ?? '?'})`)
+    let cancelled = false
+    void nativeDiagAsync().then((d) => {
+      if (cancelled || !d?.version) return
+      setBuildTag(`v${d.version}${d.versionCode != null ? `(${d.versionCode})` : ''}`)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // 用 ref 持有最新回调，让「启动摄像头」严格只在挂载时执行一次。

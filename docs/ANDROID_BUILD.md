@@ -278,36 +278,56 @@ Capacitor 默认的 `WebView` 会**拒绝**网页的 `getUserMedia` 请求，表
 | JDK | 17 | `android/app/capacitor.build.gradle` |
 | WebView 调试 | 开启 | `capacitor.config.ts` 的 `server.webContentsDebuggingEnabled` |
 
-### 4.3 版本号（两端同版本，共四处要同步）
+### 4.3 版本号（全端同版本，共五处要同步）
 
-Windows 与 Android 发布的是**同一套源码、同一个版本号**，改版本号时必须四处同时改，漏一处就会出现
-「一端的界面/接口报告的版本号与安装包不符」：
+Windows / macOS / Android / iOS 发布的是**同一套源码、同一个版本号**，改版本号时必须五处同时改，
+漏一处就会出现「某端的界面/接口报告的版本号与安装包不符」。
+
+**推荐一次搞定**（脚本会回读自检，写不进去直接报错）：
+
+```bash
+npm run set-version 1.3.7 --code=7   # 五处一起写，versionCode 一并递增
+npm run set-version --check          # 只校验一致性，不一致 exit 1（已进 CI）
+```
 
 | 位置 | 字段 | 说明 |
 |------|------|------|
-| `package.json` | `version` | 决定 Windows 安装包文件名与 exe 元数据 |
+| `package.json` | `version` | 决定安装包文件名与 exe 元数据 |
 | `backend/config.py` | `APP_VERSION` | `/api/health` 返回值，前端据此显示后端版本 |
-| `src/pages/Settings.tsx` | 兜底字符串 | 后端不可达（如安卓无后端）时页面显示的版本 |
+| `src/pages/Settings.tsx` | 兜底字符串 | 后端不可达（如移动端无后端）时页面显示的版本 |
 | `android/app/build.gradle` | `versionName` / `versionCode` | `versionCode` 必须**递增**，否则无法覆盖安装 |
+| `ios/App/App.xcodeproj/project.pbxproj` | `MARKETING_VERSION` | App Store / TestFlight 展示的版本 |
 
-`android/app/build.gradle` 里还要同步 `versionCode`（整数，每次发版 +1）：
+`android/app/build.gradle` 里还要同步 `versionCode`（整数，每次发版 +1；`set-version --code=N` 会代劳）：
 
 ```gradle
 defaultConfig {
     versionCode 6        // 整数，每次发版 +1（Android 强制要求，否则无法覆盖安装）
-    versionName "1.3.6"  // 展示给用户的版本号，与上面三处保持一致
+    versionName "1.3.6"  // 展示给用户的版本号，与其余四处保持一致
 }
 ```
 
-### 4.4 图标
+### 4.4 图标与启动图
 
-启动图标由 `scripts/gen-android-icons.py` 从 `public/icon.png` 生成，覆盖各密度（mdpi ~ xxxhdpi）：
+**启动图标**由 `scripts/gen-android-icons.py` 从 `public/icon.png` 生成，覆盖各密度（mdpi ~ xxxhdpi）：
 
 ```bash
-python scripts/gen-android-icons.py
+python scripts/gen-android-icons.py    # 等价于 npm run icons:android
 ```
 
 自适应图标（Android 8+）：`mipmap-anydpi-v26/ic_launcher.xml` 用「浅绿背景 + 绿色卡通形象前景」组合。
+
+**启动图（splash）**由 `scripts/gen-android-splash.js` 重绘，共 11 张
+（`drawable-{land,port}-{mdpi..xxxhdpi}/splash.png` + `drawable/splash.png`）。
+它以**现有 PNG 的尺寸为准**原样重画，不维护尺寸表 —— 想改尺寸先改图，再跑脚本：
+
+```bash
+npm run icons:generate    # 一次重绘：桌面 icns + 菜单栏图 + iOS 图标与启动图 + 安卓启动图
+npm run icons:android     # 只重绘安卓启动图标（各密度）
+```
+
+> ⚠️ 历史遗留：早期三端的启动图/图标都是 Capacitor 默认的蓝色占位图，现已全部替换为品牌图
+> （iOS AppIcon 注意**不能带 alpha 通道**，否则 App Store 校验会拒绝）。
 
 ### 4.5 MediaPipe 运行资源从哪来
 
@@ -383,10 +403,11 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
 
 ## 七、发布正式包 checklist
 
-- [ ] `npm run verify:parity` 通过（两端角度/平滑/评分逐位一致，含不变量断言）
-- [ ] 版本号四处一致：`package.json`、`backend/config.py:APP_VERSION`、`src/pages/Settings.tsx` 兜底串、
-      `android/app/build.gradle` 的 `versionName`（见 §4.3）
-- [ ] `versionCode` 已递增（Android 强制要求，否则无法覆盖安装）
+- [ ] `npm run verify:parity` 通过（各端角度/平滑/评分逐位一致，含不变量断言）
+- [ ] 版本号五处一致：`package.json`、`backend/config.py:APP_VERSION`、`src/pages/Settings.tsx` 兜底串、
+      `android/app/build.gradle` 的 `versionName`、`ios/App/App.xcodeproj/project.pbxproj` 的
+      `MARKETING_VERSION` —— 跑 `npm run set-version --check` 一次核对（见 §4.3）
+- [ ] `versionCode` 已递增（Android 强制要求，否则无法覆盖安装；`set-version --code=N` 会代劳）
 - [ ] `npm run cap:sync` 成功（内含 `tsc` 类型检查，须无报错）
 - [ ] `android/app/src/main/assets/public/mediapipe/models/pose_landmarker_full.task` 存在（约 9.4MB）
 - [ ] `android/app/src/main/assets/public/mediapipe/wasm/` 下 4 个 wasm/js 文件齐全

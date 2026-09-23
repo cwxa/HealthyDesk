@@ -61,10 +61,28 @@ export interface ElectronAPI {
   onStartExercise: (callback: () => void) => void
   onReminder: (callback: () => void) => void
   setAutoStart: (enabled: boolean) => Promise<void>
+  /**
+   * 宿主信息（由 preload 从主进程取出）。
+   *
+   * 桌面端要在 UI 上区分 Windows / macOS / Linux（托盘文案、快捷键提示、
+   * 以及"去哪儿开摄像头权限"的路径都不同），而运行时平台同为 `electron`，
+   * 光靠 `Capacitor.getPlatform()` 拿不到，必须由主进程告知。
+   *
+   * 可选：旧版 preload 未暴露时，runtime.ts 会退回 User-Agent 嗅探。
+   */
+  platform?: string
+  arch?: string
+  isPackaged?: boolean
 }
 
 declare global {
   interface Window {
     electronAPI?: ElectronAPI
   }
+  /**
+   * 构建期注入的常量（见 vite.config.ts 的 `define`）。
+   * 移动端没有可用的原生版本查询接口，靠这个显示版本号。
+   */
+  const __APP_VERSION__: string
+  const __BUILD_TARGET__: 'desktop' | 'mobile'
 }
