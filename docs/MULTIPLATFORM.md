@@ -306,6 +306,7 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 | 真实推理帧率未实测 | 不知道低端机能否跑到 15fps | 未测 |
 | iOS 未在真机验证 | 摄像头链路只有静态推导，无实测 | **待用户验证** |
 | macOS 未在真机验证 | 同上 | **待用户验证** |
+| macOS / iOS 产物尚未产出过 | 本机不可能构建，需 macOS 或 CI（见 §四） | 待产出 |
 | 移动端历史数据不跨端同步 | 换手机数据不带过去 | 设计如此（隐私优先） |
 | 跨版本分数刻度变化 | v1.3.6 改了评分公式，旧记录分数与新公式刻度不同 | 统计图表跨版本处有落差 |
 
@@ -324,3 +325,83 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 6. `.github/workflows/build.yml` —— 加一个 job
 
 **不要**改 `src/pages/**` 与 `src/components/**`。
+
+---
+
+## 九、发布前验证清单
+
+**"构建成功"不等于"产物可用"。** 下面每一条都是可复现的证据，不是"看起来对"。
+踩过的坑都标了 🔴。
+
+### 9.1 通用（先跑，不过就别打包）
+
+```bash
+npm run verify:all          # 数值对拍 + 五处版本号一致性
+npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
+```
+
+- [ ] `verify:parity` 全通过：21 常量 + 80 评分用例 + 42 序列/439 帧平滑 + 8 角度 + 不变量
+- [ ] `set-version --check` 五处版本号一致
+- [ ] `verify-backend --target=<平台>` 通过（🔴 在 Windows 上传 `--target=mac` **必须 exit 1**；
+      测退出码不要接管道，`| tail` 会把 `$?` 换成 tail 的）
+
+### 9.2 桌面包
+
+- [ ] 🔴 **同源**：包内 `resources/app/dist/assets/index-*.js` 与本地 `dist/assets/` **md5 逐位一致**。
+      不一致 = Release 里躺的是旧代码，"发布产物必须由当前源码构建"是硬要求
+- [ ] 包内 `resources/app/package.json` 的 `version` = 本次版本号
+- [ ] exe 的 `FileVersion` / `ProductVersion` = 本次版本号
+- [ ] 🔴 包内 **`resources/public/` 必须不存在**。它一旦存在，说明有代码在按 `public/` 找资源——
+      而那个目录打包后根本不存在。历史 bug 就栽在这里：托盘图标静默空白、零报错
+- [ ] `resources/neckguardian-backend/` 下有后端可执行文件，且**验证时产生的 `data/` 已删**
+      （否则把含测试数据的 DB 发给用户）
+
+### 9.3 安卓 release APK
+
+- [ ] 🔴 **签名指纹与上一版逐位一致**（`apksigner verify --print-certs` 的 SHA-256）。
+      不一致则老用户**无法覆盖安装**。把这个值写进 README，每次发版对照
+- [ ] `aapt dump badging`：`package` 正确、`versionCode` **已递增**、`versionName` 正确、
+      `uses-permission` 含 CAMERA
+- [ ] APK 内 `assets/public/assets/index-*.js` 与本地 `dist/assets/` md5 一致
+- [ ] 无 `assets/public/main.js` / `preload.js`（Electron 入口误入 = 打错了构建目标）
+- [ ] mediapipe 资源 5 项齐全（模型 + 4 个 wasm）
+- [ ] 🔴 启动图**不要按文件名找**。release 包资源名会被 AGP 混淆
+      （`drawable-port-xxxhdpi/splash.png` → `res/YH.png`），搜 `splash` **一个都匹配不到**，
+      极易误判成"没打进去"。正确做法是**按 PNG IHDR 解析像素尺寸**，与源码做集合比对：
+
+      ```python
+      import struct
+      def png_size(d):
+          assert d[:8] == b'\x89PNG\r\n\x1a\n'
+          return struct.unpack('>II', d[16:24])   # IHDR 宽高在固定偏移
+      ```
+
+- [ ] `JAVA_HOME` 指向**真正的 JDK 根**（形如 `E:/AndroidDev/jdk/jdk-17.0.20.1+1`，不是其父目录），
+      否则 `apksigner.bat` 报 `invalid directory`
+
+### 9.4 发布后（必做，不能省）
+
+- [ ] 🔴 **匿名 curl 验 Content-Type**（不带 token）：
+      APK 必须是 `application/vnd.android.package-archive`，否则手机当普通文件下载、**点开装不上**。
+      `gh release view` 只能证明"传上去了"，证明不了"能装"
+- [ ] 匿名 curl 的 `Content-Length` 与本地文件字节数一致
+- [ ] Release 已标注 **Latest**（`gh release list` 看 Latest 列）
+
+### 9.5 多端同时出包时的顺序
+
+`vite build` 产出的 `dist/` 是**桌面包与移动包的共同输入**，但两者构建目标不同
+（`__BUILD_TARGET__` 注入值不同 → chunk 内容不同），所以**必须串行**：
+
+1. 桌面：`vite build` → PyInstaller → electron-builder
+2. 移动：`cap-build`（**会覆盖 `dist/`**）
+
+🔴 **同源验证要在各自构建完成后立刻做**，拖到下一步就被新的 `dist/` 覆盖，再也没法比了。
+
+### 9.6 推送仓库的前置检查
+
+- [ ] 🔴 要推 `.github/workflows/**` 的，先看 `gh auth status` 的 scopes。
+      GitHub 要求 token 具备 **`workflow` scope**（只有 `repo` 不够），且会**整体拒绝**这次 push
+      ——不是跳过那几个文件。**提交链里只要有一个这样的提交，后面全部推不动**。
+      拿不到授权就先 `git reset --soft HEAD~1` 摘链、把 `.github/` 暂存到 `.git/` 内，
+      发完版再恢复，别让它阻塞发布
+

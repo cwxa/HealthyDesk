@@ -417,13 +417,23 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
       解包 APK 里的 `assets/public/assets/index-*.js`，与 `dist/assets/` 同名文件 **md5 一致**；
       再用 `grep -o` 从压缩产物里读出新公式的特征串（如评分加权系数）确认一遍
 - [ ] APK 内无 `assets/public/main.js` / `preload.js`（确认是纯移动端构建）
+- [ ] 🔴 **启动图真的换了**：⚠️ release 包的资源名会被 AGP 混淆
+      （`drawable-port-xxxhdpi/splash.png` → `res/YH.png` 这类），**搜 `splash` 一个都匹配不到**，
+      别据此误判成"启动图没打进去"。可靠做法是按 **PNG IHDR 解析像素尺寸**，
+      与源码 `drawable-*/splash.png` 的尺寸集合比对（11 张应全部命中）
 - [ ] 真机安装测试：相机、评分、提醒、设置四项主流程走一遍
 - [ ] 上传 GitHub Release，并用**匿名** curl 确认 `Content-Type: application/vnd.android.package-archive`
 
-> 一条命令跑完前 8 项的辅助验证：
+> 完整的多端发布验证清单（桌面包、构建顺序、推送前置检查）见
+> [MULTIPLATFORM.md §九](./MULTIPLATFORM.md)。
+>
+> 一条命令跑完前 8 项的辅助验证。🔴 `apksigner.bat` 需要 `JAVA_HOME` 指向**真正的 JDK 根**
+> （形如 `E:/AndroidDev/jdk/jdk-17.0.20.1+1`，指到父目录会报 `JAVA_HOME is set to an invalid directory`）：
+>
 > ```bash
 > APK=android/app/build/outputs/apk/release/app-release.apk
 > BT=E:/AndroidDev/sdk/build-tools/34.0.0
+> export JAVA_HOME="E:/AndroidDev/jdk/jdk-17.0.20.1+1"     # 注意不是 E:/AndroidDev/jdk
 > "$BT/apksigner.bat" verify --print-certs "$APK" | head -2
 > "$BT/aapt2.exe" dump badging "$APK" | grep -E "^(package|uses-permission)"
 > tar -tf "$APK" | grep "^assets/public/mediapipe"
