@@ -116,7 +116,9 @@ if (!wantExport) {
 }
 
 console.log('[ios-build] 4/4 xcodebuild archive')
-run('xcodebuild', archiveArgs)
+// 🔴 cwd 必须是 ios/App：`-workspace App.xcworkspace` 是**相对路径**，
+// 在仓库根跑会报 `xcodebuild: error: 'App.xcworkspace' does not exist.`（2026-09-23 CI 实测踩到）。
+run('xcodebuild', archiveArgs, iosAppDir)
 
 if (!wantExport) {
   console.log(

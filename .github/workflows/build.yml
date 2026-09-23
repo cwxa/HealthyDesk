@@ -123,9 +123,14 @@ jobs:
   #
   # ⚠️ 两种架构**必须分别在对应架构的 runner 上构建**：
   #    内置的 Python 后端是单架构 Mach-O，PyInstaller 不能交叉编译。
-  #    macos-13 = Intel(x64)，macos-14 = Apple Silicon(arm64)。
-  #    如果 macos-13 在你的账号下已不可用，删掉对应的 matrix 条目即可
-  #    （x64 包另找一台 Intel Mac 本地构建）。
+  #    macos-15-intel = Intel(x64)，macos-15 = Apple Silicon(arm64)。
+  # 🔴 标签有保质期，别写死后不管：
+  #    - `macos-13`（原 Intel 镜像）已于 **2025-12-04 彻底退役**。用它 job 会**永远排队**，
+  #      既不报错也不失败（2026-09-23 实测：其他 job 全跑完后它仍 queued）。
+  #      官方给标准 runner 的 Intel 替代标签是 `macos-15-intel`（支持到 2027-08）。
+  #    - `macos-14` 的弃用支持 **2026-11-02 到期**，故 arm64 直接用 `macos-15`。
+  #    - Apple 已停止支持 x86_64，`macos-15-intel` 是**最后一个** Intel 镜像；
+  #      2027-08 之后 x64 包只能本地出。
   # ─────────────────────────────────────────────────────────────
   desktop-macos:
     name: macOS 安装包（${{ matrix.arch }}）
@@ -135,9 +140,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x64
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
     env:
       # CI 上没有签名证书，关掉自动发现，否则 electron-builder 会尝试签名并失败
@@ -203,7 +208,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # ⚠️ 不用 `android-actions/setup-android@v3`：它内部会执行 `sdkmanager tools`，
+      #    而 `tools` 包早已从 SDK 仓库移除 → `Warning: Failed to find package 'tools'`
+      #    然后整个 action 以退出码 1 失败（2026-09-23 CI 实测）。
+      #    ubuntu runner 本身就带 Android SDK，直接用自带的即可。
+      - name: 准备 Android SDK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          [ -d "$SDK" ] || { echo "::error::找不到 Android SDK（$SDK）"; exit 1; }
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            # runner 上 cmdline-tools 的版本目录名会变（16.0 / latest / …），按目录找而不是写死
+            SDKMANAGER="$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort | tail -1)"
+          fi
+          [ -n "$SDKMANAGER" ] || { echo "::error::找不到 sdkmanager"; exit 1; }
+          echo "SDK        = $SDK"
+          echo "sdkmanager = $SDKMANAGER"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          # `yes |` 会因 SIGPIPE 得到非 0 退出码，必须兜住
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
 
       - name: 安装依赖
         run: npm ci
@@ -256,7 +282,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   mobile-ios:
     name: iOS 归档
-    runs-on: macos-14
+    # macos-15：`macos-14` 的弃用支持 2026-11-02 到期，别贴着期限走
+    runs-on: macos-15
     needs: verify
     steps:
       - uses: actions/checkout@v4

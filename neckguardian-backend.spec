@@ -10,7 +10,11 @@ _MP_MODULES = os.path.join(os.path.dirname(_mp.__file__), 'modules')
 
 
 a = Analysis(
-    ['backend\\main.py'],
+    # 🔴 必须用正斜杠：写成 'backend\\main.py' 在 Windows 上没事，但在 macOS/Linux 上
+    # 反斜杠是**普通字符**，PyInstaller 会去找一个名叫 `backend\main.py` 的文件，
+    # 报 `ERROR: script '.../backend\main.py' not found`（2026-09-23 macOS CI 实测踩到）。
+    # 正斜杠在三平台都被接受，是这里唯一安全的选择。
+    ['backend/main.py'],
     pathex=[],
     binaries=[],
     datas=[(_MP_MODULES, 'mediapipe/modules')],

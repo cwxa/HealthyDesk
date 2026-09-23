@@ -37,3 +37,9 @@ Podfile   text eol=lf
 # ---- 工程文件：用 LF 存，避免 Xcode / Git 反复改写 ----
 *.pbxproj text eol=lf
 *.plist   text eol=lf
+
+# ---- 配置：统一 LF ----
+# 漏了这条时，Windows 上 add 会报 "LF will be replaced by CRLF"（无害但是噪音）；
+# 更要紧的是 YAML 解析器对行尾不敏感，出问题也不报错，不如一开始就钉死。
+*.yml     text eol=lf
+*.yaml    text eol=lf
