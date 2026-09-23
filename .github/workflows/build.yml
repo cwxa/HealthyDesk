@@ -261,6 +261,88 @@ jobs:
           echo "app = $APP"
           npm run verify:source -- --packed="$APP/Contents/Resources/app/dist/assets"
 
+      # 🔴 产物层面的断言：下面这些东西**打包成功完全保证不了**，
+      #    但缺任何一项都等于"装上去用不了"，而且报错信息会把人引向错误方向
+      #    （缺权限声明 → 进程被系统直接终止，看起来像"闪退/崩溃"，不像权限问题）。
+      - name: 校验包内关键资源（权限声明 / 后端架构 / 可执行位）
+        run: |
+          set -euo pipefail
+          APP=$(ls -d release2/mac*/NeckGuardian.app | head -1)
+          echo "app = $APP"
+
+          # 1) 摄像头权限声明。macOS 上**必须**有：
+          #    缺失时请求摄像头不是"权限被拒"，而是进程被系统**直接终止**。
+          CAM=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP/Contents/Info.plist" 2>/dev/null || true)
+          if [ -z "$CAM" ]; then
+            echo "::error::$APP/Contents/Info.plist 缺 NSCameraUsageDescription —— 一开摄像头进程就被终止"
+            /usr/libexec/PlistBuddy -c 'Print' "$APP/Contents/Info.plist" || true
+            exit 1
+          fi
+          echo "NSCameraUsageDescription = $CAM"
+
+          # 2) 内置后端：必须是本架构的 Mach-O，且**保留可执行位**。
+          #    可执行位在 zip 压缩 / 解压 / 复制链路里最容易静默丢失，
+          #    丢了以后 spawn 报 EACCES，看起来像"后端起不来"。
+          BE="$APP/Contents/Resources/neckguardian-backend/neckguardian-backend"
+          if [ ! -f "$BE" ]; then
+            echo "::error::包内找不到后端可执行文件：$BE"
+            ls -la "$APP/Contents/Resources/" || true
+            exit 1
+          fi
+          want=${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}
+          file "$BE"
+          file "$BE" | grep -q "Mach-O 64-bit executable $want" \
+            || { echo "::error::后端架构与本 job 的 ${{ matrix.arch }}（期望 $want）不符"; exit 1; }
+          if [ ! -x "$BE" ]; then
+            echo "::error::后端可执行文件丢了可执行位（chmod +x 后重打包）"
+            ls -l "$BE"
+            exit 1
+          fi
+
+      # 🔴 前面全是"静态检查产物对不对"，这一步是**唯一**能回答
+      #    "这个包装在 Mac 上到底能不能跑"的自动化手段。
+      #    macOS runner 就是真 Mac，直接在 .app 里把内置后端跑起来，等 /api/health。
+      #    它能抓到：Mach-O 能执行 / 端口能监听 / 数据库能初始化 / 路径解析正确
+      #    —— 这些在 Windows 打包时验不出来（后端必须是宿主平台编译的产物）。
+      #    仍验不到的（需人工在真机跑）：Electron 窗口、摄像头链路、签名与 Gatekeeper。
+      - name: 后端启动冒烟（跑 .app 内后端，等 /api/health）
+        run: |
+          set -euo pipefail
+          APP=$(ls -d release2/mac*/NeckGuardian.app | head -1)
+          BE="$APP/Contents/Resources/neckguardian-backend/neckguardian-backend"
+          LOG=/tmp/backend-smoke.log
+          "$BE" > "$LOG" 2>&1 &
+          PID=$!
+          echo "后端 PID = $PID"
+
+          ready=0
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "::error::后端进程在就绪前就退出了（第 ${i} 次探测）"
+              tail -80 "$LOG" || true
+              exit 1
+            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:18920/api/health -o /tmp/health.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::120 秒内 /api/health 未就绪"
+            tail -80 "$LOG" || true
+            exit 1
+          fi
+          echo "健康检查响应: $(cat /tmp/health.json)"
+          grep -q '"status":"ok"' /tmp/health.json \
+            || { echo "::error::/api/health 没有返回 status=ok"; exit 1; }
+          echo "--- 后端启动日志 ---"
+          tail -20 "$LOG" || true
+
       - uses: actions/upload-artifact@v7
         with:
           name: NeckGuardian-macOS-${{ matrix.arch }}
@@ -424,6 +506,51 @@ jobs:
           fi
           echo "归档内前端目录 = $ASSETS"
           npm run verify:source -- --packed="$ASSETS"
+
+      # 🔴 归档产物的静态断言。
+      #    最容易踩的一条是 NSCameraUsageDescription：iOS 上缺它不是"权限被拒"，
+      #    而是**一调用摄像头就闪退**，且日志里只有 SIGABRT，排查方向极易跑偏。
+      - name: 校验归档产物（权限声明 / 架构 / 可安装性）
+        run: |
+          set -euo pipefail
+          PLIST=$(find release2/ios/NeckGuardian.xcarchive -type f -path '*Products/Applications/*.app/Info.plist' | head -1)
+          if [ -z "$PLIST" ]; then
+            echo "::error::归档里找不到 .app/Info.plist"
+            find release2/ios/NeckGuardian.xcarchive -maxdepth 6 | head -40
+            exit 1
+          fi
+          echo "Info.plist = $PLIST"
+
+          CAM=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$PLIST" 2>/dev/null || true)
+          if [ -z "$CAM" ]; then
+            echo "::error::缺 NSCameraUsageDescription —— 装到设备后一开摄像头就闪退（不是权限被拒）"
+            /usr/libexec/PlistBuddy -c 'Print' "$PLIST" || true
+            exit 1
+          fi
+          echo "NSCameraUsageDescription = $CAM"
+
+          # 本项目只做摄像头姿态检测、音频只做输出（Constraints: audio=false），
+          # 因此**不应**出现麦克风声明；出现了说明配置漂了。
+          if /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$PLIST" >/dev/null 2>&1; then
+            echo "::warning::Info.plist 出现 NSMicrophoneUsageDescription，但本项目不需要麦克风"
+          fi
+
+          BID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")
+          [ "$BID" = "com.neckguardian.app" ] || { echo "::error::BundleID 变成了 $BID"; exit 1; }
+          echo "BundleID = $BID"
+
+          APP=$(dirname "$PLIST")
+          file "$APP/App"
+          file "$APP/App" | grep -q "Mach-O 64-bit" || { echo "::error::主二进制不是 Mach-O"; exit 1; }
+
+          # 🔴 说清楚这个产物**是什么**：CI 没有签名证书，
+          #    产出的是开发者归档（xcarchive），**不是**可安装的 IPA。
+          #    想装到设备必须由持有 Apple 开发者证书的人用 Xcode 重新签名导出。
+          if [ -e "$APP/embedded.mobileprovision" ]; then
+            echo "::warning::归档里出现了 embedded.mobileprovision（CI 未配置签名，出现在这里属异常）"
+          else
+            echo "::notice::该产物为未签名开发者归档（.xcarchive），不可直接安装；分发需另行签名导出 IPA"
+          fi
 
       # xcarchive 是目录，打包成单个文件才能作为 artifact 上传
       - name: 打包归档
