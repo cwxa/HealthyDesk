@@ -51,17 +51,19 @@ win:
 mac:
   target:
     # dmg 给最终用户；zip 供 electron-updater / 手动解压，也便于 CI 存档
-    - target: dmg
-      arch:
-        - x64
-        - arm64
-    - target: zip
-      arch:
-        - x64
-        - arm64
+    #
+    # 🔴 这里**绝对不要**写 `arch:` 列表。electron-builder 中 target 层显式声明的
+    #    arch 会**静默覆盖**命令行的 `--x64` / `--arm64`，于是
+    #    `electron-builder --mac --arm64` 也会把 x64 的包再打一遍（2026-09-23 实测）。
+    #    后果不是"多打一个包"这么轻：后端 `backend:build` 全程只跑一次，
+    #    arm64 runner 上打出的那份 mac-x64.dmg 里装的是 **arm64 后端**，
+    #    装到 Intel Mac 上后端起不来（反过来同理）。所以架构只能由 CLI 指定，
+    #    一个 job 一种架构，产物与后端架构才对得上。
+    - dmg
+    - zip
   # 🔴 **不做 universal 包**：内置的 Python 后端是单架构 Mach-O，
   # 强行 universal 合并会让另一半架构上的后端跑不起来。
-  # 两种架构分别出包，各自带对应架构的后端。
+  # 两种架构分别出包，各自带对应架构的后端（由 CI 的两个 job 分别产出）。
   artifactName: NeckGuardian-${version}-mac-${arch}.${ext}
   icon: public/icon.icns
   category: public.app-category.healthcare-fitness

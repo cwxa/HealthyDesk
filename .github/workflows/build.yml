@@ -196,6 +196,25 @@ jobs:
           echo "::error::electron-builder 连续 3 次失败"
           exit 1
 
+      # 🔴 断言产物集合与本 job 的架构严格一致。
+      #    背景：electron-builder.yml 里 target 层若写了 `arch:` 列表，会**静默覆盖**
+      #    命令行的 `--${{ matrix.arch }}`，于是这个 job 会把另一架构的包也打一遍。
+      #    那不是"多打一个包"这么轻——后端只 build 一次，另一架构的包里的后端架构是错的。
+      #    校验日志全绿也拦不住，只能在这里断言产物名。
+      - name: 校验只产出本架构的包
+        run: |
+          ls -lh release2/
+          other=${{ matrix.arch == 'x64' && 'arm64' || 'x64' }}
+          if ls release2/ | grep -q -- "-$other\."; then
+            echo "::error::macOS ${{ matrix.arch }} 的产物里混入了 $other 的包 —— 检查 electron-builder.yml 里 target 的 arch 列表"
+            exit 1
+          fi
+          cnt=$(ls release2/*.dmg release2/*.zip 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$cnt" -ne 2 ]; then
+            echo "::error::期望 2 个产物（dmg + zip），实际 $cnt 个"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: NeckGuardian-macOS-${{ matrix.arch }}
