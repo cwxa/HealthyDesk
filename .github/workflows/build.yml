@@ -15,6 +15,13 @@
 #   2. CD 只创建 **draft** Release、不自动公开 —— 产物必须真机验证过再执行
 #        gh release edit <tag> --draft=false --latest
 #      "构建成功" ≠ "能用"，自动 publish 等于把前者当后者推到用户面前。
+#
+# runner 标签策略：**凡有明确迁移公告的，都钉死小版本，不用 -latest**
+#   - ubuntu：`ubuntu-latest` 将于 **2026-10-19** 迁到 Ubuntu 26（CI 已在刷这条注记），
+#     所以钉 `ubuntu-24.04`。要升 Ubuntu 26 时改这一处、跑一遍，而不是被动接受。
+#   - macos：`macos-13` 已退役（用它 job 会**永远排队**）；Intel 只剩 `macos-15-intel`
+#     （官方说这是最后一个，2027-08 后 x64 mac 只能本地产）。
+#   - windows：暂用 `windows-latest`（没有近期迁移公告）。
 
 name: 四端构建
 
@@ -40,7 +47,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   verify:
     name: 守门 · 一致性 / 类型 / 版本
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -271,7 +278,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   mobile-android:
     name: Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: verify
     steps:
       - uses: actions/checkout@v7
@@ -448,7 +455,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   release:
     name: 发布 Release（draft）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - desktop-windows
       - desktop-macos

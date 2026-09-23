@@ -220,12 +220,17 @@ node scripts/ios-build.js --export       # 导出 IPA（需签名）
 
 | Job | Runner | 产物 |
 |---|---|---|
-| `verify` | ubuntu-latest | 守门（见下） |
+| `verify` | ubuntu-24.04 | 守门（见下） |
 | `desktop-windows` | windows-latest | `.exe` |
 | `desktop-macos` | `macos-15-intel`(x64) / `macos-15`(arm64) | `.dmg` / `.zip` |
-| `mobile-android` | ubuntu-latest | `.apk` |
+| `mobile-android` | ubuntu-24.04 | `.apk` |
 | `mobile-ios` | `macos-15` | `.xcarchive.tgz` |
-| `release`（CD） | ubuntu-latest | **draft** Release：四端产物 + `SHA256SUMS.txt` |
+| `release`（CD） | ubuntu-24.04 | **draft** Release：四端产物 + `SHA256SUMS.txt` |
+
+> 🔴 **Linux 用 `ubuntu-24.04` 而不是 `ubuntu-latest`**：`ubuntu-latest` 将于
+> **2026-10-19** 迁到 Ubuntu 26（CI 上已在刷这条注记）。钉住小版本 = 升级由我们决定，
+> 而不是某天被动接受。要升就改这一处、跑一遍。
+> 同理 `macos-13` 已退役（用它 job **永远排队**，不报错不失败），Intel 只剩 `macos-15-intel`。
 
 > 仓库是 **public**，Actions 分钟数**免费**（含 macOS runner 的 10 倍计费），不用心疼。
 
