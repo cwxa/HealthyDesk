@@ -404,6 +404,20 @@ jobs:
       - name: 构建并归档
         run: node scripts/ios-build.js
 
+      # 与 Android 同理：验**归档里实际那份**（`.app/public/assets`），
+      # 而不是 cap sync 复制到工程目录的中间态 —— 后者没经过 Xcode 的处理流程。
+      - name: 同源校验（归档内的前端 = 本次 dist）
+        run: |
+          set -euo pipefail
+          ASSETS="$(find release2/ios/NeckGuardian.xcarchive -type d -path '*/public/assets' | head -1)"
+          if [ -z "$ASSETS" ]; then
+            echo "::error::归档里找不到 public/assets，无法校验同源"
+            find release2/ios/NeckGuardian.xcarchive -maxdepth 6 -type d | head -40
+            exit 1
+          fi
+          echo "归档内前端目录 = $ASSETS"
+          npm run verify:source -- --packed="$ASSETS"
+
       # xcarchive 是目录，打包成单个文件才能作为 artifact 上传
       - name: 打包归档
         run: |
