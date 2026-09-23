@@ -1,0 +1,287 @@
+# 四端构建：Windows / macOS / Android / iOS
+#
+# 为什么需要 CI：
+#   Windows 上**只能**构建 Windows 与 Android。macOS 与 iOS 都不行，原因是硬性的：
+#     - iOS：Xcode / clang / 代码签名没有非 macOS 实现
+#     - macOS：安装包要内置一个 **macOS 原生的 Python 后端**，PyInstaller 不能交叉编译
+#   因此这两个产物只能交给 GitHub 的 macOS runner。
+#
+# 触发方式：
+#   - 打 tag（v*）时自动构建四端
+#   - 或在 Actions 页面手动触发（workflow_dispatch）
+#
+# ⚠️ 本工作流**只负责构建并上传 artifact**，不自动发布 Release。
+#    产物需要先在真机上验证（尤其是安卓/iOS 的摄像头链路），
+#    确认无误后再由人工执行 `gh release create/upload`（见 docs/MULTIPLATFORM.md）。
+#    这样能避免"构建成功"直接被当成"能用了"发出去。
+
+name: 四端构建
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # 守门：跨语言一致性 / 类型 / 版本号。任一不过，四端构建都不启动。
+  # ─────────────────────────────────────────────────────────────
+  verify:
+    name: 守门 · 一致性 / 类型 / 版本
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      # 评分/角度模块只依赖 numpy（mediapipe 是惰性导入），
+      # 所以重新生成期望值不需要装 opencv + mediapipe 那 400MB。
+      - name: 安装后端最小依赖
+        run: python -m pip install --quiet numpy
+
+      - name: 类型检查
+        run: npx tsc --noEmit
+
+      # 期望值是由 Python 生成、node 比对的。如果只改了其中一边，
+      # 提交里的 json 就会和生成器脱节 —— 这时比对本身仍在"自洽地跑"，
+      # 却已经与被测实现无关了。重新生成一次并比对，堵住这个盲区。
+      - name: 期望值是否与生成器同步
+        run: |
+          python scripts/gen-scoring-cases.py > /tmp/scoring.json
+          python scripts/gen-angle-cases.py   > /tmp/angle.json
+          diff -u scripts/scoring-expected.json /tmp/scoring.json
+          diff -u scripts/angle-expected.json   /tmp/angle.json
+
+      - name: 跨语言一致性（评分 / 平滑 / 角度）
+        run: npm run verify:parity
+
+      - name: 版本号五处一致
+        run: node scripts/set-version.js --check
+
+  # ─────────────────────────────────────────────────────────────
+  # Windows 桌面安装包（NSIS）
+  # ─────────────────────────────────────────────────────────────
+  desktop-windows:
+    name: Windows 安装包
+    runs-on: windows-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          npm ci
+          python -m pip install -r backend/requirements.txt pyinstaller
+
+      - name: 构建前端（桌面模式，含 Electron 入口）
+        run: npx vite build
+
+      - name: 打后端可执行文件
+        run: npm run backend:build
+
+      # 拦住"后端产物与目标平台不符"这一整类问题
+      # （打包会成功，但装到目标机器上后端永远起不来）
+      - name: 校验后端产物平台
+        run: npm run verify:backend
+
+      - name: 打包安装包
+        run: npx electron-builder --win --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeckGuardian-Windows
+          path: |
+            release2/*.exe
+            release2/*.blockmap
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────
+  # macOS 桌面安装包（dmg + zip）
+  #
+  # ⚠️ 两种架构**必须分别在对应架构的 runner 上构建**：
+  #    内置的 Python 后端是单架构 Mach-O，PyInstaller 不能交叉编译。
+  #    macos-13 = Intel(x64)，macos-14 = Apple Silicon(arm64)。
+  #    如果 macos-13 在你的账号下已不可用，删掉对应的 matrix 条目即可
+  #    （x64 包另找一台 Intel Mac 本地构建）。
+  # ─────────────────────────────────────────────────────────────
+  desktop-macos:
+    name: macOS 安装包（${{ matrix.arch }}）
+    runs-on: ${{ matrix.runner }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: x64
+          - runner: macos-14
+            arch: arm64
+    env:
+      # CI 上没有签名证书，关掉自动发现，否则 electron-builder 会尝试签名并失败
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          npm ci
+          python -m pip install -r backend/requirements.txt pyinstaller
+
+      - name: 构建前端（桌面模式）
+        run: npx vite build
+
+      - name: 打后端可执行文件
+        run: npm run backend:build
+
+      - name: 校验后端产物平台与架构
+        run: npm run verify:backend -- --target=mac --arch=${{ matrix.arch }}
+
+      - name: 打包 dmg + zip（未签名）
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeckGuardian-macOS-${{ matrix.arch }}
+          path: |
+            release2/*.dmg
+            release2/*.zip
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────
+  # Android APK
+  #
+  # 本机（Windows）已经能出正式包；这个任务的价值是**在干净环境里验证可构建性**，
+  # 同时避免本地工具链（E:/AndroidDev）与 CI 的差异被长期掩盖。
+  # 提供签名 secrets 时出正式包，否则只出 debug 包（不可分发）。
+  # ─────────────────────────────────────────────────────────────
+  mobile-android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 项目 compileSdk/targetSdk = 34，构建工具 34.0.0（见 android/variables.gradle）
+      - name: 安装 Android SDK 组件
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: 写入签名配置（仅在提供 secrets 时）
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "未提供 ANDROID_KEYSTORE_BASE64，跳过签名配置（只会产出 debug 包）"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$GITHUB_WORKSPACE/android/neckguardian-release.jks"
+          cat > "$GITHUB_WORKSPACE/android/keystore.properties" <<EOF
+          storeFile=$GITHUB_WORKSPACE/android/neckguardian-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: 构建 APK
+        run: |
+          if [ -f android/keystore.properties ]; then
+            echo "检测到签名配置 → 构建 release 包"
+            node scripts/android-build.js --release
+          else
+            echo "::warning::未提供签名 secrets，仅产出 debug 包（不可分发）"
+            node scripts/android-build.js
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeckGuardian-Android
+          path: android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────
+  # iOS 归档
+  #
+  # 默认走**未签名归档**：足以证明 iOS 目标可编译、Capacitor 工程可用，
+  # 且不需要 Apple 开发者账号就能在 CI 上跑通。
+  # 要出可安装/可上架的 IPA，需要额外配置签名证书（见 docs/MULTIPLATFORM.md）。
+  # ─────────────────────────────────────────────────────────────
+  mobile-ios:
+    name: iOS 归档
+    runs-on: macos-14
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 脚本内部会做三件事：前端构建（含 MediaPipe 资源暂存）→ cap sync ios
+      # → pod install → xcodebuild archive（未签名）
+      - name: 构建并归档
+        run: node scripts/ios-build.js
+
+      # xcarchive 是目录，打包成单个文件才能作为 artifact 上传
+      - name: 打包归档
+        run: |
+          mkdir -p release2/ios
+          tar -czf release2/ios/NeckGuardian.xcarchive.tgz -C release2/ios NeckGuardian.xcarchive
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeckGuardian-iOS
+          path: release2/ios/NeckGuardian.xcarchive.tgz
+          if-no-files-found: error
