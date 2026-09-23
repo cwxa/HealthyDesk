@@ -2,11 +2,15 @@
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| Windows 10/11 | `NeckGuardian Setup <版本>.exe` | 双击安装，无需预装 Python |
+| Windows 10/11 | `NeckGuardian.Setup.<版本>.exe` | 双击安装，无需预装 Python |
 | macOS（Apple Silicon / M 系列） | `NeckGuardian-<版本>-mac-arm64.dmg` | 拖入「应用程序」 |
 | macOS（Intel） | `NeckGuardian-<版本>-mac-x64.dmg` | 拖入「应用程序」 |
-| Android | `NeckGuardian-<版本>-android-release.apk` | 需允许「安装未知来源应用」 |
-| iOS | `NeckGuardian-<版本>-ios-unsigned.xcarchive.tgz` | **未签名归档，不能直接安装**，仅供开发者 |
+| Android | `NeckGuardian-Android-<版本>.apk` | 已用自有密钥签名；需允许「安装未知来源应用」 |
+| iOS | `NeckGuardian.xcarchive.tgz` | **未签名归档，不能直接安装**，仅供开发者 |
+
+> ⚠️ Android 行是否出现取决于流程：CI 未配签名 secrets 时只会产出 debug 包（**不可分发**），
+> CD 会把它从 Release 里剔除，由本机 `npm run cap:build:release` 出正式包后补传。
+> 同理 iOS 只有未签名归档 —— 要出可安装的 IPA 需要 Apple 开发者账号与证书。
 
 下载后用 `SHA256SUMS.txt` 校验完整性：
 
