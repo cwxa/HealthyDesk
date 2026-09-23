@@ -14,6 +14,10 @@
 sha256sum -c SHA256SUMS.txt
 ```
 
+> 📌 文件名里带空格的（只有 Windows 那个），GitHub 会把**连续空格压成一个点**，
+> 所以实际下载到的是 `NeckGuardian.Setup.<版本>.exe`。
+> `SHA256SUMS.txt` 里写的已经是这个改名后的名字，直接校验即可。
+
 ## ⚠️ 未签名产物怎么打开
 
 **macOS**：包未签名、未公证，首次打开会被 Gatekeeper 拦下（提示「无法验证开发者」）。

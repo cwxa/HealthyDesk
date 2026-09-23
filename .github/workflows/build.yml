@@ -492,7 +492,19 @@ jobs:
         run: |
           set -euo pipefail
           cd dist-release
-          sha256sum * > SHA256SUMS.txt
+          # 🔴 校验和里必须写**用户在 GitHub 上下载到的文件名**，不是本地文件名。
+          #    GitHub 会把资产名里的连续空白压成一个点：
+          #      `NeckGuardian Setup 1.3.7.exe`  → `NeckGuardian.Setup.1.3.7.exe`
+          #      `d  e.txt`（两个空格）          → `d.e.txt`（实测：连续空白合并成一个点）
+          #    照抄本地名的话，用户下载后按 release 说明跑 `sha256sum -c SHA256SUMS.txt`
+          #    会因为「找不到文件」而整条 FAILED —— 白给一份没法用的校验文件。
+          for f in *; do
+            if [ "$f" = "SHA256SUMS.txt" ]; then continue; fi
+            h=$(sha256sum "$f" | awk '{print $1}')
+            ghname=$(printf '%s' "$f" | sed -E 's/[[:space:]]+/./g')
+            printf '%s  %s\n' "$h" "$ghname"
+          done > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: 创建 / 更新 draft Release
