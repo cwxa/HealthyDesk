@@ -58,9 +58,12 @@ captures/
 #*.keystore
 
 # 签名配置与密钥（含密码，绝不可入库）
-keystore.properties
+# 用 <name>* 而非精确名：keystore.properties.bak / .old / .copy 这类备份最容易漏
+keystore.properties*
 *.jks
+*.jks.*
 *.keystore
+*.keystore.*
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild

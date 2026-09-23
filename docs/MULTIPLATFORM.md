@@ -478,9 +478,20 @@ npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
 
 ### 9.6 推送仓库的前置检查
 
-- [ ] 🔴 要推 `.github/workflows/**` 的，先看 `gh auth status` 的 scopes。
-      GitHub 要求 token 具备 **`workflow` scope**（只有 `repo` 不够），且会**整体拒绝**这次 push
-      ——不是跳过那几个文件。**提交链里只要有一个这样的提交，后面全部推不动**。
-      拿不到授权就先 `git reset --soft HEAD~1` 摘链、把 `.github/` 暂存到 `.git/` 内，
-      发完版再恢复，别让它阻塞发布
+- [ ] 🔴 要推 `.github/workflows/**` 的，**先确认"当前实际生效"的那把凭据有没有 `workflow` scope**。
+      GitHub 会**整体拒绝**这次 push（不是跳过那几个文件），
+      报错形如 `refusing to allow an OAuth App to create or update workflow ... without 'workflow' scope`。
+
+      本机常见**两把凭据并存**（2026-09 实测）：**GCM**（`credential.helper=manager`）带 `workflow`；
+      **gh 自带 token** 只有 `gist, read:org, repo`。查法：
+
+      ```bash
+      TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p')
+      curl -sI -H "Authorization: token $TOKEN" https://api.github.com/ | grep -i '^x-oauth-scopes'
+      ```
+
+      ⚠️ **最常见的真凶是自己的命令行**：为"指定身份"写了
+      `git -c credential.helper= -c credential.helper='!gh auth git-credential' push`，
+      这一行会把能用的 GCM **换成** gh 的弱 token。**去掉这个覆盖**即可，用户无需做任何操作。
+      确认确实缺 scope 才走 `gh auth refresh -h github.com -s workflow`。
 

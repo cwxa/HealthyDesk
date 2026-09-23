@@ -19,3 +19,10 @@ Thumbs.db
 *.log
 .workbuddy/
 .buildenv/
+
+# 🔴 安卓签名材料：绝不可入库（keystore.properties 里是**明文**口令）。
+# 兜底规则：即使有人在别处新建同名文件也不会被 `git add -A` 带走。
+# （android/.gitignore 里另有一份等价规则，两处都留着是刻意的冗余。）
+*keystore.properties*
+*.jks
+*.keystore

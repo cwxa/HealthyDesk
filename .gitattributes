@@ -43,3 +43,9 @@ Podfile   text eol=lf
 # 更要紧的是 YAML 解析器对行尾不敏感，出问题也不报错，不如一开始就钉死。
 *.yml     text eol=lf
 *.yaml    text eol=lf
+
+# ---- 文档与忽略规则：统一 LF ----
+# 同理，仓库里存 LF，别让 autocrlf=true 在检出时改写成 CRLF（那会让 `git diff`
+# 在只有行尾差异时也报改动，掩盖真正的修改）。
+*.md         text eol=lf
+.gitignore   text eol=lf
