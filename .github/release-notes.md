@@ -8,9 +8,13 @@
 | Android | `NeckGuardian-Android-<版本>.apk` | 已用自有密钥签名；需允许「安装未知来源应用」 |
 | iOS | `NeckGuardian.xcarchive.tgz` | **未签名归档，不能直接安装**，仅供开发者 |
 
-> ⚠️ Android 行是否出现取决于流程：CI 未配签名 secrets 时只会产出 debug 包（**不可分发**），
-> CD 会把它从 Release 里剔除，由本机 `npm run cap:build:release` 出正式包后补传。
-> 同理 iOS 只有未签名归档 —— 要出可安装的 IPA 需要 Apple 开发者账号与证书。
+> ⚠️ **Android 正式包由 CI 签名产出**（`ANDROID_*` repository secrets，2026-09-23 起已配置）。
+> 若 secrets 缺失，CI 只会产出 debug 包，CD 会把它从 Release 里剔除（**不可分发**），
+> 需本机 `npm run cap:build:release` 出包后补传。
+> ⚠️ **iOS 只有未签名归档** —— 要出可安装的 IPA 需要 Apple 开发者账号与签名证书。
+>
+> 🔴 **发布前自查**：本 Release 的各端产物**是否都做过真机验证**？CI 只证明「可编译、可打包」，
+> 不等于「在真机上跑通了」。没有验证过的端，要么别发，要么在正文里明确标注未验证。
 
 下载后用 `SHA256SUMS.txt` 校验完整性：
 

@@ -310,6 +310,33 @@ gh release edit v1.3.8 --draft=false --latest
 > 验证完 `gh release delete v1.3.7-cdverify --yes --cleanup-tag` + `git push --delete origin <tag>`。
 > 已发布的 Release 数量**跑完要核对没变**（防误删）。
 
+### 往已发布的 Release 补资产（CI 产物 → Release）
+
+典型场景：某个端当时没法构建（mac / iOS 曾经如此），先发了能构建的，
+事后从 CI 产物补上。v1.3.7 就是这么从「只有 Windows + APK」补成四端齐全的。
+
+```bash
+# 1) 先确认 CI 产物的 commit 与当前源码一致 —— 差异必须只涉及非产物文件
+git log --oneline <run 的 head_sha>..HEAD
+git diff --stat  <run 的 head_sha>..HEAD     # 例如只差 release-notes.md → 可用
+
+# 2) 下载（artifact 名可从 gh api .../runs/<id>/artifacts 拿）
+gh run download <run-id> -n NeckGuardian-macOS-arm64 -D /tmp/art/mac-arm64
+
+# 3) 上传。🔴 必须在 git 仓库目录内执行：
+#    在 /tmp 里跑会报 `failed to run git: fatal: not a git repository`
+gh release upload v1.3.7 /abs/path/xxx.dmg --clobber
+
+# 4) 校验和
+```
+
+**已有资产的 sha256 不必下载**：`gh api .../releases/<id>` 的每个 asset 都带
+`digest` 字段（形如 `sha256:46525c85…`），直接拿来写进 `SHA256SUMS.txt`。
+
+> ⚠️ **Windows Git Bash 的 `sha256sum` 输出是 `hash *filename`**（二进制模式带星号），
+> 而 Linux / CI 上是 `hash  filename`。混着写出来的校验和文件格式不统一。
+> 生成时统一用 `printf '%s  %s\n' "$(sha256sum f | awk '{print $1}')" "$name"`。
+
 ### 🔴 同源校验：产物里的前端必须是本次构建的 dist
 
 `scripts/verify-same-source.mjs` 逐文件比对 sha256：
@@ -334,17 +361,58 @@ npm run verify:source -- --packed=<上面表格里的路径> [--base=dist/assets
 > ⚠️ 守卫必须用**必然失败的用例**证明它真的会拦：路径写错 / 基准目录拿错 /
 > 基准被改一个字节 —— 三种都要 `exit 1`，否则它只是个装饰。
 
-**Android 签名**：提供以下 repository secrets 则出正式包，否则只出 debug 包：
+**Android 签名**：提供以下 repository secrets 则出正式包，否则只出 debug 包。
+**已于 2026-09-23 配置完毕**，CI 现在直接产出可分发的签名包。
 
 | Secret | 内容 |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 neckguardian-release.jks` |
+| `ANDROID_KEYSTORE_BASE64` | keystore 的 base64（见下） |
 | `ANDROID_STORE_PASSWORD` | keystore 口令 |
 | `ANDROID_KEY_ALIAS` | `neckguardian` |
 | `ANDROID_KEY_PASSWORD` | key 口令 |
 
+配置方式（**别把口令写进命令行** —— 会进 shell 历史与进程列表，用管道喂进去）：
+
+```bash
+cd <repo>
+KS=E:/AndroidDev/keystore/neckguardian-release.jks
+P=android/keystore.properties
+
+base64 "$KS" | tr -d '\r\n' | gh secret set ANDROID_KEYSTORE_BASE64
+grep -m1 '^storePassword=' "$P" | cut -d= -f2- | tr -d '\r\n' | gh secret set ANDROID_STORE_PASSWORD
+grep -m1 '^keyAlias='       "$P" | cut -d= -f2- | tr -d '\r\n' | gh secret set ANDROID_KEY_ALIAS
+grep -m1 '^keyPassword='    "$P" | cut -d= -f2- | tr -d '\r\n' | gh secret set ANDROID_KEY_PASSWORD
+
+gh secret list   # 应出现 4 条
+```
+
+> 注意 `gh secret set` **必须在 git 仓库目录内执行**（或在项目目录下跑），
+> 否则报 `failed to run git: fatal: not a git repository`。
+
+**怎么确认 secrets 真的生效**（三处证据，缺一不可）：
+
+| 证据 | 看哪里 | 期望值 |
+|---|---|---|
+| 走了签名分支 | Android job 日志 | `检测到签名配置 → 构建 release 包` |
+| 产出的是正式包 | job 日志 / 产物名 | 源文件 `apk/release/app-release.apk`，产物名带 **`-release`** 而非 `-debug` |
+| **签名指纹与上一版一致** | `apksigner verify --print-certs` | SHA-256 `9adaa8b2…` |
+
+🔴 **第三条是发布前必查项**：APK 的文件 sha256 每次构建都不同（时间戳等），
+**但证书指纹必须逐位相同**。指纹一变，老用户就**无法覆盖安装**（会提示签名冲突），
+只能卸载重装、数据全丢。所以 secret 里的 keystore 必须与历史发布用的是同一把。
+
+```bash
+AS="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+JAVA_HOME=<jdk17> "$AS" verify --print-certs <apk> | grep 'certificate SHA-256'
+# 期望：9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5
+```
+
 ⚠️ 本机 keystore 在 `E:/AndroidDev/keystore/neckguardian-release.jks`。
-**丢了就永远无法给老用户推更新**，务必多备份。
+**丢了就永远无法给老用户推更新**，务必多备份（备份在 `E:/AndroidDev/keystore/`）。
+
+⚠️ keystore 是**上传到 GitHub 的**（经 base64 存进 secret）。仓库是 public，
+但 Actions secrets **不可被读取**（连 admin 也只能覆盖不能查看），且日志里会被打码；
+fork 的 PR 拿不到 secrets。若日后仓库改用「允许 fork PR 跑 workflow」，需重新评估。
 
 ---
 
@@ -455,6 +523,10 @@ npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
       不一致则老用户**无法覆盖安装**。把这个值写进 README，每次发版对照
 - [ ] `aapt dump badging`：`package` 正确、`versionCode` **已递增**、`versionName` 正确、
       `uses-permission` 含 CAMERA
+- [ ] 🔴 **证书指纹与上一版逐位一致**（`apksigner verify --print-certs`，期望
+      `9adaa8b20c384…`）。APK 的文件 sha256 每次构建都不同，**但指纹必须相同**——
+      指纹一变，老用户只能卸载重装（签名冲突），本地数据全丢。
+      CI 出的包**尤其要查**：secret 里 base64 解出来的 keystore 可能与本机用的不是同一把
 - [ ] APK 内 `assets/public/assets/index-*.js` 与本地 `dist/assets/` md5 一致
 - [ ] 无 `assets/public/main.js` / `preload.js`（Electron 入口误入 = 打错了构建目标）
 - [ ] mediapipe 资源 5 项齐全（模型 + 4 个 wasm）
