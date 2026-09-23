@@ -215,15 +215,45 @@ node scripts/ios-build.js --export       # 导出 IPA（需签名）
 
 ## 四、CI：四端一起构建
 
-`.github/workflows/build.yml`，打 tag（`v*`）或手动触发。
+`.github/workflows/build.yml`，打 tag（`v*`）或手动触发（`gh workflow run build.yml`）。
+⚠️ **推 main 不会触发** —— 改了工作流要验证，必须手动 dispatch。
 
 | Job | Runner | 产物 |
 |---|---|---|
-| `verify` | ubuntu | 守门（见下） |
+| `verify` | ubuntu-latest | 守门（见下） |
 | `desktop-windows` | windows-latest | `.exe` |
-| `desktop-macos` | macos-13(x64) / macos-14(arm64) | `.dmg` / `.zip` |
-| `mobile-android` | ubuntu | `.apk` |
-| `mobile-ios` | macos-14 | `.xcarchive.tgz` |
+| `desktop-macos` | `macos-15-intel`(x64) / `macos-15`(arm64) | `.dmg` / `.zip` |
+| `mobile-android` | ubuntu-latest | `.apk` |
+| `mobile-ios` | `macos-15` | `.xcarchive.tgz` |
+
+> 仓库是 **public**，Actions 分钟数**免费**（含 macOS runner 的 10 倍计费），不用心疼。
+
+### 🔴 runner 标签是会过期的依赖
+
+别把 `runs-on:` 的值当常量。GitHub 按 **N-1 OS 支持策略**，每个 OS 家族只保留最近两个
+GA 镜像；旧标签退役后，**用它的 job 会永远排队** —— 既不报错也不失败，
+CI 页面看起来只是"一直在跑"。这比"失败"更难发现。
+
+- `macos-13`（Intel）已于 **2025-12-04** 彻底退役。官方给标准 runner 的 Intel 替代标签是
+  `macos-15-intel`，且这是**最后一个** Intel 镜像 —— 2027-08 之后 x64 mac 包只能本地出。
+- `macos-14` 的弃用支持 **2026-11-02 到期**，所以 arm64 直接用 `macos-15`，别贴着期限走。
+- `-large` / `-xlarge` 是**付费** larger runner，标准账号用不了。
+- 退役前会有若干 **brownout 窗口**（临时整点失败），那是最后的预警信号。
+- 查现状：`endoflife.date/github-actions-runner-images`，或 `actions/runner-images` 的 issue。
+
+### 首次真跑踩到的坑（2026-09-23，均已修）
+
+这四个都是**在 Windows 本机永远复现不出来**的类型 —— 正是引入 CI 最实在的回报。
+
+| 症状 | 根因 | 修法 |
+|---|---|---|
+| `xcodebuild: error: 'App.xcworkspace' does not exist`（而 `pod install` 明明成功） | `-workspace App.xcworkspace` 是**相对路径**，xcodebuild 的 cwd 不对 | `scripts/ios-build.js` 里 pod install 与 xcodebuild **两步都传** `cwd=ios/App` |
+| `ERROR: script '...\main.py' not found` | `neckguardian-backend.spec` 里写了 Windows 反斜杠路径；反斜杠在 POSIX 上只是普通字符 | 改正斜杠（三平台通用） |
+| `Failed to find package 'tools'` → exit 1 | `android-actions/setup-android@v3` 内部执行 `sdkmanager tools`，而该包早已从 SDK 仓库移除 | **弃用该 action**，直接用 runner 自带 SDK；`sdkmanager` 按 `cmdline-tools/*/bin/` 动态查找 |
+| macOS x64 job **永远 queued** | 用了已退役的 `macos-13` | 换 `macos-15-intel` |
+
+> 查日志技巧：整轮没结束时 `gh run view --log` 取不到，但**单个 job 的日志已经可取**：
+> `gh api repos/<owner>/<repo>/actions/jobs/<job_id>/logs`（返回纯文本）。
 
 **`verify` 守门都检查什么**：
 
