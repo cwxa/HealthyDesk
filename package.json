@@ -1,6 +1,6 @@
 {
   "name": "neck-guardian",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "肩颈健康助手 - NeckGuardian",
   "main": "dist/main.js",
   "author": "NeckGuardian Team",

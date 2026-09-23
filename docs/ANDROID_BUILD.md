@@ -303,7 +303,7 @@ npm run set-version --check          # 只校验一致性，不一致 exit 1（�
 ```gradle
 defaultConfig {
     versionCode 6        // 整数，每次发版 +1（Android 强制要求，否则无法覆盖安装）
-    versionName "1.3.6"  // 展示给用户的版本号，与其余四处保持一致
+    versionName "1.3.7"  // 展示给用户的版本号，与其余四处保持一致
 }
 ```
 
