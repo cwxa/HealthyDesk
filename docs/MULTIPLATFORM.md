@@ -467,7 +467,19 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 | 真实推理帧率未实测 | 不知道低端机能否跑到 15fps | 未测 |
 | iOS 未在真机验证 | 摄像头链路只有静态推导，无实测 | **待用户验证** |
 | macOS 未在真机验证 | 同上 | **待用户验证** |
-| macOS / iOS 产物尚未产出过 | 本机不可能构建，需 macOS 或 CI（见 §四） | 待产出 |
+| **iOS 没有"可安装产物"** | CI 产出的是未签名 `.xcarchive`（开发者归档），**不是 IPA**，普通用户装不上；要装到设备必须由持有 Apple 开发者证书的人用 Xcode 重新签名导出 | 无 Apple 开发者账号，属预期 |
+| mac 包未签名、未公证 | 用户下载后首次打开会被 Gatekeeper 拦（"无法验证开发者"），需右键→打开或 `xattr -dr com.apple.quarantine` | 无 Apple 开发者账号，见 §3.2 |
+
+**macOS / iOS 目前"验证到了哪一层"**（2026-09-23，别把"CI 绿"读成"能用"）：
+
+| 层次 | macOS | iOS | 手段 |
+|---|---|---|---|
+| 能构建 / 能归档 | ✅ CI 真机 runner | ✅ CI 真机 runner | `desktop-macos` / `mobile-ios` job |
+| 产物结构正确（权限声明、后端架构、可执行位） | ✅ 已断言 | ✅ 已断言 | CI「校验包内关键资源」/「校验归档产物」 |
+| 包内前端 = 本次 dist（逐文件 sha256） | ✅ | ✅ | `verify-same-source.mjs` |
+| **内置后端能在 Mac 上真跑起来** | ✅ 已断言 | —（iOS 无后端） | CI「后端启动冒烟」轮询 `/api/health` |
+| Electron 窗口能起、摄像头出画面 | ❌ **未验** | ❌ **未验** | 只能人工在真机跑 |
+| 签名 / 公证 / 可安装 | ❌ 未签名 | ❌ 未签名（连 IPA 都没有） | 需 Apple 开发者账号 |
 | 移动端历史数据不跨端同步 | 换手机数据不带过去 | 设计如此（隐私优先） |
 | 跨版本分数刻度变化 | v1.3.6 改了评分公式，旧记录分数与新公式刻度不同 | 统计图表跨版本处有落差 |
 
@@ -580,4 +592,44 @@ npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
       `git -c credential.helper= -c credential.helper='!gh auth git-credential' push`，
       这一行会把能用的 GCM **换成** gh 的弱 token。**去掉这个覆盖**即可，用户无需做任何操作。
       确认确实缺 scope 才走 `gh auth refresh -h github.com -s workflow`。
+
+      🔴 **2026-09-23 二次踩到**：明知这条还照踩 —— 因为 push 命令是从"发布流程"里
+      复制来的，那行覆盖就在里面。**推 workflow 前先想 3 秒**：这条命令里有没有
+      `credential.helper` 覆盖？有就先删掉再推。
+
+### 9.7 macOS / iOS 产物（CI 产出，已固化为 CI 断言）
+
+下面这些**打包成功完全保证不了**，但缺任何一项都等于"装上去用不了"，
+且报错方向极易跑偏 —— macOS / iOS 缺 `NSCameraUsageDescription` 时，
+进程是被系统**直接终止**的，看起来像崩溃，**不像**权限问题。
+
+CI 里已断言（`desktop-macos` 的「校验包内关键资源」「后端启动冒烟」、
+`mobile-ios` 的「校验归档产物」），人工复核用同一组命令：
+
+```bash
+APP="release2/mac-arm64/NeckGuardian.app"
+/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP/Contents/Info.plist"
+file "$APP/Contents/Resources/neckguardian-backend/neckguardian-backend"    # 架构必须等于本包架构
+ls -l  "$APP/Contents/Resources/neckguardian-backend/neckguardian-backend"  # 必须有 x 位
+"$APP/Contents/Resources/neckguardian-backend/neckguardian-backend" &       # 起得来吗
+curl -fsS http://127.0.0.1:18920/api/health
+```
+
+- [ ] 主 Info.plist 有 `NSCameraUsageDescription`（注意是**主** `.app/Contents/Info.plist`，
+      不是 `Frameworks/…Helper*.app` 的）
+- [ ] `NSMicrophoneUsageDescription`：macOS **要有**（托盘语音提示用）；iOS **要没有**
+      （`audio: false`，故意不声明；出现了说明配置漂了）
+- [ ] 🔴 内置后端 `file` 输出 = 本包架构（`arm64` / `x86_64`）。
+      这是 2026-09-23 那个 bug 的重灾区：`electron-builder.yml` 的 `target` 层若写死 `arch`，
+      arm64 runner 打出的 **x64 包里会装 arm64 后端**，且日志全绿
+- [ ] 后端**保留可执行位**（zip 内 `external_attr>>16` 应为 `0o755`；丢了 spawn 报 EACCES）
+- [ ] 后端能起来且 `/api/health` 返回 `{"status":"ok",…}`
+      —— 这是**唯一**能自动化回答"这个包在 Mac 上到底能不能跑"的手段（macOS runner 就是真 Mac）
+- [ ] `Contents/Resources/public/` **不存在**（同 §9.2 的托盘图标坑）
+- [ ] 🔴 桌面包里**不该有** `dist/mediapipe/`：桌面走 Python 后端，MediaPipe 资源只给移动端。
+      本地先跑过 `cap:build` 再打桌面包，`dist/mediapipe/`（约 28 MB）会被
+      `files: dist/**/*` 原样捎进安装包 —— 和"别放 `public/`"是同一类问题
+- [ ] iOS：归档内 `App.app/Info.plist` 的 BundleID / 版本 / `NSCameraUsageDescription`；
+      主二进制为 Mach-O arm64；**无** `embedded.mobileprovision`
+      ⇒ 未签名归档，**不可安装**，分发需另行签名导出 IPA
 
