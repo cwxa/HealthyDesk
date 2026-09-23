@@ -225,6 +225,7 @@ node scripts/ios-build.js --export       # 导出 IPA（需签名）
 | `desktop-macos` | `macos-15-intel`(x64) / `macos-15`(arm64) | `.dmg` / `.zip` |
 | `mobile-android` | ubuntu-latest | `.apk` |
 | `mobile-ios` | `macos-15` | `.xcarchive.tgz` |
+| `release`（CD） | ubuntu-latest | **draft** Release：四端产物 + `SHA256SUMS.txt` |
 
 > 仓库是 **public**，Actions 分钟数**免费**（含 macOS runner 的 10 倍计费），不用心疼。
 
@@ -268,8 +269,56 @@ CI 页面看起来只是"一直在跑"。这比"失败"更难发现。
 > 后端评分/角度模块只依赖 `numpy`（mediapipe 是惰性导入），所以守门任务
 > 不需要安装 opencv + mediapipe 那 400MB。
 
-**CI 只构建、不发布 Release**。产物需要在真机上验证（尤其是安卓/iOS 的摄像头链路），
-确认后再人工执行 `gh release create/upload`。这能避免"构建成功"被当成"能用了"发出去。
+### CD：打 tag 自动发 **draft** Release
+
+打 `v*` tag → 四端构建全部成功后，`release` job 汇总产物、生成 `SHA256SUMS.txt`、
+调用 `gh release create --draft` 建一个 draft Release。
+**手动 dispatch 不碰 Release**（只构建），所以 `if` 是 `startsWith(github.ref, 'refs/tags/v')`。
+
+🔴 **为什么停在 draft**：`"构建成功" ≠ "能用"`。mac / iOS 产物至今**没做过真机验证**，
+Android 的摄像头链路也只在 v1.3.4 验过一轮。Release 一旦公开就有人下载，
+所以留一道人工闸门：
+
+```bash
+gh release edit v1.3.8 --draft=false --latest
+```
+
+要全自动发布就把 workflow 里的 `--draft` 删掉 —— 但先确认产物真的被验证过。
+
+**CD 里的三道自动检查**：
+
+| 检查 | 拦什么 |
+|---|---|
+| tag 与 `package.json` 版本一致 | 发出版本号错乱的 Release。允许预发布后缀（`v1.3.8-rc1` 按 1.3.8 校验，这样预演 CD 不用改版本号） |
+| 剔除 Android debug 包 | CI 没配签名 secrets 时产出的是 debug 包，**不可分发**，不能当正式资产 |
+| 各打包 job 的**同源校验** | 打包成功、程序也能启动，但里面的前端是旧 dist（见下） |
+
+> 预演 CD 全链路：`git tag -a v1.3.7-cdverify && git push origin v1.3.7-cdverify`，
+> 验证完 `gh release delete v1.3.7-cdverify --yes --cleanup-tag` + 删本地 tag。
+
+### 🔴 同源校验：产物里的前端必须是本次构建的 dist
+
+`scripts/verify-same-source.mjs` 逐文件比对 sha256：
+
+| 平台 | 比对的路径 |
+|---|---|
+| Windows | `release2/win-unpacked/resources/app/dist/assets` |
+| macOS | `release2/mac*/NeckGuardian.app/Contents/Resources/app/dist/assets` |
+| Android | 解出 APK 后的 `assets/public/assets` |
+
+比的是 electron-builder 保留的**解包目录**与 APK 内**实际资源**，不依赖
+7z / hdiutil / apktool —— 也就没有"这工具在 CI 上不好使"的问题
+（dmg / zip / NSIS 都只是对同一份应用目录做压缩，内容不变）。
+
+Android 特意用**真 APK 解出来的资源**，而不是 cap 复制过去的中间目录 ——
+后者绕过了 AGP 的资源处理（混淆 / 裁剪），存在"中间目录对、包内不对"的可能。
+
+```bash
+npm run verify:source -- --packed=<上面表格里的路径> [--base=dist/assets]
+```
+
+> ⚠️ 守卫必须用**必然失败的用例**证明它真的会拦：路径写错 / 基准目录拿错 /
+> 基准被改一个字节 —— 三种都要 `exit 1`，否则它只是个装饰。
 
 **Android 签名**：提供以下 repository secrets 则出正式包，否则只出 debug 包：
 

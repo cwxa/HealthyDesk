@@ -35,6 +35,8 @@ NeckGuardian 是一款智能肩颈健康监测与活动提醒应用，通过摄�
 > 一个 macOS 原生的 Python 后端，而 PyInstaller 不能交叉编译。
 > 两条路：用 CI（`.github/workflows/build.yml` 会在 GitHub 的 macOS runner 上出包），
 > 或在一台真实 Mac 上构建。
+> 打 `v*` tag 时 CI 会构建四端并自动创建 **draft Release**（含 `SHA256SUMS.txt`），
+> 人工确认无误后再 `gh release edit <tag> --draft=false --latest` 公开。
 
 > ✨ **v1.3.7 是架构版本**：平台差异收敛为「能力矩阵」，补齐 macOS / iOS 两端，修掉若干跨平台
 > 静默 bug。**评分与提醒逻辑一个字没改**，同一姿势的分数与 v1.3.6 完全一致。
@@ -357,7 +359,7 @@ HealthyDesk/
 │   ├── MULTIPLATFORM.md       # 四端架构与构建总览（含 mac 签名公证、iOS 权限链）
 │   ├── ANDROID_BUILD.md       # 安卓构建指南
 │   └── TROUBLESHOOTING.md     # 故障排查
-├── .github/workflows/         # CI：四端构建 + 一致性校验
+├── .github/workflows/         # CI/CD：四端构建 + 同源/架构/版本校验 + tag 自动发 draft Release
 ├── capacitor.config.ts        # Capacitor 配置（android / ios）
 ├── package.json               # 前端依赖与脚本矩阵
 ├── vite.config.ts             # Vite 构建配置（双目标：桌面 / 移动，注入版本与构建目标）
