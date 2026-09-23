@@ -173,8 +173,28 @@ jobs:
       - name: 校验后端产物平台与架构
         run: npm run verify:backend -- --target=mac --arch=${{ matrix.arch }}
 
+      # 🔴 关掉 Spotlight 索引：electron-builder 打完 dmg 会 `hdiutil detach`，
+      #    而 mds/Spotlight 正在索引刚挂载的卷时会报
+      #    `hdiutil: couldn't eject "disk2" - Resource busy`（退出码 16），打包就此失败。
+      #    2026-09-23 实测：arm64 同轮通过、x64 挂在这里 → 属**偶发**，不是代码问题。
+      - name: 关闭 Spotlight 索引
+        run: sudo mdutil -a -i off || true
+
       - name: 打包 dmg + zip（未签名）
-        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+        run: |
+          set +e
+          for attempt in 1 2 3; do
+            npx electron-builder --mac --${{ matrix.arch }} --publish never
+            rc=$?
+            [ $rc -eq 0 ] && exit 0
+            echo "::warning::electron-builder 第 $attempt 次失败（退出码 $rc），清理残留挂载点后重试"
+            for vol in /Volumes/NeckGuardian*; do
+              [ -d "$vol" ] && hdiutil detach "$vol" -force
+            done
+            sleep 10
+          done
+          echo "::error::electron-builder 连续 3 次失败"
+          exit 1
 
       - uses: actions/upload-artifact@v4
         with:
