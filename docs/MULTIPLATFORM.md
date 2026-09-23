@@ -293,8 +293,17 @@ gh release edit v1.3.8 --draft=false --latest
 | 剔除 Android debug 包 | CI 没配签名 secrets 时产出的是 debug 包，**不可分发**，不能当正式资产 |
 | 各打包 job 的**同源校验** | 打包成功、程序也能启动，但里面的前端是旧 dist（见下） |
 
+**`SHA256SUMS.txt` 写的是改名后的文件名**：GitHub 会把资产名里的**连续空白压成一个点**
+（`NeckGuardian Setup 1.3.7.exe` → `NeckGuardian.Setup.1.3.7.exe`，`d  e.txt` → `d.e.txt`）。
+照抄本地名的话用户跑 `sha256sum -c` 会**整条 FAILED「找不到文件」**，所以生成时做了替换。
+
+> ⚠️ **验 draft 资产别只查一次**：列表接口 `GET /releases` 在 release 刚创建时可能返回
+> `assets: []`，看起来像"一个都没传上去"（实测：job 成功后 19 秒查是 0，几十秒后同一对象 7 个）。
+> 看**单个** release 接口 `GET /releases/<id>` 并隔一会儿复看，别凭一次查询下结论。
+>
 > 预演 CD 全链路：`git tag -a v1.3.7-cdverify && git push origin v1.3.7-cdverify`，
-> 验证完 `gh release delete v1.3.7-cdverify --yes --cleanup-tag` + 删本地 tag。
+> 验证完 `gh release delete v1.3.7-cdverify --yes --cleanup-tag` + `git push --delete origin <tag>`。
+> 已发布的 Release 数量**跑完要核对没变**（防误删）。
 
 ### 🔴 同源校验：产物里的前端必须是本次构建的 dist
 
