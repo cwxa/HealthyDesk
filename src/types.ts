@@ -24,6 +24,15 @@ export interface PoseResult {
   issues?: string[]
   landmarks?: Landmarks
   message?: string
+  /**
+   * 评分模式。运动态（活动进行中）的回包会带 `'exercise'`，静息态**不带**该字段
+   * —— 刻意保持静息态的返回结构与历史版本一字不变（见 scorer.py 的说明）。
+   */
+  mode?: 'monitor' | 'exercise'
+  /** 运动态活动量：各项相对自身静息阈值的倍数，取最大者。 */
+  activity?: number
+  /** 运动态是否达标（活动量达到有效活动起点）。 */
+  completed?: boolean
 }
 
 export interface WeeklyReport {

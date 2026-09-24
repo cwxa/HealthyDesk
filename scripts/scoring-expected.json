@@ -19,7 +19,10 @@
     "SHOULDER_MILD_HI": 5.0,
     "SHOULDER_MODERATE_HI": 10.0,
     "SPINE_MILD_HI": 8.0,
-    "SPINE_MODERATE_HI": 16.0
+    "SPINE_MODERATE_HI": 16.0,
+    "EXERCISE_ACTIVITY_START": 1.0,
+    "EXERCISE_ACTIVITY_FULL": 4.0,
+    "EXERCISE_SCORE_BASE": 60.0
   },
   "smootherConstants": {
     "EMA_ALPHA": 0.35
@@ -5519,6 +5522,464 @@
         "肩部严重不平衡",
         "脊柱严重倾斜"
       ]
+    }
+  ],
+  "exerciseCases": [
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 12,
+      "issues": [
+        "动作幅度不足，再大一点"
+      ],
+      "activity": 0.2,
+      "completed": false,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 1.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 12,
+      "issues": [
+        "动作幅度不足，再大一点"
+      ],
+      "activity": 0.2,
+      "completed": false,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 2.5,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 30,
+      "issues": [
+        "动作幅度不足，再大一点"
+      ],
+      "activity": 0.5,
+      "completed": false,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 4.99,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 5.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 5.01,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 8.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 68,
+      "issues": [],
+      "activity": 1.6,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 10.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 73,
+      "issues": [],
+      "activity": 2.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 12.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 79,
+      "issues": [],
+      "activity": 2.4,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 15.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 87,
+      "issues": [],
+      "activity": 3.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 19.99,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 20.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 20.01,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 25.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 5.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 30.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 6.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 45.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 9.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 60.0,
+        "shoulder": 0.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 12.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 5.0,
+        "shoulder": 4.0,
+        "spine": 10.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 20.0,
+        "shoulder": 16.0,
+        "spine": 40.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 5.0,
+        "shoulder": 0.0,
+        "spine": 0.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 20.0,
+        "shoulder": 0.0,
+        "spine": 0.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 4.99,
+        "shoulder": 0.0,
+        "spine": 0.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 20.01,
+        "shoulder": 0.0,
+        "spine": 0.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 3.99,
+        "spine": 2.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 4.0,
+        "spine": 2.0
+      },
+      "score": 60,
+      "issues": [],
+      "activity": 1.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 16.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 30.0,
+        "spine": 2.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 7.5,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 0.0,
+        "spine": 39.99
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 0.0,
+        "spine": 40.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 4.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 0.0,
+        "shoulder": 0.0,
+        "spine": 90.0
+      },
+      "score": 100,
+      "issues": [],
+      "activity": 9.0,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 3.33,
+        "shoulder": 2.77,
+        "spine": 6.19
+      },
+      "score": 42,
+      "issues": [
+        "动作幅度不足，再大一点"
+      ],
+      "activity": 0.7,
+      "completed": false,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
+    },
+    {
+      "input": {
+        "head": 7.77,
+        "shoulder": 6.66,
+        "spine": 13.33
+      },
+      "score": 69,
+      "issues": [],
+      "activity": 1.7,
+      "completed": true,
+      "mode": "exercise",
+      "expected_start": 1.0,
+      "expected_full": 4.0
     }
   ]
 }

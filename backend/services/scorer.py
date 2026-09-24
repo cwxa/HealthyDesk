@@ -1,6 +1,7 @@
 import logging
 
 from config import HEAD_TILT_THRESHOLD, SHOULDER_DIFF_THRESHOLD, SPINE_ANGLE_THRESHOLD
+from services.rounding import round_int, round_1
 
 logger = logging.getLogger("neckguardian.scorer")
 
@@ -70,7 +71,110 @@ def metric_deduction(value: float, threshold: float, mild_hi: float, moderate_hi
     )
 
 
-def compute_score(head_angle: float, shoulder_diff: float, spine_angle: float) -> dict:
+# ---------------------------------------------------------------------------
+# 运动态（exercise）通道
+#
+# 静息态问「你对称吗」，运动态问「这个动作做到位了吗」。
+#
+# 这不是措辞差异，而是**判定方向相反**：康复动作的定义就是"把头摆到非中立位"。
+# 未分通道时的实测后果（用本文件真实函数跑出来）：
+#
+#     颈部左侧屈 8° / 12° / 20° / 30° → 75 / 64 / 45 / 35 分
+#     且 issues 依次为「头部轻微/明显/严重侧倾」
+#
+# 而正常颈椎侧屈活动度约 45° —— 也就是说**用户把这个动作做到位，就必然被判
+# 「头部严重侧倾」**，拿到 35–45 分，还会被语音批评（NeckActivity 的
+# speakPostureIssue 此前没有 mode 判断），这条低分又被写进活动记录，
+# 在 Dashboard 里渲染成一条红色记录。产品在惩罚用户做它要求做的事。
+#
+# 所以运动态用一套独立度量：只看「活动量」——各项相对各自阈值的倍数，取三者最大
+# ——再映射到 0–100 的达成度。它**不产出任何静息类 issues 文案**（「侧倾」「不平衡」
+# 「倾斜」在运动态是错的措辞），也不应触发语音批评（由前端保证）。
+#
+# 🔴 静息态不受任何影响：`compute_score(..., mode="monitor")` 与分通道前逐位相同，
+#    由 scripts/verify-scoring.mjs 的 21 常量 + 80 用例 + 439 帧守住。
+# ---------------------------------------------------------------------------
+
+MODE_MONITOR = "monitor"
+MODE_EXERCISE = "exercise"
+
+EXERCISE_ACTIVITY_START = 1.0   # 活动量达到 1 倍阈值 = 有效活动的起点（达标线）
+EXERCISE_ACTIVITY_FULL = 4.0    # 达到 4 倍阈值 = 充分活动（满分）
+EXERCISE_SCORE_BASE = 60.0      # 有效活动的基础分（与达标线同一处取值）
+
+
+def exercise_activity(head_angle: float, shoulder_diff: float, spine_angle: float) -> float:
+    """运动态活动量：三项相对各自静息阈值的倍数，取最大者。
+
+    复用静息阈值当标尺（而不是另立一套"典型活动幅度"），是为了让「活动量 1.0」
+    有明确含义：**该部位的偏离已经达到静息态的提醒线**，即"确实动起来了"。
+    """
+    return max(
+        head_angle / HEAD_TILT_THRESHOLD,
+        shoulder_diff / SHOULDER_DIFF_THRESHOLD,
+        spine_angle / SPINE_ANGLE_THRESHOLD,
+    )
+
+
+def _exercise_score(head_angle: float, shoulder_diff: float, spine_angle: float) -> dict:
+    activity = exercise_activity(head_angle, shoulder_diff, spine_angle)
+
+    if activity >= EXERCISE_ACTIVITY_FULL:
+        raw = float(SCORE_MAX)
+    elif activity >= EXERCISE_ACTIVITY_START:
+        raw = EXERCISE_SCORE_BASE + (SCORE_MAX - EXERCISE_SCORE_BASE) * (
+            (activity - EXERCISE_ACTIVITY_START) / (EXERCISE_ACTIVITY_FULL - EXERCISE_ACTIVITY_START)
+        )
+    else:
+        raw = EXERCISE_SCORE_BASE * (activity / EXERCISE_ACTIVITY_START)
+
+    # 用 round_int（统一口径）而不是内置 round()：本通道是新加的，
+    # 没有历史数值包袱，直接落在两端可精确复刻的口径上。
+    score = max(0, min(SCORE_MAX, round_int(max(0.0, raw))))
+
+    # ⚠️ 「达标与否」以**取整后的 score** 为准，而不是原始 activity：
+    # activity = 0.999 时 raw = 59.94 → 取整成 60（正好落在达标线上），
+    # 若换成用 activity 判定，就会出现「显示 60 分、却说幅度不足」的自相矛盾。
+    # 这也延续了本项目那条更根本的约束 —— 用户看到的数字与系统判定必须同源。
+    completed = score >= EXERCISE_SCORE_BASE
+    issues = [] if completed else ["动作幅度不足，再大一点"]
+
+    logger.debug(
+        "Exercise score=%d | head=%.1f° shoulder_diff=%.1f spine=%.1f° | activity=%.2f",
+        score, head_angle, shoulder_diff, spine_angle, activity,
+    )
+    return {
+        "score": score,
+        "issues": issues,
+        "head_angle": head_angle,
+        "shoulder_diff": shoulder_diff,
+        "spine_angle": spine_angle,
+        "mode": MODE_EXERCISE,
+        "activity": round_1(activity),
+        "completed": completed,
+    }
+
+
+def compute_score(
+    head_angle: float,
+    shoulder_diff: float,
+    spine_angle: float,
+    mode: str = MODE_MONITOR,
+) -> dict:
+    """按模式分发。
+
+    - `mode="monitor"`（默认）：静息坐姿评分，语义与历史版本**完全一致**。
+    - `mode="exercise"`：运动态通道，语义是「这个动作做到位了吗」，见上方说明。
+
+    不传 mode 时行为与旧签名逐位相同，因此所有既有调用点无需改动。
+    """
+    if mode == MODE_EXERCISE:
+        return _exercise_score(head_angle, shoulder_diff, spine_angle)
+    return _monitor_score(head_angle, shoulder_diff, spine_angle)
+
+
+def _monitor_score(head_angle: float, shoulder_diff: float, spine_angle: float) -> dict:
+    """静息态评分 —— 🔴 实现与返回结构必须与历史版本一字不变。"""
     head_excess = max(0, head_angle - HEAD_TILT_THRESHOLD)
     shoulder_excess = max(0, shoulder_diff - SHOULDER_DIFF_THRESHOLD)
     spine_excess = max(0, spine_angle - SPINE_ANGLE_THRESHOLD)

@@ -10,14 +10,21 @@
  * 内联副本一旦和源码漂移，「两端一致」就成了自我安慰：
  * 副本与源码可以各错各的，测试却全绿。
  *
- * 校验四层：
+ * 校验六层：
  *   a) 常量：Python 导出的评分常量 vs **从真实源码 bundle 读出的**常量，逐项相等
  *   b) 用例：每个用例的 score 与 issues 必须与 Python 完全一致（80 条，含全部档位边界）
  *   c) 平滑器：逐帧 EMA 序列的两端结果必须逐位相等（含 40 个取整平局点回归用例）
- *   d) 不变量硬断言：**出现任何提醒（issues 非空） ⟺ 分数 < 80**
+ *   d) 不变量硬断言（**仅静息态**）：出现任何提醒（issues 非空） ⟺ 分数 < 80
+ *   e) 运动态通道：score / activity / completed / issues 两端一致，
+ *      且**不得**出现静息类措辞（「侧倾」「不平衡」「倾斜」）；
+ *      运动态自己的不变量是「issues 非空 ⟺ 分数 < EXERCISE_SCORE_BASE」
+ *   f) 语音隔离：`speakPostureIssue` 的每一处调用都必须在 `mode === 'monitor'` 分支内
+ *      （运动态不得语音批评用户 —— 它在做它被要求做的事）
  *
- * 核心不变量 d) 是评分模型的约束，也是「提醒了却还显示 95 分」这类问题的根源，
+ * d) 是静息态模型的约束，也是「提醒了却还显示 95 分」这类问题的根源，
  * 所以它不是"顺便看看"，而是必须拦住发布的一条断言。
+ * e)/f) 是 2026-09 分通道后新增的：在此之前，做对康复动作的用户会被判
+ * 「头部严重侧倾」并收到语音批评 —— 产品在惩罚用户做它要求做的事。
  */
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -218,17 +225,110 @@ async function main() {
   console.log(`平滑器等价性：${frameTotal} 帧中 ${frameMismatch} 帧不一致（${sequences.length} 条序列）`)
   if (frameMismatch > 0) failed = true
 
-  // ---- d) 不变量 ----
+  // ---- d) 不变量（分域：只对静息态成立）----
+  // 「issues 非空 ⟺ 分数 < 80」是**静息态模型**的约束（它保证提醒与分数严格同步）。
+  // 运动态有自己的达标线（EXERCISE_SCORE_BASE），那条不变量不适用于它 —— 见 e)。
   if (invariantFail > 0) {
     console.error(`\n✗ 不变量被破坏：${invariantFail} 条不满足「有提醒 ⟺ 分数 < ${GOOD_SCORE}」`)
     for (const s of invariantSamples) console.error(`    ${s}`)
     failed = true
   } else {
-    console.log(`✓ 不变量成立：${cases.length} 条用例 + ${frameTotal} 帧平滑序列均满足「有提醒 ⟺ 分数 < ${GOOD_SCORE}」`)
+    console.log(`✓ 静息态不变量成立：${cases.length} 条用例 + ${frameTotal} 帧平滑序列均满足「有提醒 ⟺ 分数 < ${GOOD_SCORE}」`)
   }
 
+  // ---- e) 运动态通道 ----
+  // 运动态问的是「这个动作做到位了吗」，判定方向与静息态相反 ——
+  // 未分通道时，用户把「颈部左侧屈」做到 20° 会被判「头部严重侧倾」拿 45 分。
+  const exerciseCases = payload.exerciseCases ?? []
+  const BANNED_IN_EXERCISE = ['侧倾', '不平衡', '倾斜']
+  const exerciseBase = payload.constants.EXERCISE_SCORE_BASE
+  let exPass = 0
+  let exMismatch = 0
+  let exWordFail = 0
+  let exInvariantFail = 0
+  const exSamples = []
+
+  for (const c of exerciseCases) {
+    const { head, shoulder, spine } = c.input
+    const got = computeScore(head, shoulder, spine, 'exercise')
+
+    const ok =
+      got.score === c.score &&
+      JSON.stringify(got.issues) === JSON.stringify(c.issues) &&
+      got.activity === c.activity &&
+      got.completed === c.completed &&
+      got.mode === 'exercise'
+    if (ok) {
+      exPass++
+    } else {
+      exMismatch++
+      if (exMismatch <= 8) {
+        console.error(`✗ 运动态不一致 input=(head=${head}, shoulder=${shoulder}, spine=${spine})`)
+        console.error(`    Python: score=${c.score} activity=${c.activity} completed=${c.completed} issues=${JSON.stringify(c.issues)}`)
+        console.error(`    TS:     score=${got.score} activity=${got.activity} completed=${got.completed} issues=${JSON.stringify(got.issues)}`)
+      }
+    }
+
+    // 运动态**不得**出现静息类措辞：「头部严重侧倾」这类话在运动态是错的。
+    for (const w of BANNED_IN_EXERCISE) {
+      if (got.issues.some((i) => i.includes(w))) {
+        exWordFail++
+        if (exSamples.length < 8) {
+          exSamples.push(`运动态含静息类措辞「${w}」：head=${head} → ${JSON.stringify(got.issues)}`)
+        }
+      }
+    }
+
+    // 运动态自己的不变量：issues 非空 ⟺ 分数低于达标线。
+    if ((got.issues.length > 0) !== (got.score < exerciseBase)) {
+      exInvariantFail++
+      if (exSamples.length < 8) {
+        exSamples.push(`运动态不变量被破坏：score=${got.score} issues=${JSON.stringify(got.issues)}（达标线 ${exerciseBase}）`)
+      }
+    }
+  }
+
+  console.log(`\n运动态等价性：${exPass} 通过 / ${exMismatch} 失败（共 ${exerciseCases.length} 条，达标线 ${exerciseBase}）`)
+  if (exMismatch > 0) failed = true
+  if (exWordFail > 0) {
+    console.error(`✗ 运动态出现静息类措辞 ${exWordFail} 处`)
+    for (const s of exSamples) console.error(`    ${s}`)
+    failed = true
+  } else if (exerciseCases.length > 0) {
+    console.log(`✓ 运动态措辞干净：${exerciseCases.length} 条用例均不含「${BANNED_IN_EXERCISE.join('」「')}」`)
+  }
+  if (exInvariantFail > 0) {
+    console.error(`✗ 运动态不变量被破坏 ${exInvariantFail} 处`)
+    for (const s of exSamples) console.error(`    ${s}`)
+    failed = true
+  } else if (exerciseCases.length > 0) {
+    console.log(`✓ 运动态不变量成立：issues 非空 ⟺ 分数 < ${exerciseBase}`)
+  }
+
+  // ---- f) 语音隔离（源码级守卫）----
+  // 运动态**不得**调用 speakPostureIssue（会把「动作幅度不足」这种中性的
+  // 运动提示，变成对用户姿态的批评）。这条是 React 里的行为，node 侧没有渲染
+  // 环境，所以退一步做**源码断言**：每一处调用都必须落在 `mode === 'monitor'`
+  // 的条件块内。它拦不住所有写法，但足以拦住「有人删掉 mode 判断」这个回归。
+  const activitySrc = readFileSync(join(ROOT, 'src', 'pages', 'NeckActivity.tsx'), 'utf8')
+  const voiceCalls = [...activitySrc.matchAll(/speakPostureIssue\s*\(/g)]
+  let voiceFail = 0
+  if (voiceCalls.length === 0) {
+    console.error('✗ 语音隔离守卫失效：NeckActivity.tsx 里找不到 speakPostureIssue 调用，守卫已无法证明任何事情')
+    voiceFail++
+  }
+  for (const m of voiceCalls) {
+    const before = activitySrc.slice(Math.max(0, m.index - 400), m.index)
+    if (!before.includes("mode === 'monitor'")) {
+      voiceFail++
+      console.error('✗ speakPostureIssue 未被 mode === \'monitor\' 保护（运动态会语音批评用户）')
+    }
+  }
+  if (voiceFail > 0) failed = true
+  else console.log(`✓ 语音隔离：${voiceCalls.length} 处 speakPostureIssue 调用均在静息态分支内`)
+
   if (failed) process.exit(1)
-  console.log('✓ 前端 TS 与 Python 后端的评分/平滑逻辑完全一致')
+  console.log('✓ 前端 TS 与 Python 后端的评分/平滑/运动态逻辑完全一致')
 }
 
 main()

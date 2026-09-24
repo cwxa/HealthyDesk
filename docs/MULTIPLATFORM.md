@@ -107,7 +107,8 @@ npm run verify:parity     # 21 常量 + 80 评分用例 + 439 帧平滑 + 8 角�
                           # + 部位健康度 9 常量 + 3 映射 + 18 用例
 ```
 
-核心不变量：**出现任何姿态提醒 ⟺ 分数 < 80**。
+核心不变量：**出现任何姿态提醒 ⟺ 分数 < 80**（⚠️ 仅静息态；活动进行中走运动态
+通道，达标线是 `EXERCISE_SCORE_BASE = 60`，见 DEVELOPMENT.md §4.1.1）。
 
 ⚠️ 取整只有两个口径，都在 `backend/services/rounding.py` 与
 `src/platform/scoringModel.ts` 里成对定义：引擎内角度用 `pyRound(x*100)/100`，

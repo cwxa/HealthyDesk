@@ -126,7 +126,7 @@ export default function NeckActivity() {
   const [buildTag, setBuildTag] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect } = usePoseEngine()
+  const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect, setScoreMode } = usePoseEngine()
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
@@ -267,28 +267,46 @@ export default function NeckActivity() {
     return () => clearInterval(intervalRef.current)
   }, [cameraReady, connected, captureAndSend])
 
+  /**
+   * 把当前模式同步给姿态引擎。
+   *
+   * 运动态走**独立评分通道**：语义是「这个动作做到位了吗」，而不是「你对称吗」。
+   * 不分通道时，用户把「颈部左侧屈」做到 20°（正常活动度约 45°）会被判
+   * 「头部严重侧倾」、拿 45 分，还会被语音批评 —— 产品在惩罚用户做它要求做的事。
+   */
+  useEffect(() => {
+    setScoreMode(mode === 'exercise' ? 'exercise' : 'monitor')
+  }, [mode, setScoreMode])
+
   // Pose result handling
   useEffect(() => {
     onPoseResult((result: PoseResult) => {
       setLatestResult(result)
-      if (result.type === 'pose' && result.issues && result.issues.length > 0) {
+      // 语音批评**只在静息态**：运动态的 issues（"动作幅度不足"）不是姿态问题，
+      // 更不该用「检测到头部严重侧倾，请注意调整坐姿。」去批评一个正在做拉伸的人。
+      if (mode === 'monitor' && result.type === 'pose' && result.issues && result.issues.length > 0) {
         const severeOnly = result.issues.filter(i => i.includes('严重'))
         if (severeOnly.length > 0) speakPostureIssue(severeOnly)
       }
       if (result.type === 'pose' && result.score !== undefined) {
         if (mode === 'exercise') {
+          // 收的是**运动态通道**的分数（动作达成度），不是活动期间的静息姿态分。
           setExScores(p => { const next = [...p, result.score!]; exScoresRef.current = next; return next })
-        }
-        const now = Date.now()
-        if (now - lastRecordRef.current >= 1500) {
-          lastRecordRef.current = now
-          data.recordPosture({
-            timestamp: result.timestamp,
-            head_angle: result.head_angle!,
-            shoulder_diff: result.shoulder_diff!,
-            spine_angle: result.spine_angle!,
-            score: result.score!,
-          }).catch(() => {})
+        } else {
+          // 只记录**静息坐姿**采样。活动期间写库会同时污染两处：
+          // 「今日平均分」与「部位健康度」会把"用户在做动作"当成"不良姿态"
+          // （康复动作本就要求偏离中立位），进而显示成一片红色的差数据。
+          const now = Date.now()
+          if (now - lastRecordRef.current >= 1500) {
+            lastRecordRef.current = now
+            data.recordPosture({
+              timestamp: result.timestamp,
+              head_angle: result.head_angle!,
+              shoulder_diff: result.shoulder_diff!,
+              spine_angle: result.spine_angle!,
+              score: result.score!,
+            }).catch(() => {})
+          }
         }
       }
     })
@@ -430,7 +448,8 @@ export default function NeckActivity() {
     phase: mode === 'done' ? 'done' : 'active',
     current: exCurrent,
     timeLeft: exTimeLeft,
-    poseScore: score,
+    // 活动期间这个分来自**运动态通道**（动作达成度），不是静息姿态分
+    activityScore: score,
     hasPose: latestResult?.type === 'pose',
     sessionScores: exScores,
     totalDur,

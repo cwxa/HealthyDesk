@@ -8,8 +8,14 @@ export interface ExerciseState {
   phase: 'active' | 'done'
   current: number
   timeLeft: number
-  poseScore: number
+  /**
+   * 实时动作达成度（0–100），来自**运动态评分通道**。
+   * 刻意不叫 `poseScore`：活动期间用户本来就应该把头摆到非中立位，
+   * 拿静息姿态分去衡量运动中的人会得出"姿态异常"的反向结论。
+   */
+  activityScore: number
   hasPose: boolean
+  /** 本次活动的达成度采样序列（每个采样点是运动态通道的分数）。 */
   sessionScores: number[]
   totalDur: number
   progress: number
@@ -33,7 +39,7 @@ interface Props {
 
 export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: Props) {
   const navigate = useNavigate()
-  const { phase, current, timeLeft, poseScore, hasPose, sessionScores, totalDur, progress } = state
+  const { phase, current, timeLeft, activityScore, hasPose, sessionScores, totalDur, progress } = state
   const ex = exercises[current]
 
   if (phase === 'done') {
@@ -50,7 +56,7 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
         <div style={{ display: 'flex', gap: 28 }}>
           <div style={{ textAlign: 'center' }}>
             <p style={{ fontSize: 26, fontWeight: 700, color: '#2E7D32' }}>{sessionScores.length > 0 ? avg : '--'}</p>
-            <p style={{ fontSize: 12, color: '#999' }}>平均评分</p>
+            <p style={{ fontSize: 12, color: '#999' }}>平均达成度</p>
           </div>
           <div style={{ textAlign: 'center' }}>
             <p style={{ fontSize: 26, fontWeight: 700, color: '#2E7D32' }}>{totalDur}s</p>
@@ -136,9 +142,9 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
 
       {/* Live score */}
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
-        <p style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>实时姿态评分</p>
+        <p style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>实时动作达成度</p>
         <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <ScoreGauge score={poseScore} size={80} hasData={hasPose} />
+          <ScoreGauge score={activityScore} size={80} hasData={hasPose} />
         </div>
       </div>
 

@@ -15,6 +15,10 @@ import {
   SPINE_MODERATE_HI,
   pyRound,
   metricDeduction,
+  exerciseScore,
+  MODE_MONITOR,
+  MODE_EXERCISE,
+  type ScoreMode,
 } from './scoringModel'
 
 /**
@@ -112,8 +116,16 @@ function spineAngle(leftShoulder: LM, rightShoulder: LM, leftHip: LM, rightHip: 
   return Math.abs((Math.atan2(dx, dy) * 180) / Math.PI)
 }
 
-/** 评分（与 scorer.py 等价）。 */
-function computeScore(head: number, shoulder: number, spine: number) {
+/**
+ * 评分（与 scorer.py 等价）。
+ *
+ * `mode="monitor"`（默认）是静息坐姿评分，语义与历史版本一致；
+ * `mode="exercise"` 走运动态通道（「这个动作做到位了吗」），见 scoringModel 的说明。
+ * 不传 mode 时行为不变，所有既有调用点无需改动。
+ */
+function computeScore(head: number, shoulder: number, spine: number, mode: ScoreMode = MODE_MONITOR) {
+  if (mode === MODE_EXERCISE) return exerciseScore(head, shoulder, spine)
+
   const headExcess = Math.max(0, head - HEAD_TILT_THRESHOLD)
   const shoulderExcess = Math.max(0, shoulder - SHOULDER_DIFF_THRESHOLD)
   const spineExcess = Math.max(0, spine - SPINE_ANGLE_THRESHOLD)
@@ -156,6 +168,8 @@ export class LocalPoseEngine {
   private smoother = new PoseSmoother()
   private loading: Promise<void> | null = null
   private lastVideoTime = -1
+  /** 上一次推理用的评分模式，用于在切换时清空平滑状态。 */
+  private lastMode: ScoreMode | null = null
 
   get ready(): boolean {
     return this.landmarker !== null
@@ -202,8 +216,10 @@ export class LocalPoseEngine {
    * 处理一帧视频。
    * @param video 视频元素
    * @param timestampMs 单调递增的时间戳（用 performance.now()）
+   * @param mode 评分模式：`monitor`（静息坐姿，默认）或 `exercise`（活动中，
+   *   问「这个动作做到位了吗」而不是「你对称吗」）。见 scoringModel 的说明。
    */
-  detect(video: HTMLVideoElement, timestampMs: number): PoseResult | null {
+  detect(video: HTMLVideoElement, timestampMs: number, mode: ScoreMode = MODE_MONITOR): PoseResult | null {
     if (!this.landmarker) return null
     // 同一帧不重复推理
     if (video.currentTime === this.lastVideoTime) return null
@@ -250,8 +266,16 @@ export class LocalPoseEngine {
       spine_angle: pyRound(spineAngle(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER], lms[LEFT_HIP], lms[RIGHT_HIP]) * 100) / 100,
     }
 
+    // 切换模式时清空平滑状态：EMA 是跨帧的，不清空就会拿「运动中」的平滑值
+    // 去评「静息态」（或反过来），表现为活动结束后约 1 秒内的虚假报警。
+    // 与后端 camera_ws.py 的处理保持一致。
+    if (this.lastMode !== mode) {
+      this.smoother.reset()
+      this.lastMode = mode
+    }
+
     const smoothed = this.smoother.update(raw) as { head_angle: number; shoulder_diff: number; spine_angle: number }
-    const scored = computeScore(smoothed.head_angle, smoothed.shoulder_diff, smoothed.spine_angle)
+    const scored = computeScore(smoothed.head_angle, smoothed.shoulder_diff, smoothed.spine_angle, mode)
 
     return {
       type: 'pose',

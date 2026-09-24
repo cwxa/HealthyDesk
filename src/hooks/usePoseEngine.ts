@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasLocalBackend } from '../platform/runtime'
 import { useWebSocket } from './useWebSocket'
 import { localPoseEngine } from '../platform/localPoseEngine'
+import { MODE_MONITOR, type ScoreMode } from '../platform/scoringModel'
 import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
 
@@ -41,6 +42,11 @@ export function usePoseEngine() {
   const rafRef = useRef<number>(0)
   const onPoseRef = useRef<((r: PoseResult) => void) | null>(null)
   const runningRef = useRef(false)
+  /**
+   * 当前评分模式。用 ref 而不是 state：推理循环（移动端 rAF / 桌面端定时发帧）
+   * 不该因为模式切换而重建 —— 重建循环会掐掉正在跑的摄像头链路。
+   */
+  const modeRef = useRef<ScoreMode>(MODE_MONITOR)
 
   const emit = useCallback((r: PoseResult) => {
     setPoseResult(r)
@@ -66,7 +72,7 @@ export function usePoseEngine() {
     if (!runningRef.current) return
     const video = videoRef.current
     if (video && video.readyState >= 2) {
-      const r = localPoseEngine.detect(video, performance.now())
+      const r = localPoseEngine.detect(video, performance.now(), modeRef.current)
       if (r) emit(r)
     }
     rafRef.current = requestAnimationFrame(localLoop)
@@ -78,7 +84,7 @@ export function usePoseEngine() {
     const video = videoRef.current
     if (!video || video.readyState < 2) return
     if (document.hidden) return
-    const r = localPoseEngine.detect(video, performance.now())
+    const r = localPoseEngine.detect(video, performance.now(), modeRef.current)
     if (r) emit(r)
   }, [emit])
 
@@ -138,6 +144,26 @@ export function usePoseEngine() {
     onPoseRef.current = cb
   }, [])
 
+  /**
+   * 切换评分模式（静息坐姿 / 活动中）。
+   *
+   * 页面在「开始活动」「结束活动」时调用。写进 ref 而非 state：模式切换不应触发
+   * 重渲染，更不应重建推理循环 —— 那会掐掉正在跑的摄像头链路。
+   */
+  const setScoreMode = useCallback((m: ScoreMode) => {
+    modeRef.current = m
+  }, [])
+
+  /**
+   * 发帧时带上当前模式。
+   * 桌面端的评分由 Python 后端算，后端必须知道用户此刻在做什么，
+   * 否则会拿「你对称吗」去评「正在做康复动作的人」。
+   */
+  const sendFrame = useCallback(
+    (base64Data: string) => wsSendFrame(base64Data, modeRef.current),
+    [wsSendFrame],
+  )
+
   useEffect(() => {
     return () => {
       runningRef.current = false
@@ -153,10 +179,11 @@ export function usePoseEngine() {
     onPoseResult,
     attachVideo,
     stop,
+    setScoreMode,
     /** 兼容桌面端旧签名 */
     connect: wsConnect,
     disconnect: wsDisconnect,
-    sendFrame: wsSendFrame,
+    sendFrame,
     isLocal: useLocal,
   }
 }

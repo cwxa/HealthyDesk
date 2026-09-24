@@ -72,6 +72,74 @@ export function pyRound1(x: number): number {
   return r / 10
 }
 
+// ---------------------------------------------------------------------------
+// 运动态（exercise）通道
+//
+// 静息态问「你对称吗」，运动态问「这个动作做到位了吗」。这不是措辞差异，
+// 而是**判定方向相反**：康复动作的定义就是"把头摆到非中立位"，未分通道时
+// 用户把「颈部左侧屈」做到 20° 会被判「头部严重侧倾」并拿到 45 分
+// （还伴随语音批评与一条红色活动记录）—— 产品在惩罚用户做它要求做的事。
+//
+// 运动态只看「活动量」：各项相对各自阈值的倍数，取最大，映射到 0–100。
+// 🔴 它不产出生静息类 issues（「侧倾」「不平衡」「倾斜」在运动态是错的措辞）。
+// 与后端 `services/scorer.py` 的 `_exercise_score()` 逐位等价。
+// ---------------------------------------------------------------------------
+
+export type ScoreMode = 'monitor' | 'exercise'
+// 显式标注为 ScoreMode（而不是让 TS 从字面量推断）：否则对象字面量里的
+// `mode: MODE_EXERCISE` 会被 widen 成 `string`，与 PoseResult 的类型对不上。
+export const MODE_MONITOR: ScoreMode = 'monitor'
+export const MODE_EXERCISE: ScoreMode = 'exercise'
+
+export const EXERCISE_ACTIVITY_START = 1.0
+export const EXERCISE_ACTIVITY_FULL = 4.0
+export const EXERCISE_SCORE_BASE = 60.0
+
+/** 运动态活动量：三项相对各自静息阈值的倍数，取最大者。 */
+export function exerciseActivity(head: number, shoulder: number, spine: number): number {
+  return Math.max(
+    head / HEAD_TILT_THRESHOLD,
+    shoulder / SHOULDER_DIFF_THRESHOLD,
+    spine / SPINE_ANGLE_THRESHOLD,
+  )
+}
+
+/** 运动态评分：活动量达成度。 */
+export function exerciseScore(head: number, shoulder: number, spine: number) {
+  const activity = exerciseActivity(head, shoulder, spine)
+
+  let raw: number
+  if (activity >= EXERCISE_ACTIVITY_FULL) {
+    raw = SCORE_MAX
+  } else if (activity >= EXERCISE_ACTIVITY_START) {
+    raw =
+      EXERCISE_SCORE_BASE +
+      (SCORE_MAX - EXERCISE_SCORE_BASE) *
+        ((activity - EXERCISE_ACTIVITY_START) / (EXERCISE_ACTIVITY_FULL - EXERCISE_ACTIVITY_START))
+  } else {
+    raw = EXERCISE_SCORE_BASE * (activity / EXERCISE_ACTIVITY_START)
+  }
+
+  const score = Math.max(0, Math.min(SCORE_MAX, pyRound(Math.max(0, raw))))
+
+  // ⚠️ 「达标与否」以**取整后的 score** 为准（与后端同一口径）：
+  // activity = 0.999 时 raw = 59.94 → 取整成 60（正好落在达标线上），
+  // 若改用 activity 判定就会出现「显示 60 分、却说幅度不足」的自相矛盾。
+  const completed = score >= EXERCISE_SCORE_BASE
+  const issues: string[] = completed ? [] : ['动作幅度不足，再大一点']
+
+  return {
+    score,
+    issues,
+    head_angle: head,
+    shoulder_diff: shoulder,
+    spine_angle: spine,
+    mode: MODE_EXERCISE,
+    activity: pyRound1(activity),
+    completed,
+  }
+}
+
 /**
  * 单项扣分，分段与 issues 的三档严格一致。
  * 等价于 scorer.py 的 `metric_deduction()`。

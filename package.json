@@ -14,7 +14,7 @@
     "verify:parity": "node scripts/verify-scoring.mjs && node scripts/verify-angles.mjs && node scripts/verify-part-health.mjs",
     "verify:backend": "node scripts/verify-backend-binary.js",
     "verify:source": "node scripts/verify-same-source.mjs",
-    "verify:all": "node scripts/verify-scoring.mjs && node scripts/verify-angles.mjs && node scripts/set-version.js --check",
+    "verify:all": "npm run verify:parity && node scripts/set-version.js --check",
     "set-version": "node scripts/set-version.js",
 
     "build": "npm run build:desktop",

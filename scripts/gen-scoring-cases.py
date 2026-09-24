@@ -32,6 +32,65 @@ compute_score = _scorer.compute_score
 PoseSmoother = _smoother.PoseSmoother
 EMA_ALPHA = _smoother.EMA_ALPHA
 
+
+# ---------------------------------------------------------------------------
+# 运动态（exercise）通道用例
+#
+# 背景：未分通道时，用户把「颈部左侧屈」做到 20°（正常颈椎侧屈活动度约 45°）
+# 会被判「头部严重侧倾」、拿 45 分，还会被语音批评 —— 产品在惩罚用户做它要求
+# 做的事。分通道后运动态问的是「这个动作做到位了吗」。
+#
+# 这条守卫要拦住三件事：
+#   a) 两端数值不一致（activity / score / completed）
+#   b) 运动态又冒出了静息类措辞（「侧倾」「不平衡」「倾斜」）
+#   c) 运动态的不变量被破坏：issues 非空 ⟺ score < EXERCISE_SCORE_BASE
+# ---------------------------------------------------------------------------
+def _exercise_cases():
+    start = _scorer.EXERCISE_ACTIVITY_START
+    full = _scorer.EXERCISE_ACTIVITY_FULL
+    cases = []
+
+    # 头部主导：以「颈部侧屈」为代表，覆盖 0 → 远超满分的整段
+    for h in (0.0, 1.0, 2.5, 4.99, 5.0, 5.01, 8.0, 10.0, 12.0, 15.0,
+              19.99, 20.0, 20.01, 25.0, 30.0, 45.0, 60.0):
+        cases.append((h, 0.0, 2.0))
+
+    # 活动量的两个关键边界：恰好 start（1 倍阈值）与恰好 full（4 倍阈值）
+    cases.append((5.0, 4.0, 10.0))      # 三项都恰好 1.0 → 达标边界
+    cases.append((20.0, 16.0, 40.0))    # 三项都恰好 4.0 → 满分边界
+    cases.append((5.0, 0.0, 0.0))
+    cases.append((20.0, 0.0, 0.0))
+    cases.append((4.99, 0.0, 0.0))
+    cases.append((20.01, 0.0, 0.0))
+
+    # 肩部主导 / 脊柱主导：验证「取三项最大值」这一条
+    cases.append((0.0, 3.99, 2.0))
+    cases.append((0.0, 4.0, 2.0))
+    cases.append((0.0, 16.0, 2.0))
+    cases.append((0.0, 30.0, 2.0))
+    cases.append((0.0, 0.0, 39.99))
+    cases.append((0.0, 0.0, 40.0))
+    cases.append((0.0, 0.0, 90.0))
+
+    # 浮点敏感：activity 的多位小数
+    cases.append((3.33, 2.77, 6.19))
+    cases.append((7.77, 6.66, 13.33))
+
+    out = []
+    for head, shoulder, spine in cases:
+        r = compute_score(head, shoulder, spine, mode=_scorer.MODE_EXERCISE)
+        out.append({
+            "input": {"head": head, "shoulder": shoulder, "spine": spine},
+            "score": r["score"],
+            "issues": r["issues"],
+            "activity": r["activity"],
+            "completed": r["completed"],
+            "mode": r["mode"],
+            "expected_start": start,
+            "expected_full": full,
+        })
+    return out
+
 CASES = [
     # (head_angle, shoulder_diff, spine_angle) —— 覆盖各档位边界
     (0.0, 0.0, 0.0),        # 完美姿势
@@ -197,11 +256,16 @@ def main():
             "SHOULDER_MODERATE_HI": _scorer.SHOULDER_MODERATE_HI,
             "SPINE_MILD_HI": _scorer.SPINE_MILD_HI,
             "SPINE_MODERATE_HI": _scorer.SPINE_MODERATE_HI,
+            # ---- 运动态通道常量（前端若漏同步会在这里被比对出来）----
+            "EXERCISE_ACTIVITY_START": _scorer.EXERCISE_ACTIVITY_START,
+            "EXERCISE_ACTIVITY_FULL": _scorer.EXERCISE_ACTIVITY_FULL,
+            "EXERCISE_SCORE_BASE": _scorer.EXERCISE_SCORE_BASE,
         },
         # 平滑器常量与逐帧期望值
         "smootherConstants": {"EMA_ALPHA": EMA_ALPHA},
         "smootherSequences": _sequences(),
         "cases": out,
+        "exerciseCases": _exercise_cases(),
     }
     # 输出到 stdout，供 node 侧读取比对
     print(json.dumps(payload, ensure_ascii=False, indent=2))

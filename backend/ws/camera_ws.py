@@ -8,7 +8,7 @@ import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services.pose_detector import pose_detector
-from services.scorer import compute_score
+from services.scorer import MODE_EXERCISE, MODE_MONITOR, compute_score
 from services.scheduler import record_break
 # 平滑器单独成模块（要参与双端等价性验证，见 backend/services/smoother.py 顶部说明）
 from services.smoother import PoseSmoother
@@ -41,6 +41,7 @@ async def camera_websocket(ws: WebSocket):
             await ws.send_json({"type": "ready", "message": "MediaPipe ready"})
 
     smoother = PoseSmoother()
+    last_mode = MODE_MONITOR
 
     try:
         while True:
@@ -62,10 +63,28 @@ async def camera_websocket(ws: WebSocket):
                         "shoulder_diff": pose_result["shoulder_diff"],
                         "spine_angle": pose_result["spine_angle"],
                     })
+                    # 评分模式由前端随帧带上：桌面端的评分在**这里**算，
+                    # 后端必须知道用户此刻是在「静息坐姿」还是「正在做康复动作」。
+                    # 不分模式时，用户把颈部侧屈做到 20° 会被判「头部严重侧倾」——
+                    # 康复动作本就要求偏离中立位，静息判定用在运动中是反的。
+                    # 只认 'exercise'，其余（含旧版前端不带该字段）一律回落静息态，
+                    # 与分通道前的行为完全一致。
+                    mode = msg.get("mode")
+                    if mode != MODE_EXERCISE:
+                        mode = MODE_MONITOR
+
+                    if mode != last_mode:
+                        # 切换模式时清空平滑状态：EMA 是跨帧的，不清空就会拿
+                        # 「运动中」的平滑值去评「静息态」（或反过来），
+                        # 表现为切换后约 1 秒内的虚假报警。
+                        smoother.reset()
+                        last_mode = mode
+
                     scored = compute_score(
                         smoothed["head_angle"],
                         smoothed["shoulder_diff"],
                         smoothed["spine_angle"],
+                        mode=mode,
                     )
                     response = {
                         "type": "pose",

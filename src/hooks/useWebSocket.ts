@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { PoseResult } from '../types'
+import { MODE_MONITOR, type ScoreMode } from '../platform/scoringModel'
 
 const WS_URL = 'ws://127.0.0.1:18920/ws/camera'
 const RECONNECT_BASE_DELAY = 1000
@@ -113,9 +114,16 @@ export function useWebSocket() {
     setConnected(false)
   }, [])
 
-  const sendFrame = useCallback((base64Data: string) => {
+  /**
+   * 发送一帧。
+   *
+   * `mode` 随帧一起带给后端：桌面端的评分在 Python 后端算，后端必须知道用户
+   * 此刻是在「静息坐姿」还是「正在做康复动作」，否则会拿静息判定去评运动中的人
+   * —— 那会让做对动作的用户被判「头部严重侧倾」。
+   */
+  const sendFrame = useCallback((base64Data: string, mode: ScoreMode = MODE_MONITOR) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'frame', data: base64Data }))
+      wsRef.current.send(JSON.stringify({ type: 'frame', data: base64Data, mode }))
     }
   }, [])
 
