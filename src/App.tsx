@@ -9,6 +9,7 @@ import Settings from './pages/Settings'
 import { useApi } from './hooks/useApi'
 import { isMobile } from './platform/runtime'
 import { localReminder } from './platform/localReminder'
+import { maintainLocalData } from './platform/localMaintenance'
 import { data } from './platform/dataLayer'
 import { NeckIcon } from './components/icons'
 
@@ -38,6 +39,14 @@ function AppShell() {
     // 移动端没有 Electron 后端进程；稍作延时确保本地数据层可用
     const timer = setTimeout(() => setBackendReady(true), mobile ? 300 : 5000)
     return () => clearTimeout(timer)
+  }, [mobile])
+
+  // 移动端：启动即做一次数据维护（先日聚合、后清理超期原始采样）。
+  // 桌面端由后端 FastAPI 的 lifespan 做同一件事（backend/services/retention.py）——
+  // 两端各有一次，语义相同。失败不影响应用可用性（maintainLocalData 内部已兜住）。
+  useEffect(() => {
+    if (!mobile) return
+    void maintainLocalData()
   }, [mobile])
 
   useEffect(() => {

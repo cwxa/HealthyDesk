@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from db.database import get_db
 from services.scorer import compute_score
+from services.rounding import round_1
 
 logger = logging.getLogger("neckguardian.api.posture")
 router = APIRouter(tags=["posture"])
@@ -53,13 +54,15 @@ async def get_posture_history(limit: int = 100, offset: int = 0):
 async def get_posture_average(days: int = 7):
     db = await get_db()
     try:
+        # 日期窗口按**本地自然日**（与 /stats/*、与移动端一致）；
+        # 取整走统一口径 round_1，不用内置 round（两端平局点会分叉）。
         cursor = await db.execute(
             "SELECT AVG(score) as avg_score, COUNT(*) as count "
-            "FROM posture_score WHERE timestamp >= date('now', ?)",
+            "FROM posture_score WHERE date(timestamp, 'localtime') >= date('now', 'localtime', ?)",
             (f"-{days} days",),
         )
         row = await cursor.fetchone()
-        avg = round(row["avg_score"], 1) if row["avg_score"] else 0
+        avg = round_1(row["avg_score"]) if row["avg_score"] else 0
         return {"average_score": avg, "days": days, "count": row["count"]}
     finally:
         await db.close()
@@ -70,12 +73,12 @@ async def get_posture_trend(days: int = 7):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT date(timestamp) as day, AVG(score) as avg_score "
-            "FROM posture_score WHERE timestamp >= date('now', ?) "
+            "SELECT date(timestamp, 'localtime') as day, AVG(score) as avg_score "
+            "FROM posture_score WHERE date(timestamp, 'localtime') >= date('now', 'localtime', ?) "
             "GROUP BY day ORDER BY day",
             (f"-{days} days",),
         )
         rows = await cursor.fetchall()
-        return [{"day": r["day"], "avg_score": round(r["avg_score"], 1)} for r in rows]
+        return [{"day": r["day"], "avg_score": round_1(r["avg_score"])} for r in rows]
     finally:
         await db.close()

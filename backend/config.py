@@ -26,5 +26,13 @@ SPINE_ANGLE_THRESHOLD = 10.0
 MIN_REMINDER_INTERVAL = 2
 MAX_REMINDER_INTERVAL = 120
 
+# ---- 数据保留（ROADMAP 需求 4）----
+# 原始姿态采样保留天数，超期后只保留 posture_daily 的日聚合（见 services/retention.py）。
+# 🔴 必须 >= 任何展示窗口（当前最大是周报的 7 天），否则图表会缺口。
+# 前端同值常量：src/platform/dailyAgg.ts :: RETENTION_DAYS（由 verify-daily-agg.mjs 对拍）。
+RETENTION_DAYS = 30
+# 后台维护（聚合 + 清理）的执行间隔，分钟。
+MAINTENANCE_INTERVAL_MINUTES = 30
+
 # 可选的 DeepSeek 模型（前端下拉展示；也允许用户手动填写其它模型名）
 AVAILABLE_MODELS = ["deepseek-chat", "deepseek-reasoner"]

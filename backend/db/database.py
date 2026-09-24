@@ -2,6 +2,7 @@ import aiosqlite
 import logging
 import os
 from config import DB_PATH
+from db.migrations import apply_migrations, current_version, LATEST_VERSION
 
 logger = logging.getLogger("neckguardian.db")
 
@@ -16,47 +17,20 @@ async def get_db():
 
 
 async def init_db():
+    """建库 / 升级到最新 schema。
+
+    结构定义与版本演进全部在 `db/migrations.py`，这里只负责调用 ——
+    ⚠️ 不要把建表 SQL 挪回本文件：此前正是因为它写成一串
+    `CREATE TABLE IF NOT EXISTS`，导致加字段静默失败（表已存在就整条跳过）。
+    """
     os.makedirs(DB_DIR, exist_ok=True)
     db = await aiosqlite.connect(DB_PATH)
-    await db.executescript("""
-        CREATE TABLE IF NOT EXISTS usage_record (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL UNIQUE,
-            usage_minutes INTEGER NOT NULL DEFAULT 0,
-            break_count INTEGER NOT NULL DEFAULT 0
-        );
+    db.row_factory = aiosqlite.Row
+    try:
+        version = await apply_migrations(db)
+        logger.info("Database initialized at %s (schema v%d)", DB_PATH, version)
+    finally:
+        await db.close()
 
-        CREATE TABLE IF NOT EXISTS posture_score (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            head_angle REAL NOT NULL,
-            shoulder_diff REAL NOT NULL,
-            spine_angle REAL NOT NULL,
-            score INTEGER NOT NULL
-        );
 
-        CREATE TABLE IF NOT EXISTS activity_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            activity_type TEXT NOT NULL DEFAULT 'exercise',
-            exercise_count INTEGER NOT NULL DEFAULT 0,
-            duration_sec INTEGER NOT NULL DEFAULT 0,
-            avg_score INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('reminder_interval', '30');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_enabled', 'false');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start', 'false');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('voice_enabled', 'true');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_api_key', '');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_base_url', '');
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('deepseek_model', 'deepseek-chat');
-    """)
-    await db.commit()
-    await db.close()
-    logger.info("Database initialized at %s", DB_PATH)
+__all__ = ["get_db", "init_db", "current_version", "LATEST_VERSION", "DB_DIR"]
