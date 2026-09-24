@@ -50,17 +50,12 @@ async function loadFrontendSource() {
     globalThis.document = { baseURI: 'https://localhost/' }
   }
 
+  // 评分常量现在统一在 scoringModel.ts（localPoseEngine 只是使用方），
+  // 所以常量从该模块整体取出；EMA_ALPHA 属于平滑器，仍在引擎模块内。
   const EXPOSE = `
 export { computeScore as __computeScore, PoseSmoother as __PoseSmoother };
-export const __constants = {
-  HEAD_TILT_THRESHOLD, SHOULDER_DIFF_THRESHOLD, SPINE_ANGLE_THRESHOLD,
-  WARN_ZONE_RATIO, WARN_ZONE_MAX, SECONDARY_WEIGHT,
-  MILD_BASE, MILD_MAX, MODERATE_BASE, MODERATE_MAX, SEVERE_BASE, SEVERE_MAX,
-  SCORE_MIN, SCORE_MAX,
-  HEAD_MILD_HI, HEAD_MODERATE_HI, SHOULDER_MILD_HI, SHOULDER_MODERATE_HI,
-  SPINE_MILD_HI, SPINE_MODERATE_HI,
-  EMA_ALPHA,
-};
+import * as __scoringModel from './scoringModel';
+export const __constants = { ...__scoringModel, EMA_ALPHA };
 `
 
   const built = await esbuild.build({

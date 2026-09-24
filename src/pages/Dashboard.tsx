@@ -2,13 +2,19 @@ import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
 import { isMobile } from '../platform/runtime'
+import type { PartHealth } from '../platform/partHealth'
 import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
 import AIAnalysisPanel from '../components/AIAnalysisPanel'
 import type { ActivityRecord, WeeklyReport as WeeklyReportType } from '../types'
 import { TrendingUpIcon, ActivityIcon, BarChart2Icon, CheckIcon, MonitorIcon, ClockIcon, NeckIcon, FlameIcon } from '../components/icons'
 
-interface Summary { today_activities: number; today_avg: number }
+interface Summary {
+  today_activities: number
+  today_avg: number
+  /** 三个部位各自的真实聚合；后端与移动端 localStats 都提供（旧数据缺失时为 undefined）。 */
+  part_health?: PartHealth
+}
 
 export default function Dashboard() {
   const { get } = useApi()
@@ -91,9 +97,12 @@ export default function Dashboard() {
           <ScoreGauge score={summary?.today_avg ?? 0} size={80} hasData={summary?.today_avg !== undefined} />
           <div style={{ flex: 1 }}>
             <p style={{ fontSize: 14, fontWeight: 600, color: '#333', marginBottom: 10 }}>健康指数</p>
-            <HealthBar label="头部" value={85} color="#4CAF50" />
-            <HealthBar label="肩部" value={summary?.today_avg ? Math.min(100, summary.today_avg + 5) : 0} color="#2196F3" />
-            <HealthBar label="脊柱" value={summary?.today_avg ?? 0} color="#FF9800" />
+            {/* 三个值均来自 posture_score 的分项字段真实聚合（后端 part_health.py /
+                移动端 partHealth.ts），此前头部写死 85、肩部凭空 +5、脊柱直接用总分。
+                无采样时为 null → 显示「暂无数据」，而不是被误读成「健康度 0」。 */}
+            <HealthBar label="头部" value={summary?.part_health?.head} color="#4CAF50" />
+            <HealthBar label="肩部" value={summary?.part_health?.shoulder} color="#2196F3" />
+            <HealthBar label="脊柱" value={summary?.part_health?.spine} color="#FF9800" />
           </div>
         </motion.div>
 
@@ -245,20 +254,26 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function HealthBar({ label, value, color }: { label: string; value: number; color: string }) {
-  const pct = Math.max(0, Math.min(100, value))
+function HealthBar({ label, value, color }: { label: string; value: number | null | undefined; color: string }) {
+  // 无数据（今日还没有任何姿态采样）与「健康度 0」是两件事，不能都用 0 表示。
+  const hasData = typeof value === 'number' && Number.isFinite(value)
+  const pct = hasData ? Math.max(0, Math.min(100, value)) : 0
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
       <span style={{ fontSize: 11, color: '#999', width: 28 }}>{label}</span>
       <div style={{ flex: 1, height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden' }}>
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${pct}%` }}
-          transition={{ duration: 0.8, delay: 0.3 }}
-          style={{ height: '100%', borderRadius: 3, background: color }}
-        />
+        {hasData && (
+          <motion.div
+            initial={{ width: 0 }}
+            animate={{ width: `${pct}%` }}
+            transition={{ duration: 0.8, delay: 0.3 }}
+            style={{ height: '100%', borderRadius: 3, background: color }}
+          />
+        )}
       </div>
-      <span style={{ fontSize: 11, color: '#999', width: 32, textAlign: 'right' }}>{pct}%</span>
+      <span style={{ fontSize: 11, color: hasData ? '#999' : '#ccc', width: 48, textAlign: 'right' }}>
+        {hasData ? `${pct}%` : '暂无数据'}
+      </span>
     </div>
   )
 }

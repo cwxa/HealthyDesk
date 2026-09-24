@@ -6,6 +6,8 @@ import {
   readAllRows,
 } from './localDb'
 import type { WeeklyReport, ActivityRecord } from '../types'
+import { computePartHealth, type PartHealth } from './partHealth'
+import { pyRound, pyRound1 } from './scoringModel'
 
 /**
  * 本地统计计算 —— 把后端 `api/stats.py` + `api/activity.py` 的 SQL 聚合
@@ -39,23 +41,12 @@ function dateKey(ts: string): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-/**
- * 复刻 Python 的 `round()`（银行家舍入）。
- * 后端 stats.py 用 `round(x, 1)`，JS 的 `Math.round` 在 .5 时会上偏 1，
- * 为了手机与电脑的数字完全一致，这里统一用它。
- */
-function pyRound1(x: number): number {
-  const scaled = x * 10
-  const floor = Math.floor(scaled)
-  const diff = scaled - floor
-  const r = diff > 0.5 ? floor + 1 : diff < 0.5 ? floor : floor % 2 === 0 ? floor : floor + 1
-  return r / 10
-}
-
 export interface StatsSummary {
   today_activities: number
   today_avg: number
   latest_score: number
+  /** 三个部位各自的真实聚合（0–100，一位小数）；今日无采样时三者为 null。 */
+  part_health: PartHealth
 }
 
 export async function computeSummary(): Promise<StatsSummary> {
@@ -70,12 +61,17 @@ export async function computeSummary(): Promise<StatsSummary> {
     ? pyRound1(todayPostures.reduce((s, p) => s + p.score, 0) / todayPostures.length)
     : 0
 
+  // 部位健康度：从三个分项字段真实聚合，与 today_avg 取同一窗口（今日自然日）。
+  // 与后端 /api/stats/summary 的 part_health 必须给出同样的数字。
+  const partHealth = computePartHealth(todayPostures)
+
   const latest = activities.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))[0]
 
   return {
     today_activities: todayActivities,
     today_avg: todayAvg,
     latest_score: latest?.avg_score ?? 0,
+    part_health: partHealth,
   }
 }
 
@@ -100,7 +96,10 @@ export async function computeWeeklyReport(): Promise<WeeklyReport> {
   const totalMinutes = daily.total_minutes
   const totalBreaks = daily.total_breaks
 
-  const expectedBreaks = Math.max(1, pyRound1(totalMinutes / interval))
+  // 整数取整（pyRound），不是保留一位小数的 pyRound1 ——
+  // 后端 stats.py 对应位置是 `max(1, round_int(...))`。此前这里误用了 pyRound1，
+  // 于是手机把「应休息 2.7 次」拿去算完成率，电脑用 3 次，两端结果不同。
+  const expectedBreaks = Math.max(1, pyRound(totalMinutes / interval))
   const completionRate = pyRound1(Math.min(100, (weekActivities.length / expectedBreaks) * 100))
 
   // 趋势：近 7 天每天的姿态平均分

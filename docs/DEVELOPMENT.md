@@ -245,8 +245,9 @@ HealthyDesk/
 │   ├── ios-build.js            # iOS 出包（macOS：cap sync → pod install → xcodebuild）
 │   ├── set-version.js          # 版本号五处统一写入 / --check 校验
 │   ├── verify-backend-binary.js   # 后端产物格式与架构是否匹配目标平台
-│   ├── verify-scoring.mjs      # 评分等价性对拍
+│   ├── verify-scoring.mjs      # 评分与平滑等价性对拍
 │   ├── verify-angles.mjs       # 角度等价性对拍
+│   ├── verify-part-health.mjs  # 部位健康度聚合等价性对拍
 │   ├── verify-same-source.mjs  # 产物内前端 == 本次 dist（逐文件 sha256）
 │   ├── gen-*.py                # 生成期望值 / 图标 / 启动图
 │   └── gen-mac-icons.js        # ICNS / 菜单栏 Template / iOS 图标与启动图
@@ -303,31 +304,47 @@ HealthyDesk/
 
 ### 4.2 双端数值一致性（改评分必读）
 
-评分逻辑只有两处实现，**必须逐位等价**：
+评分与统计聚合的逻辑各只有一处实现，**必须逐位等价**：
 
 | Python（桌面后端） | TypeScript（移动端） |
 |---|---|
-| `backend/services/scorer.py` | `src/platform/localPoseEngine.ts` |
-| `backend/services/smoother.py`（EMA 0.35） | `PoseSmoother` |
-| `backend/services/pose_detector.py`（角度） | 同文件的角度计算 |
+| `backend/services/scorer.py` | `src/platform/scoringModel.ts`（引擎与统计**共用**这一份） |
+| `backend/services/smoother.py`（EMA 0.35） | `PoseSmoother`（`localPoseEngine.ts`） |
+| `backend/services/pose_detector.py`（角度） | `localPoseEngine.ts` 的角度计算 |
+| `backend/services/part_health.py`（部位健康度） | `src/platform/partHealth.ts` |
+| `backend/api/stats.py`（统计聚合） | `src/platform/localStats.ts` |
+| `backend/services/rounding.py`（取整口径） | `scoringModel.pyRound` / `pyRound1` |
 
 ```bash
-npm run verify:parity     # 21 项常量 + 80 条评分用例 + 42 条序列/439 帧平滑 + 8 条角度用例
+npm run verify:parity     # 21 常量 + 80 评分用例 + 439 帧平滑 + 8 角度
+                          # + 部位健康度 9 常量 + 3 映射 + 18 用例
 ```
 
 改动任何一个文件后**必须**跑一遍。几条硬规矩：
 
-- 🔴 **取整一律 `round(x * 100) / 100`**（前端封装为 `pyRound()`）。
-  Python 的 `round()` 是**银行家舍入**，JS 的 `Math.round` 不是；
-  而 `round(x, 2)` 与 `round(x*100)/100` **也不是同一个函数**（`x=0.015` 时结果不同）。
-- 🔴 **对拍脚本要用真实源码**：`verify-scoring.mjs` 用 esbuild 把
-  `localPoseEngine.ts` bundle 出来执行。**不要退回内联副本** —— 副本与源码各错各的，
-  测试却全绿。
+- 🔴 **取整只有两个口径，都单点定义**：
+  - **引擎内角度**：`round(x * 100) / 100`（`pyRound`）。
+  - **统计展示值**：`round_1`（一位小数）/ `round_int`（整数），
+    由 `backend/services/rounding.py` 与 `scoringModel.pyRound1/pyRound` 成对定义。
+  - ⚠️ **不要用 Python 内置 `round()` 做双端共享的取整**。它对 x 的**精确二进制值**
+    舍入，而 JS 只能对 `x * 10` 的浮点结果舍入 —— 实测在平局点分叉
+    （99.5 vs 99.6）。`rounding.py` 里的统一口径是「先乘、再对浮点结果平局取偶」，
+    两端用同一串浮点运算，因而逐位一致。
+  - `round(x, 2)` 与 `round(x*100)/100` **也不是同一个函数**（`x=0.015` 时结果不同）。
+- 🔴 **对拍脚本要用真实源码**：`verify-scoring.mjs` / `verify-part-health.mjs` 用 esbuild 把
+  TS 源码 bundle 出来执行。**不要退回内联副本** —— 副本与源码各错各的，测试却全绿。
 - 🔴 **守卫要用变异测试证明有效**：改一个常量，`verify:parity` 必须 `exit 1`。
   没做过变异测试的守卫等于没有。
+  `verify-part-health.mjs` 里还带一条「取整灵敏度自检」：如果用例集**区分不出**
+  银行家舍入与 `Math.round`，它会自己报错 —— 防止守卫变成摆设。
+- 🔴 **不许展示不能证明的数字**。Dashboard 的「部位健康度」曾经是编造的
+  （头部写死 85、肩部 = 今日总分 + 5），已改为按分项真实聚合
+  （见 `ROADMAP-SCORING.md` S3）。新增任何面向用户的数值，都要能追溯到库内数据。
 
-> 这套对拍抓出过两处真实的跨语言差异：Python 银行家舍入、以及后端平滑器的
-> `round(x, 2)` 与前端 `pyRound` 不等价。两处都已修，并固化成回归用例。
+> 这套对拍抓出过三处真实的跨语言差异：Python 银行家舍入、后端平滑器的
+> `round(x, 2)` 与前端 `pyRound` 不等价、以及「统计取整」在平局点上两端分叉
+> （第三个是 S3 引入 `verify-part-health.mjs` 时当场抓到的）。三处都已修，
+> 并固化成回归用例。
 
 ### 4.3 实时通信
 

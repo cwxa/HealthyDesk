@@ -44,8 +44,13 @@ SHOULDER_MILD_HI, SHOULDER_MODERATE_HI = 5.0, 10.0
 SPINE_MILD_HI, SPINE_MODERATE_HI = 8.0, 16.0
 
 
-def _deduction(value: float, threshold: float, mild_hi: float, moderate_hi: float) -> float:
-    """单项扣分（分段与 issues 的三档严格一致）。"""
+def metric_deduction(value: float, threshold: float, mild_hi: float, moderate_hi: float) -> float:
+    """单项扣分（分段与 issues 的三档严格一致）。
+
+    公开（非 `_` 前缀）是有意的：除总分合成外，`services/part_health.py` 的
+    「部位健康度」也复用它 —— 部位健康度 = 100 − 本函数结果的时间平均。
+    必须共用同一个函数，否则会出现「部位显示良好、却提醒该部位」的自相矛盾。
+    """
     excess = value - threshold
     if excess <= 0:
         # 未超标：仅在接近阈值时轻微扣分
@@ -74,9 +79,9 @@ def compute_score(head_angle: float, shoulder_diff: float, spine_angle: float) -
     # 排序只用于把最大的排到前面；取值完全确定，两端结果一致。
     deductions = sorted(
         (
-            _deduction(head_angle, HEAD_TILT_THRESHOLD, HEAD_MILD_HI, HEAD_MODERATE_HI),
-            _deduction(shoulder_diff, SHOULDER_DIFF_THRESHOLD, SHOULDER_MILD_HI, SHOULDER_MODERATE_HI),
-            _deduction(spine_angle, SPINE_ANGLE_THRESHOLD, SPINE_MILD_HI, SPINE_MODERATE_HI),
+            metric_deduction(head_angle, HEAD_TILT_THRESHOLD, HEAD_MILD_HI, HEAD_MODERATE_HI),
+            metric_deduction(shoulder_diff, SHOULDER_DIFF_THRESHOLD, SHOULDER_MILD_HI, SHOULDER_MODERATE_HI),
+            metric_deduction(spine_angle, SPINE_ANGLE_THRESHOLD, SPINE_MILD_HI, SPINE_MODERATE_HI),
         ),
         reverse=True,
     )

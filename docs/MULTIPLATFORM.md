@@ -99,17 +99,24 @@ supports('autoStart')           // 支持开机自启？→ 桌面端
 
 ### 2.3 双端数值一致性（改评分/角度必读）
 
-评分、角度、平滑器同时存在于 `backend/services/*.py` 与
-`src/platform/localPoseEngine.ts`，两者必须**逐位等价**：
+评分、角度、平滑器、统计聚合同时存在于 `backend/services/*.py` 与
+`src/platform/`，两者必须**逐位等价**：
 
 ```bash
-npm run verify:parity     # 21 项常量 + 80 条评分用例 + 42 条序列/439 帧平滑 + 8 条角度
+npm run verify:parity     # 21 常量 + 80 评分用例 + 439 帧平滑 + 8 角度
+                          # + 部位健康度 9 常量 + 3 映射 + 18 用例
 ```
 
 核心不变量：**出现任何姿态提醒 ⟺ 分数 < 80**。
 
-⚠️ 取整一律用 `pyRound(x*100)/100`（银行家舍入），**不要写 `Math.round`**，
-也不要写 Python 的 `round(x, 2)` —— 三者不是同一个函数，实测能差 1 分 / 0.01。
+⚠️ 取整只有两个口径，都在 `backend/services/rounding.py` 与
+`src/platform/scoringModel.ts` 里成对定义：引擎内角度用 `pyRound(x*100)/100`，
+统计展示值用 `round_1` / `round_int`。
+
+⚠️ **不要用 Python 内置 `round()` 做双端共享的取整** —— 它对精确二进制值舍入，
+JS 无法复刻，实测会在平局点上让两端显示不同的数字（99.5 vs 99.6）。
+
+⚠️ 也不要在 TS 侧写 `Math.round`：三者不是同一个函数，实测能差 1 分 / 0.01。
 
 ---
 
@@ -530,7 +537,8 @@ npm run verify:all          # 数值对拍 + 五处版本号一致性
 npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
 ```
 
-- [ ] `verify:parity` 全通过：21 常量 + 80 评分用例 + 42 序列/439 帧平滑 + 8 角度 + 不变量
+- [ ] `verify:parity` 全通过：21 常量 + 80 评分用例 + 439 帧平滑 + 8 角度 + 不变量
+      + 部位健康度 9 常量 + 3 映射 + 18 用例（含取整灵敏度自检）
 - [ ] `set-version --check` 五处版本号一致
 - [ ] `verify-backend --target=<平台>` 通过（🔴 在 Windows 上传 `--target=mac` **必须 exit 1**；
       测退出码不要接管道，`| tail` 会把 `$?` 换成 tail 的）

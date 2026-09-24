@@ -1,5 +1,21 @@
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
 import type { Landmarks, PoseResult } from '../types'
+import {
+  HEAD_TILT_THRESHOLD,
+  SHOULDER_DIFF_THRESHOLD,
+  SPINE_ANGLE_THRESHOLD,
+  SECONDARY_WEIGHT,
+  SCORE_MIN,
+  SCORE_MAX,
+  HEAD_MILD_HI,
+  HEAD_MODERATE_HI,
+  SHOULDER_MILD_HI,
+  SHOULDER_MODERATE_HI,
+  SPINE_MILD_HI,
+  SPINE_MODERATE_HI,
+  pyRound,
+  metricDeduction,
+} from './scoringModel'
 
 /**
  * 本地姿态引擎（移动端 / 纯浏览器）。
@@ -17,34 +33,10 @@ import type { Landmarks, PoseResult } from '../types'
  *   LEFT_SHOULDER=11  RIGHT_SHOULDER=12  LEFT_HIP=23  RIGHT_HIP=24
  */
 
-// ---- 与 backend/config.py 一致的阈值 ----
-const HEAD_TILT_THRESHOLD = 5.0
-const SHOULDER_DIFF_THRESHOLD = 4.0
-const SPINE_ANGLE_THRESHOLD = 10.0
+// 引擎自身的参数。评分模型的阈值/分档/单项扣分/取整统一定义在 scoringModel.ts，
+// 与统计聚合（partHealth）共用同一份，避免两处各写一遍后悄悄漂移。
 const MIN_VISIBILITY = 0.5
 const EMA_ALPHA = 0.35
-
-// ---- 评分模型的常量，必须与 backend/services/scorer.py 完全一致 ----
-// 唯一约束：出现任何姿态提醒（issues 非空） ⟺ 分数 < 80
-const WARN_ZONE_RATIO = 0.6
-const WARN_ZONE_MAX = 6.0
-// 叠加权重：只把最差项算满，其余两项按此权重递减叠加（三项直接相加会过度惩罚）
-const SECONDARY_WEIGHT = 0.3
-const MILD_BASE = 22.0
-const MILD_MAX = 28.0
-const MODERATE_BASE = 34.0
-const MODERATE_MAX = 46.0
-const SEVERE_BASE = 52.0
-const SEVERE_MAX = 65.0
-const SCORE_MIN = 20
-const SCORE_MAX = 100
-// 档位边界：超出阈值多少算「明显 / 严重」，与 issues 的分档判断共用
-const HEAD_MILD_HI = 6.0
-const HEAD_MODERATE_HI = 12.0
-const SHOULDER_MILD_HI = 5.0
-const SHOULDER_MODERATE_HI = 10.0
-const SPINE_MILD_HI = 8.0
-const SPINE_MODERATE_HI = 16.0
 
 const NOSE = 0
 const LEFT_EAR = 7
@@ -93,20 +85,6 @@ class PoseSmoother {
 
 // ---- 角度计算（与 pose_detector.py 等价） ----
 
-/**
- * Python `round()` 采用「银行家舍入」（round-half-to-even）：round(32.5)=32、round(33.5)=34。
- * JS 的 `Math.round` 是「四舍五入」（.5 一律进位），在恰好 .5 时会产生 1 分偏差。
- * 这个函数复刻 Python 语义，保证手机与电脑评分完全一致。
- */
-function pyRound(x: number): number {
-  const floor = Math.floor(x)
-  const diff = x - floor
-  if (diff > 0.5) return floor + 1
-  if (diff < 0.5) return floor
-  // 恰好 .5：取偶数
-  return floor % 2 === 0 ? floor : floor + 1
-}
-
 function headTiltAngle(leftEar: LM, rightEar: LM): number {
   const dx = Math.abs(rightEar.x - leftEar.x)
   const dy = Math.abs(rightEar.y - leftEar.y)
@@ -132,30 +110,6 @@ function spineAngle(leftShoulder: LM, rightShoulder: LM, leftHip: LM, rightHip: 
   const dy = hMidY - sMidY
   if (dy < 0.001) return 90
   return Math.abs((Math.atan2(dx, dy) * 180) / Math.PI)
-}
-
-/**
- * 单项扣分，分段与 issues 的三档严格一致。
- * 等价于 scorer.py 的 `_deduction()`。
- */
-function metricDeduction(value: number, threshold: number, mildHi: number, moderateHi: number): number {
-  const excess = value - threshold
-  if (excess <= 0) {
-    // 未超标：仅在接近阈值时轻微扣分
-    const zoneStart = threshold * WARN_ZONE_RATIO
-    if (value <= zoneStart) return 0
-    return (WARN_ZONE_MAX * (value - zoneStart)) / (threshold - zoneStart)
-  }
-  if (excess <= mildHi) {
-    return MILD_BASE + (MILD_MAX - MILD_BASE) * (excess / mildHi)
-  }
-  if (excess <= moderateHi) {
-    return MODERATE_BASE + (MODERATE_MAX - MODERATE_BASE) * ((excess - mildHi) / (moderateHi - mildHi))
-  }
-  return (
-    SEVERE_BASE +
-    Math.min(SEVERE_MAX - SEVERE_BASE, (SEVERE_MAX - SEVERE_BASE) * ((excess - moderateHi) / moderateHi))
-  )
 }
 
 /** 评分（与 scorer.py 等价）。 */
