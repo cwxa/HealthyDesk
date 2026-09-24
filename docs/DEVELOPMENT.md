@@ -13,6 +13,7 @@
 | [MULTIPLATFORM.md](MULTIPLATFORM.md) | 四端构建与打包、CI/CD、macOS 签名公证、iOS 权限链、**发布前验证清单** |
 | [ANDROID_BUILD.md](ANDROID_BUILD.md) | 安卓工具链（JDK/SDK/Gradle）、出包、release 签名与密钥备份 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 历年踩坑与排查手册（"又坏了"先翻这个） |
+| [ROADMAP.md](ROADMAP.md) | **后续 10 个需求**与排序理由、依赖关系、验收标准；含现状快照与「暂不做」清单 |
 | [archive/vibe-code-prompt.md](archive/vibe-code-prompt.md) | 立项时的原始提示词，**仅历史参考**（写的是单机 Windows 版本，**勿照它实现**） |
 
 ---
