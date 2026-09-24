@@ -121,7 +121,7 @@ npm run verify:parity     # 21 项常量 + 80 条评分用例 + 42 条序列/439
 npm ci
 npm run icons:generate        # 生成 ico / icns / 菜单栏 template 图（改了 SVG 才需要）
 npx vite build                # 桌面模式（含 Electron 入口）
-npm run backend:build         # PyInstaller（干净 venv，见 README）
+npm run backend:build         # PyInstaller（Windows 上建议用干净 venv `.buildenv`，见 TROUBLESHOOTING.md）
 npm run verify:backend        # 校验后端产物是 PE/x64
 npx electron-builder --win    # → release2/NeckGuardian Setup X.Y.Z.exe
 ```
@@ -297,6 +297,22 @@ gh release edit v1.3.8 --draft=false --latest
 | tag 与 `package.json` 版本一致 | 发出版本号错乱的 Release。允许预发布后缀（`v1.3.8-rc1` 按 1.3.8 校验，这样预演 CD 不用改版本号） |
 | 剔除 Android debug 包 | CI 没配签名 secrets 时产出的是 debug 包，**不可分发**，不能当正式资产 |
 | 各打包 job 的**同源校验** | 打包成功、程序也能启动，但里面的前端是旧 dist（见下） |
+
+**🔴 每个版本公开前，对着 draft 逐条过一遍**（自动检查拦不住下面这些，只有人能判断）：
+
+1. **本版各端产物做过真机验证吗？** CI 只证明「可编译可打包 + 包内容正确 +
+   内置后端能在 Mac 上起服务」，**不等于真机跑通**（见 §七的验证分层表）。
+   没验过的端，要么别发，要么在 Release 正文的「已知限制」里如实标注。
+2. **Android 正式包是不是签名包？** 缺 `ANDROID_*` secrets 时 CI 只出 debug 包、
+   CD 会自动剔除 → 需本机 `npm run cap:build:release` 出包后
+   `gh release upload <tag> <apk> --clobber` 补传，并**验证书指纹与上一版一致**（§9.3）。
+3. **正文里的下载链接、文件大小、版本号是否都对**（README 的表格同理）。
+4. 公开后**匿名 `curl` 验 Content-Type**（§9.4，这一步不能省）。
+
+> **`.github/release-notes.md` 是 Release 正文模板**：CI 用 `--notes-file` 取它，
+> `--generate-notes` 再把 PR 列表追加在后面。**它面向下载者** ——
+> 只放「装哪个、怎么装、有什么限制」。发布者自查项写在文件末尾的 HTML 注释里
+> （GitHub 渲染时会把注释隐藏，但**别把该给用户看的内容放进去**，它会被吞掉）。
 
 **`SHA256SUMS.txt` 写的是改名后的文件名**：GitHub 会把资产名里的**连续空白压成一个点**
 （`NeckGuardian Setup 1.3.7.exe` → `NeckGuardian.Setup.1.3.7.exe`，`d  e.txt` → `d.e.txt`）。
@@ -494,7 +510,7 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 2. `src/platform/nativeDiag.ts` —— 若是移动端，加一个诊断 provider
 3. `capacitor.config.ts` 或 `electron-builder.yml` —— 构建配置
 4. `package.json` —— 构建脚本
-5. 本文件与 README 的矩阵表
+5. 本文件与 [DEVELOPMENT.md §2.1 平台矩阵](DEVELOPMENT.md)（README 只给用户看，不放架构细节）
 6. `.github/workflows/build.yml` —— 加一个 job
 
 **不要**改 `src/pages/**` 与 `src/components/**`。
@@ -531,14 +547,13 @@ npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
 
 ### 9.3 安卓 release APK
 
-- [ ] 🔴 **签名指纹与上一版逐位一致**（`apksigner verify --print-certs` 的 SHA-256）。
-      不一致则老用户**无法覆盖安装**。把这个值写进 README，每次发版对照
+- [ ] 🔴 **签名指纹与上一版逐位一致**（`apksigner verify --print-certs` 的 SHA-256，期望
+      `9adaa8b20c384…`）。APK 的**文件** sha256 每次构建都不同，**但证书指纹必须相同** ——
+      指纹一变，老用户只能卸载重装（签名冲突），本地数据全丢。CI 出的包**尤其要查**：
+      secret 里 base64 解出来的 keystore 可能与本机用的不是同一把。
+      该值记录在 [ANDROID_BUILD.md §3.4](ANDROID_BUILD.md)，每次发版对照
 - [ ] `aapt dump badging`：`package` 正确、`versionCode` **已递增**、`versionName` 正确、
       `uses-permission` 含 CAMERA
-- [ ] 🔴 **证书指纹与上一版逐位一致**（`apksigner verify --print-certs`，期望
-      `9adaa8b20c384…`）。APK 的文件 sha256 每次构建都不同，**但指纹必须相同**——
-      指纹一变，老用户只能卸载重装（签名冲突），本地数据全丢。
-      CI 出的包**尤其要查**：secret 里 base64 解出来的 keystore 可能与本机用的不是同一把
 - [ ] APK 内 `assets/public/assets/index-*.js` 与本地 `dist/assets/` md5 一致
 - [ ] 无 `assets/public/main.js` / `preload.js`（Electron 入口误入 = 打错了构建目标）
 - [ ] mediapipe 资源 5 项齐全（模型 + 4 个 wasm）
