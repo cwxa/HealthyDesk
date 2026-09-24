@@ -14,6 +14,7 @@
 | [ANDROID_BUILD.md](ANDROID_BUILD.md) | 安卓工具链（JDK/SDK/Gradle）、出包、release 签名与密钥备份 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 历年踩坑与排查手册（"又坏了"先翻这个） |
 | [ROADMAP.md](ROADMAP.md) | **后续 10 个需求**与排序理由、依赖关系、验收标准；含现状快照与「暂不做」清单 |
+| [ROADMAP-SCORING.md](ROADMAP-SCORING.md) | **评分与动作子系统专项**（S1–S10）：评分链路 / 动作链路的缺陷与迭代设计。它**取代** ROADMAP 需求 7 的粗粒度描述，两者同时看 |
 | [archive/vibe-code-prompt.md](archive/vibe-code-prompt.md) | 立项时的原始提示词，**仅历史参考**（写的是单机 Windows 版本，**勿照它实现**） |
 
 ---
@@ -293,7 +294,10 @@ HealthyDesk/
 
 > 阈值处有一处**有意的台阶**：`head` 从 5.00° 到 5.01°，分数由 94 掉到 78。这是
 > 「有提醒 ⟺ 分数 < 80」的必然结果 —— 提醒一旦出现，分数就必须已经在 80 以下。
-> 因此 **80–89 分是模型的死区**，永远不会出现。
+> 因此 **79–89 分是模型的死区**，永远不会出现。这不是经验观察，是数学结论：
+> 三项都不超标时每项最多扣 6 分（`total ≤ 6 + 0.3 × 12 = 9.6` → 分数 ≥ 90）；
+> 任一项超标则该项至少扣 `MILD_BASE = 22`（`total ≥ 22` → 分数 ≤ 78）。
+> 详见 [ROADMAP-SCORING.md §0.5](ROADMAP-SCORING.md)。
 >
 > 阈值附近**没有去抖**，所以 94/78 闪烁是已知取舍（要消抖就得放弃"提醒与分数严格同步"）。
 
@@ -515,7 +519,7 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 | 9 | `android/gradlew` 必须保留可执行位（`git update-index --chmod=+x`） | Unix CI 上 Permission denied |
 | 10 | 推 `.github/workflows/**` 前确认凭据带 `workflow` scope | GitHub **整体拒绝**这次 push（不是跳过那几个文件） |
 | 11 | 保证「有提醒 ⟺ 分数 < 80」这条不变量 | 出提醒却不扣分，提醒链路形同虚设 |
-| 12 | 改评分公式要接受 80–89 死区与阈值处的台阶 | 以为是自己写错了 |
+| 12 | 改评分公式要接受 79–89 死区与阈值处的台阶 | 以为是自己写错了 |
 | 13 | 安卓 `setWebChromeClient` 必须**继承** `BridgeWebChromeClient`，不要 new 裸 `WebChromeClient` | 丢掉 `onShowFileChooser` / `onConsoleMessage` 等 5 组 override：`<input type="file">` 静默失灵、JS `console.*` 不进 logcat（安卓端唯一排查手段） |
 | 14 | 加超时保护时，必须同时处理「超时之后资源才到」 | 迟到的 `MediaStream` 没人接手 → 摄像头常亮、下次取流 `NotReadableError`（见 [TROUBLESHOOTING.md §14](TROUBLESHOOTING.md)） |
 
