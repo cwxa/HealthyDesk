@@ -447,6 +447,31 @@ jobs:
           echo "APK 源文件 = $APK"
           ls -lh release2/*.apk
 
+      # 🔴 证书指纹是**不可再生**的：APK 的文件 sha256 每次构建都变，但证书指纹必须与
+      # 历史逐位一致 —— 一变，老用户就只能卸载重装（签名冲突），本地数据全丢。
+      # 这条过去是发布前的手工检查（docs/MULTIPLATFORM.md §9.3），而手工步骤一定会漏；
+      # 漏了的后果要等用户装不上才发现。放在这里自动拦。
+      - name: 校验签名证书指纹（须与历史一致）
+        run: |
+          set -euo pipefail
+          APK=$(ls release2/*-android-release.apk 2>/dev/null | head -1 || true)
+          if [ -z "$APK" ]; then
+            echo "::warning::本次没有 release 包（未提供签名 secrets）→ 跳过指纹校验"
+            exit 0
+          fi
+          EXPECTED="9adaa8b20c384eae1a6ed4f57dbd2d98b3965838f0661c2b88fca3031b3a2bd5"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort | tail -1)
+          [ -n "$APKSIGNER" ] || { echo "::error::找不到 apksigner"; exit 1; }
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/SHA-256 digest/ {print $2; exit}')
+          echo "期望指纹 = $EXPECTED"
+          echo "实际指纹 = $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::签名证书指纹与历史不一致！老用户将无法覆盖安装（签名冲突，只能卸载重装、本地数据全丢）。"
+            echo "::error::若确属**有意换密钥**，须同步更新本步骤与 docs/MULTIPLATFORM.md §9.3 的期望值，并在 Release 说明里明确告知需先卸载。"
+            exit 1
+          fi
+          echo "✅ 指纹与历史一致，老用户可覆盖安装"
+
       - name: 解出 APK 内的前端
         run: |
           APK=$(ls release2/*-android-*.apk | head -1)

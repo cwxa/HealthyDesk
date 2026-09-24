@@ -411,11 +411,12 @@ gh secret list   # 应出现 4 条
 |---|---|---|
 | 走了签名分支 | Android job 日志 | `检测到签名配置 → 构建 release 包` |
 | 产出的是正式包 | job 日志 / 产物名 | 源文件 `apk/release/app-release.apk`，产物名带 **`-release`** 而非 `-debug` |
-| **签名指纹与上一版一致** | `apksigner verify --print-certs` | SHA-256 `9adaa8b2…` |
+| **签名指纹与上一版一致** | CI 步骤「校验签名证书指纹（须与历史一致）」的日志 | SHA-256 `9adaa8b2…` |
 
 🔴 **第三条是发布前必查项**：APK 的文件 sha256 每次构建都不同（时间戳等），
 **但证书指纹必须逐位相同**。指纹一变，老用户就**无法覆盖安装**（会提示签名冲突），
 只能卸载重装、数据全丢。所以 secret 里的 keystore 必须与历史发布用的是同一把。
+**2026-09-24 起 CI 会在打包后自动比对并 fail**，本地只需在换过密钥时用下面这条自查：
 
 ```bash
 AS="$ANDROID_HOME/build-tools/34.0.0/apksigner"
@@ -552,6 +553,9 @@ npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
       指纹一变，老用户只能卸载重装（签名冲突），本地数据全丢。CI 出的包**尤其要查**：
       secret 里 base64 解出来的 keystore 可能与本机用的不是同一把。
       该值记录在 [ANDROID_BUILD.md §3.4](ANDROID_BUILD.md)，每次发版对照
+      ✅ **2026-09-24 起 CI 已自动拦**：Android job 的「校验签名证书指纹（须与历史一致）」
+      步骤会把期望值写死在 workflow 里逐位比对，不一致直接 fail。手工只需在**换过密钥**时
+      判断"这次是不是有意的"——若无意的，这一步会在发布前拦住，不必等用户装不上
 - [ ] `aapt dump badging`：`package` 正确、`versionCode` **已递增**、`versionName` 正确、
       `uses-permission` 含 CAMERA
 - [ ] APK 内 `assets/public/assets/index-*.js` 与本地 `dist/assets/` md5 一致
