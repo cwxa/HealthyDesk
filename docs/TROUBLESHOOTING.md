@@ -208,6 +208,8 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 
 **修复**：引入 `cameraAbortRef` 中止标记，await 后校验，若已卸载则立即释放轨道。
 
+> 同一族问题的另一个实例见 §14（超时后迟到的流）。
+
 ---
 
 ### 12. "开始活动"意图跨路由丢失
@@ -228,6 +230,32 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 **根因**：`setInterval` 回调闭包捕获了创建时的 `finishExercise` 引用。
 
 **修复**：用 `finishRef` 持有最新引用，计时器回调通过 ref 调用。
+
+---
+
+### 14. 取流超时后「迟到」的流没人接手 🔴
+
+**现象**：首次进入检测页，系统权限对话框停留超过 30 秒才点「允许」——
+界面显示取流超时失败，但**摄像头指示灯一直亮着**；此后点「重试」还可能报 `NotReadableError`。
+
+**根因**：应用侧用 `withTimeout(getUserMedia, 30s)` 做超时保护，但**超时并不能取消
+`getUserMedia`**。用户超时之后才授权时，那条 promise 仍会成功返回，而调用方早已走错误分支——
+没人接手的 `MediaStream` 继续占着摄像头设备。
+
+**修复**：`NeckActivity.tsx` 新增 `openCameraStreamWithinTimeout()`，在超时分支挂一个
+「迟到清理」：
+
+```ts
+void pending.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() => {})
+```
+
+超时之后流若还是来了，立刻关掉它。
+
+**教训**：与 §11 是同一族问题 —— **凡是 `await` 之后才拿到的资源，都要问「拿到时还有人要吗」**。
+区别只是判据不同：§11 靠 `cameraAbortRef`（组件是否还在），§14 靠「是否已走超时分支」。
+加超时保护时**只想到"让界面别卡住"是不够的**，还得处理"超时之后资源才到"。
+
+> 安卓端权限对话框是**系统级**的，用户看几秒甚至几分钟都正常，所以这条路径不是理论边角料。
 
 ---
 
@@ -289,14 +317,56 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 
 ### 7. Capacitor WebView 打不开摄像头 🔴
 
-**现象**：APK 装上后进检测页，摄像头黑屏 / `getUserMedia` 直接失败。
+**现象**：APK 装上后进检测页，一直停在「正在启动摄像头…」，或 `getUserMedia` 直接失败。
 
-**根因**：Capacitor 默认的 `WebChromeClient` **拒绝**网页的媒体权限请求。
+**曾被写错的根因**（原文记的是错的，2026-09-24 纠正）：
 
-**修复**（两处缺一不可）：
+> ~~Capacitor 默认的 `WebChromeClient` **拒绝**网页的媒体权限请求。~~
+
+不成立。Capacitor 6 的 `BridgeWebChromeClient` **自己就会**处理摄像头请求：
+`BridgeWebChromeClient.java:106-131` 把 `android.webkit.resource.VIDEO_CAPTURE` 映射成
+`CAMERA` 权限并在授权后 `grant()`。会拒绝 `getUserMedia` 的是**没设 WebChromeClient 的裸 WebView**，
+不是 Capacitor。按错误归因去"修"，会把力气花在替换 ChromeClient 上，而把真正值钱的东西一起丢掉（见下）。
+
+**真正的两个根因**（都在这份 Capacitor 实现内部）：
+
+1. 🔴 **`permissionListener` 是单个可变字段**，被 `onPermissionRequest` /
+   `onGeolocationPermissionsShowPrompt` / `onShowFileChooser` **共用**（同文件 51-52 行）。
+   并发请求会互相覆盖回调 → **第一个 `PermissionRequest` 既没 `grant` 也没 `deny`** →
+   前端 `getUserMedia` **永久 pending**：界面无限停在「正在启动摄像头…」，且**不报任何错**。
+   dev 模式 React StrictMode 双挂载、用户连点「重试」都会触发并发。
+   （对照记忆里的定位口诀：*永久 pending = 某个 await 永不 settle*。）
+2. 授权发生在**等系统对话框的异步回调**里 —— 对话框夹在 `getUserMedia` 中间，
+   WebView 侧没有超时，用户不点就一直转圈。
+
+**修复**（三处缺一不可）：
 1. `AndroidManifest.xml` 声明 `CAMERA` 权限；
-2. `MainActivity.java` 覆写 `WebChromeClient.onPermissionRequest`，把 WebView 的媒体请求
-   映射到系统运行时权限，用户授权后 `request.grant(...)`。
+2. `MainActivity` 在 `super.onCreate()` 之后 `setWebChromeClient(...)` 换成自己的实现：
+   **启动即预申请权限** + **持有权限就同步 `grant()`** + **等待系统对话框期间挂 60s 看门狗**
+   （超时主动 `deny`，让前端拿到明确错误而不是无限转圈）；
+3. 🔴 **必须 `extends BridgeWebChromeClient`（继承），不能 new 一个裸 `WebChromeClient`（替换）。**
+   替换会连带丢掉五组 override：
+
+   | 丢掉的 | 后果 |
+   |---|---|
+   | `onShowFileChooser` | `<input type="file">` **静默失灵**（做「导入数据」时必踩） |
+   | `onConsoleMessage` | JS 的 `console.*` 不再进 logcat —— 安卓端**唯一**的排查手段 |
+   | `onGeolocationPermissionsShowPrompt` | 定位请求被直接拒绝 |
+   | `onJsAlert/Confirm/Prompt` | alert/confirm 退回基础实现 |
+   | `onShowCustomView/HideCustomView` | 视频全屏 |
+
+   `MainActivity.CameraChromeClient` 现在只接管**纯摄像头**请求，含音频等其它资源时
+   `super.onPermissionRequest()` 交回 Capacitor（它知道该去申请 `RECORD_AUDIO`，
+   而我们绝不替用户放行自己没持有的资源）。
+
+**防回归**（`file` 级别验不了，要验**类层次**）：
+```bash
+"$JAVA_HOME/bin/javap" -cp android/app/build/intermediates/javac/debug/classes \
+  'com.neckguardian.app.MainActivity$CameraChromeClient'
+# 期望：class com.neckguardian.app.MainActivity$CameraChromeClient
+#         extends com.getcapacitor.BridgeWebChromeClient
+#       且列出 onPermissionRequest / onPermissionRequestCanceled
+```
 
 ### 8. `indexedDB.open(name)` 无版本号会创建空库 🔴
 

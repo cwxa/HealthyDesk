@@ -7,13 +7,14 @@ import android.os.Bundle;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
-import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebChromeClient;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,26 +23,62 @@ import java.util.List;
 /**
  * NeckGuardian 安卓入口。
  *
- * ⚠️ Capacitor 默认的 WebView 会**拒绝**网页的 getUserMedia（摄像头）请求，
- * 因此必须覆写 WebChromeClient.onPermissionRequest。
+ * 原生部分**只做三件事**：摄像头权限桥、只读的诊断通道、以及把 Capacitor 的
+ * WebChromeClient 换成一个「只覆写摄像头授权」的子类。**取帧没有任何原生代码**——
+ * `getUserMedia` 由 WebView 内置的 Chromium 自己去调 Camera2，MediaPipe 推理全在 JS 层。
  *
- * 这里有三个容易踩的坑，都会表现为「允许了权限但摄像头打不开」：
+ * <h3>为什么必须自己接管 onPermissionRequest</h3>
  *
- * 1. **授权必须同步**：如果先把 PermissionRequest 存起来、等用户点完系统权限对话框
- *    再 grant()，这个对象在等待期间可能已经被 WebView 释放，grant() 变成空操作，
- *    前端 getUserMedia 直接 reject 或永久挂起。所以只要已经持有系统权限，
- *    就**在回调内立即 grant()**；权限尚未持有的情况改为在 App 启动阶段预先申请。
+ * 先纠正一个曾经写错的归因：**Capacitor 的 BridgeWebChromeClient 是会处理摄像头请求的**
+ * （把 `android.webkit.resource.VIDEO_CAPTURE` 映射成 CAMERA 权限并放行，见
+ * `BridgeWebChromeClient.java:106-131`）。会拒绝 `getUserMedia` 的是**没设
+ * WebChromeClient 的裸 WebView**，不是 Capacitor。
  *
- * 2. **预申请权限**：启动时就把 CAMERA 权限要到手，用户打开「肩颈活动」时权限已就绪，
- *    取流一步到位，不再出现「对话框夹在 getUserMedia 中间」的竞态。
+ * 真正的问题是它**怎么**处理，有两点：
  *
- * 3. **并发请求**：dev 模式下 React StrictMode 会双挂载、用户点「重试」也会再次取流，
- *    WebView 可能同时抛出多个 PermissionRequest。用列表而非单个变量保存，避免漏掉。
+ * <ol>
+ *   <li>`permissionListener` 是**单个可变字段**，被 `onPermissionRequest` /
+ *       `onGeolocationPermissionsShowPrompt` / `onShowFileChooser` 共用。并发请求会
+ *       互相覆盖回调，**第一个 PermissionRequest 既没 grant 也没 deny**，前端的
+ *       `getUserMedia` 就永久挂起。dev 模式 React StrictMode 双挂载、或用户连点「重试」
+ *       都会触发并发——这正是 v1.3.2「允许了权限却打不开」的机制。</li>
+ *   <li>授权发生在**等系统对话框的异步回调**里，对话框夹在 `getUserMedia` 中间；
+ *       WebView 不会超时，用户不点就一直转圈。</li>
+ * </ol>
+ *
+ * 所以本类的做法是：**启动即预申请、持有权限就同步 grant、系统对话框等待期挂看门狗**
+ * （对应下面 1/2/3 三点）。
+ *
+ * <h3>只覆写、不替换</h3>
+ *
+ * 本类**继承** {@link BridgeWebChromeClient}，而不是早期那样 new 一个裸
+ * `WebChromeClient` 把 Capacitor 的整个换掉。换掉会连带丢掉：
+ *
+ * <table>
+ *   <tr><td>{@code onShowFileChooser}</td><td>`&lt;input type="file"&gt;` 静默失灵
+ *       （将来做「导入数据」必踩）</td></tr>
+ *   <tr><td>{@code onConsoleMessage}</td><td>JS 的 `console.*` 不再进 logcat——
+ *       安卓端**唯一**的排查手段</td></tr>
+ *   <tr><td>{@code onGeolocationPermissionsShowPrompt}</td><td>定位请求被直接拒绝</td></tr>
+ *   <tr><td>{@code onJsAlert/onJsConfirm/onJsPrompt}</td><td>alert/confirm 退回基础实现</td></tr>
+ *   <tr><td>{@code onShowCustomView/onHideCustomView}</td><td>视频全屏</td></tr>
+ * </table>
+ *
+ * 前三项当前确未被前端使用（已 grep `type="file"` / `geolocation` / `alert(` 全空），
+ * 但它们是**能力**而非当前需求：保留成本为零，丢失成本是将来某个功能在安卓上静默失灵
+ * 且极难归因。继承之后，这些职责全部回到 Capacitor，我们也随 Capacitor 升级自动受益。
+ *
+ * ⚠️ 换 WebChromeClient 必须发生在 `super.onCreate()` **之后**（那时 `getBridge()` 才可用），
+ * 且 `BridgeWebChromeClient` 的构造会调 `Bridge.registerForActivityResult`——必须赶在
+ * Activity 进入 STARTED 之前，`onCreate` 内满足。
  */
 public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "NeckGuardian";
     private static final int CAMERA_PERMISSION_CODE = 1001;
+
+    /** WebView 权限请求的资源名（摄像头）。 */
+    private static final String RESOURCE_VIDEO_CAPTURE = "android.webkit.resource.VIDEO_CAPTURE";
 
     /** 等待系统权限结果的 WebView 权限请求（可能并发，必须用集合）。 */
     private final List<PermissionRequest> pendingRequests = new ArrayList<>();
@@ -62,35 +99,66 @@ public class MainActivity extends BridgeActivity {
         // 一个只读的诊断通道，让前端能拿到安卓侧真实的权限状态并展示给用户。
         webView.addJavascriptInterface(new NativeBridge(this), "NeckGuardianNative");
 
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                Log.i(TAG, "onPermissionRequest origin=" + request.getOrigin()
-                        + " resources=" + Arrays.toString(request.getResources()));
-
-                runOnUiThread(() -> {
-                    if (hasCameraPermission()) {
-                        // 关键：持有权限时立即放行，绝不能等到用户点完对话框。
-                        Log.i(TAG, "camera permission held -> grant immediately");
-                        request.grant(request.getResources());
-                    } else {
-                        Log.i(TAG, "camera permission missing -> ask system, keep request pending");
-                        pendingRequests.add(request);
-                        armPermissionWatchdog(request);
-                        requestCameraPermission();
-                    }
-                });
-            }
-
-            @Override
-            public void onPermissionRequestCanceled(PermissionRequest request) {
-                Log.w(TAG, "onPermissionRequestCanceled");
-                pendingRequests.remove(request);
-            }
-        });
+        webView.setWebChromeClient(new CameraChromeClient(getBridge()));
 
         // 启动即预申请，消除「对话框夹在 getUserMedia 中间」的竞态。
         requestCameraPermission();
+    }
+
+    /**
+     * 只覆写摄像头授权，其余（文件选择 / JS 对话框 / 定位 / 全屏 / logcat 转发）
+     * 全部继承 Capacitor 的实现。
+     */
+    private class CameraChromeClient extends BridgeWebChromeClient {
+
+        CameraChromeClient(Bridge bridge) {
+            super(bridge);
+        }
+
+        @Override
+        public void onPermissionRequest(final PermissionRequest request) {
+            // 只接管「纯摄像头」请求。含音频等其它资源时交回 Capacitor——
+            // 它知道该去申请 RECORD_AUDIO / MODIFY_AUDIO_SETTINGS，而我们绝不替用户
+            // 放行自己没持有的资源。
+            if (!isCameraOnlyRequest(request)) {
+                Log.i(TAG, "onPermissionRequest -> delegate to Capacitor: "
+                        + Arrays.toString(request.getResources()));
+                super.onPermissionRequest(request);
+                return;
+            }
+
+            Log.i(TAG, "onPermissionRequest origin=" + request.getOrigin()
+                    + " resources=" + Arrays.toString(request.getResources()));
+
+            runOnUiThread(() -> {
+                if (hasCameraPermission()) {
+                    // 关键：持有权限时立即放行，绝不能等到用户点完对话框。
+                    Log.i(TAG, "camera permission held -> grant immediately");
+                    request.grant(request.getResources());
+                } else {
+                    Log.i(TAG, "camera permission missing -> ask system, keep request pending");
+                    pendingRequests.add(request);
+                    armPermissionWatchdog(request);
+                    requestCameraPermission();
+                }
+            });
+        }
+
+        @Override
+        public void onPermissionRequestCanceled(PermissionRequest request) {
+            Log.w(TAG, "onPermissionRequestCanceled");
+            pendingRequests.remove(request);
+        }
+    }
+
+    /** 请求资源是否「全是摄像头」——只有这种才敢自己同步放行。 */
+    private static boolean isCameraOnlyRequest(PermissionRequest request) {
+        String[] resources = request.getResources();
+        if (resources == null || resources.length == 0) return false;
+        for (String resource : resources) {
+            if (!RESOURCE_VIDEO_CAPTURE.equals(resource)) return false;
+        }
+        return true;
     }
 
     private boolean hasCameraPermission() {

@@ -47,6 +47,24 @@ async function openCameraStream(): Promise<MediaStream> {
   throw lastErr
 }
 
+/**
+ * 取流 + 超时保护。
+ *
+ * ⚠️ 超时只是让**界面**失败，**并不能取消 `getUserMedia`**：用户可能在超时之后才点
+ * 「允许」，那时这条流仍会成功返回，而调用方早已走了错误分支——没人接手的流会一直
+ * 占着摄像头（指示灯常亮），并让下一次取流报 `NotReadableError`。
+ * 所以这里挂一个「迟到清理」：超时之后若流最终还是来了，立刻关掉它。
+ */
+async function openCameraStreamWithinTimeout(ms: number): Promise<MediaStream> {
+  const pending = openCameraStream()
+  try {
+    return await withTimeout(pending, ms, '打开摄像头')
+  } catch (e) {
+    void pending.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() => {})
+    throw e
+  }
+}
+
 /** 把底层错误翻译成用户能照着做的提示。 */
 function describeCameraError(e: unknown): string {
   const name = (e as { name?: string })?.name ?? 'Error'
@@ -135,7 +153,7 @@ export default function NeckActivity() {
       setCameraStage('正在申请相机权限并取流…')
       // 超时保护：WebView 既不放行也不拒绝时 getUserMedia 会永久 pending，
       // 没有超时界面就会无限停在「正在启动摄像头...」
-      const stream = await withTimeout(openCameraStream(), 30000, '打开摄像头')
+      const stream = await openCameraStreamWithinTimeout(30000)
       // 若在等待授权期间组件已卸载/重挂载，立即释放这条流，避免泄漏
       if (cameraAbortRef.current) {
         stream.getTracks().forEach((t) => t.stop())

@@ -173,7 +173,7 @@ npm run set-version -- --check   # 只检查版本号一致性
 
 | 端 | 机制 | 关键点 |
 |----|------|--------|
-| Android | `WebChromeClient.onPermissionRequest` | 必须在启动阶段**预申请** CAMERA；持有权限时在回调内**同步** `grant()`。诊断走 `addJavascriptInterface` 暴露的只读 `NeckGuardianNative.diagnostics()`（宿主类必须 public） |
+| Android | `WebChromeClient.onPermissionRequest` | 🔴 必须**继承** `BridgeWebChromeClient`、且**只覆写纯摄像头请求**（`MainActivity.CameraChromeClient`）——**不许 new 一个裸 `WebChromeClient` 去替换**，那会连带丢掉文件选择 / JS 对话框 / logcat 转发（详见 [TROUBLESHOOTING.md §7](TROUBLESHOOTING.md)）。逻辑：启动阶段**预申请** CAMERA；持有权限时在回调内**同步** `grant()`；等系统对话框期间挂 60s 看门狗主动 `deny`。诊断走 `addJavascriptInterface` 暴露的只读 `NeckGuardianNative.diagnostics()`（宿主类必须 public） |
 | iOS | `WKUIDelegate.requestMediaCapturePermissionFor` | Capacitor 已内置授权回调与 `allowsInlineMediaPlayback`，**唯一要手配的是 `Info.plist` 的 `NSCameraUsageDescription`** —— 缺了进程会被系统直接终止（表现为闪退，**不是**"权限被拒"） |
 
 **模型离线内置**：MediaPipe WASM 与 `pose_landmarker_full.task`（约 9.4 MB）随包打进 APK，安装后无需联网。
@@ -515,6 +515,8 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 | 10 | 推 `.github/workflows/**` 前确认凭据带 `workflow` scope | GitHub **整体拒绝**这次 push（不是跳过那几个文件） |
 | 11 | 保证「有提醒 ⟺ 分数 < 80」这条不变量 | 出提醒却不扣分，提醒链路形同虚设 |
 | 12 | 改评分公式要接受 80–89 死区与阈值处的台阶 | 以为是自己写错了 |
+| 13 | 安卓 `setWebChromeClient` 必须**继承** `BridgeWebChromeClient`，不要 new 裸 `WebChromeClient` | 丢掉 `onShowFileChooser` / `onConsoleMessage` 等 5 组 override：`<input type="file">` 静默失灵、JS `console.*` 不进 logcat（安卓端唯一排查手段） |
+| 14 | 加超时保护时，必须同时处理「超时之后资源才到」 | 迟到的 `MediaStream` 没人接手 → 摄像头常亮、下次取流 `NotReadableError`（见 [TROUBLESHOOTING.md §14](TROUBLESHOOTING.md)） |
 
 > 更细的排查手册见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)；
 > 本机（Windows + 沙箱 + 代理）特有的环境坑见技能 `windows-powershell-pitfalls`。
