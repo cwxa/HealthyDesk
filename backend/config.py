@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.4.0"
 
 BACKEND_PORT = int(os.getenv("NECKGUARDIAN_PORT", "18920"))
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "neckguardian.db")
