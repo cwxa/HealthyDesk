@@ -347,6 +347,63 @@ HealthyDesk/
 模式是随 WS 帧一起发的（`{type:'frame', data, mode}`），因为桌面端的评分算在
 Python 后端 —— 后端必须知道用户此刻在做什么。
 
+#### 4.1.2 动作完成度判定（"做了没有 / 做到位没有"）
+
+分通道解决了"做对动作被批评"，但没有解决"**倒计时走完就算完成**"：用户全程不动，
+82 秒后系统照样宣布「活动完成!」并记一条记录。`judgeExercise()` 把一串帧折成
+三分类结论：
+
+| 结论 | 触发条件 | 引导文案 |
+|---|---|---|
+| `idle` | 峰值活动量 < `ACTIVITY_IDLE_MAX`（0.25） | 没检测到动作，跟着引导慢慢做 |
+| `insufficient` | 动了，但幅度 / 保持时长 / 往复次数有一项没达到 | 幅度还不够，再大一点 / 保持住，别急着放下 / 再多做几次 |
+| `completed` | 本类型要求的项全部达到 | 很好，保持住 |
+
+同时给出三个可解释的量：`peak_activity`（幅度）、`held_ms` / `hold_ratio`（保持）、
+`cycles`（往复次数）。
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `ACTIVITY_IDLE_MAX` | 0.25 | 峰值活动量低于它 = 全程没动 |
+| `ACTIVITY_ONSET` | 1.0 | 有效活动起点，**与 S1 的 `EXERCISE_ACTIVITY_START` 同一个值**（守卫断言二者不许脱钩） |
+| `HOLD_TARGET_RATIO` | 0.6 | 保持类：达标时长 / 标称时长的下限 |
+| `CYCLE_TROUGH_RATIO` | 0.4 | 往复类：回落到 onset 的该比例以下才算「一次归位」 |
+| `DEFAULT_MIN_CYCLES` | 3 | 往复类的默认最小循环数 |
+| `MAX_FRAME_GAP_MS` | 1500 | 相邻帧间隔超过它 = 数据中断，该段不计入保持时长 |
+
+几条必须记住的口径：
+
+- 🔴 **判定用的数字必须与用户看到的数字同源**：每帧活动量先经 `round_1`，
+  保持比例也先取整再比较。否则会出现「显示 60 分（达标线）却说幅度不足」那类
+  自相矛盾（S1 踩过）。`hold_ratio` 只取得到 `k/10`，所以 `ACTIVITY_IDLE_MAX = 0.25`
+  实际落在两个可表示值之间 —— 边界是「取整后 ≤ 0.2 → idle，≥ 0.3 → 不算 idle」。
+- 🔴 **`held_ms` 是左黎曼和**：只累加 `activity[i] >= ACTIVITY_ONSET` 的区间，
+  且间隔须在 `(0, MAX_FRAME_GAP_MS]` 内。掉帧、用户走出画面时缺口必须**留白**、
+  不能算成「保持得好」—— 所以上游只推入 `type === 'pose'` 的帧，不要补 0。
+- **`hold_ratio` 的分母是标称时长**（12 秒的动作就该在 12 秒里保持住），并钳到 `[0,1]`。
+- **往复类不看保持比例**（"保持"对往复动作没有意义），只看幅度 + 有效次数；
+  计数带**滞回**（升到 onset 才算到位、回落到 trough 才算归位），防止在起点附近抖动时被重复计数。
+- 🔴 **只有指标能反映的动作才参与判定**。`exerciseActivity` 只看「头部侧倾角 /
+  肩部高度差 / 脊柱倾斜角」，它们反映**不对称与倾斜**。于是颈部左右转（绕垂直轴，
+  正对摄像头时耳线仍水平）、扩胸（双侧对称）、头部后缩（矢状面平移）**测不到** ⇒
+  动作库里 `measurable: false`，既不参与判定也不给实时引导。
+  对这类动作说「没检测到动作」等于**冤枉正在做的用户** —— 那正是 S2 要消灭的缺陷类型。
+  ⚠️ 这张表按指标定义推出，**尚未用真机数据校准**。
+- **零采样不下结论**：摄像头没拍到人时 `judged === 0`，界面显示 `--` 并保留
+  「活动完成!」，既不宣布完成也不指责用户没做。
+
+**收尾文案必须与判定同源、分三种**：有完成 → 完成；动了没到位 → 「动作做到了，
+幅度还可以更大」；一次都没动 → 「没检测到动作」。只分两种就会拿"没检测到动作"
+去说一个确实在动、只是幅度不够的人。
+
+**实时引导**用**滚动窗口**（`GUIDE_WINDOW_MS = 5000`，只看当前动作的帧）：
+用户需要的是"此刻该怎么做"，把几十秒前的帧也算进来只会让提示迟钝。窗口取 5 秒是因为
+往复类要求窗口内含一次完整的「到位→归位」，太短会让慢速画圈的人一直卡在
+「再多做几次」的误报上。
+
+界面呈现遵守本项目那条布局铁律（**随高频数据出现/消失的提示不能做兄弟节点**）：
+手机端是摄像头画面内的浮层，桌面端是 `ExercisePanel` 里**固定高度占位**的一行。
+
 ### 4.2 双端数值一致性（改评分必读）
 
 评分与统计聚合的逻辑各只有一处实现，**必须逐位等价**：
@@ -357,6 +414,7 @@ Python 后端 —— 后端必须知道用户此刻在做什么。
 | `backend/services/smoother.py`（EMA 0.35） | `PoseSmoother`（`localPoseEngine.ts`） |
 | `backend/services/pose_detector.py`（角度） | `localPoseEngine.ts` 的角度计算 |
 | `backend/services/part_health.py`（部位健康度） | `src/platform/partHealth.ts` |
+| `backend/services/exercise_quality.py`（动作完成度） | `src/platform/exerciseQuality.ts` |
 | `backend/api/stats.py`（统计聚合） | `src/platform/localStats.ts` |
 | `backend/services/rounding.py`（取整口径） | `scoringModel.pyRound` / `pyRound1` |
 
@@ -364,7 +422,13 @@ Python 后端 —— 后端必须知道用户此刻在做什么。
 npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑 + 8 角度 + 不变量
                           # 运动：32 用例 + 措辞断言 + 不变量 + 语音隔离（源码级守卫）
                           # 部位健康度：9 常量 + 3 映射 + 18 用例 + 取整灵敏度自检
+                          # 动作完成度：17 常量 + 3 段离线样本 + 29 用例 + 语义硬断言 + 取整灵敏度自检
 ```
+
+> **跨语言比对拿不到"运行时的类型"**：`src/platform/exerciseQuality.ts` 里的结论
+> 与动作类型必须是 `export const`（再由它 `typeof` 派生出类型），不能只写成 TS 类型 ——
+> 类型在运行时不存在，对拍脚本就没有值可比，两端字符串是否一致只能靠人眼。
+> 而且这些常量要**真的参与逻辑**，否则改了常量行为不变、比对就是空转。
 
 改动任何一个文件后**必须**跑一遍。几条硬规矩：
 
@@ -571,7 +635,7 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 
 | # | 铁律 | 违反的后果 |
 |---|---|---|
-| 1 | 改 `scorer.py` / `smoother.py` / `pose_detector.py` / `localPoseEngine.ts` 后必跑 `verify:parity` | 各端分数不一致，用户看到"同一姿势两种分数" |
+| 1 | 改 `scorer.py` / `smoother.py` / `pose_detector.py` / `part_health.py` / `exercise_quality.py` / `localPoseEngine.ts` / `partHealth.ts` / `exerciseQuality.ts` 后必跑 `verify:parity` | 各端不一致，用户看到"同一姿势两种分数"、"做完了却说你没做" |
 | 2 | 取整一律 `round(x*100)/100`（前端 `pyRound()`） | Python 银行家舍入与 JS 不一致，边界处差 1 分 |
 | 3 | 业务组件问能力（`supports()`），不写 `platform === 'electron'` | 新增平台要改一堆业务代码 |
 | 4 | `useWebSocket()` 的返回值不许整个进依赖数组 | effect 反复重建 → 摄像头"无限正在启动" |
@@ -585,6 +649,8 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 | 12 | 改评分公式要接受 79–89 死区与阈值处的台阶 | 以为是自己写错了 |
 | 13 | 安卓 `setWebChromeClient` 必须**继承** `BridgeWebChromeClient`，不要 new 裸 `WebChromeClient` | 丢掉 `onShowFileChooser` / `onConsoleMessage` 等 5 组 override：`<input type="file">` 静默失灵、JS `console.*` 不进 logcat（安卓端唯一排查手段） |
 | 14 | 加超时保护时，必须同时处理「超时之后资源才到」 | 迟到的 `MediaStream` 没人接手 → 摄像头常亮、下次取流 `NotReadableError`（见 [TROUBLESHOOTING.md §14](TROUBLESHOOTING.md)） |
+| 15 | 判定用的数字必须先取**展示口径**（`round_1`）再与阈值比较 | 出现「显示 60 分（正好达标）却说幅度不足」这类自相矛盾（S1、S2 各踩一次） |
+| 16 | 判定 / 文案只能覆盖**指标真能反映**的动作（动作库的 `measurable`） | 对"测不到"的动作说「没检测到动作」→ 冤枉正在认真做的用户 |
 
 > 更细的排查手册见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)；
 > 本机（Windows + 沙箱 + 代理）特有的环境坑见技能 `windows-powershell-pitfalls`。

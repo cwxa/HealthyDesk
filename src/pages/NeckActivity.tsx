@@ -10,6 +10,7 @@ import ScoreGauge from '../components/ScoreGauge'
 import ExercisePanel, { exercises, type ExerciseState } from '../components/ExercisePanel'
 import ExerciseGuide from '../components/ExerciseGuide'
 import { speakPostureIssue, speak } from '../utils/speech'
+import { judgeExercise, type ExerciseFrame, type ExerciseGrade } from '../platform/exerciseQuality'
 import { nativeDiagAsync, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
 import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
@@ -141,6 +142,21 @@ export default function NeckActivity() {
   const [exScores, setExScores] = useState<number[]>([])
   const exTimerRef = useRef<number>(0)
   const exScoresRef = useRef<number[]>([])
+  /**
+   * 活动期间的原始帧（带动作下标）。
+   *
+   * 为什么要留原始帧而不只留分数：完成度判定（`judgeExercise`）需要**活动量序列**
+   * 才能算「幅度 / 保持时长 / 往复次数」，分数是它的单调映射、丢掉了这些信息。
+   * 帧必须带 `action` 下标 —— 7 个动作的类型不同（保持类 / 往复类），
+   * 用整段活动的帧去判单个动作是错的（12 秒的动作不该按 82 秒的标称时长算保持比例）。
+   */
+  const exFramesRef = useRef<Array<ExerciseFrame & { action: number }>>([])
+  // 供 onPoseResult 回调读取当前动作下标：不能把 exCurrent 写进那个 effect 的依赖
+  // （每换一个动作就重建订阅，会反复掐掉推理循环），所以用 ref 传。
+  const exCurrentRef = useRef(0)
+  useEffect(() => { exCurrentRef.current = exCurrent }, [exCurrent])
+  // 类型直接从 ExerciseState 派生，避免两处各写一份形状（改一处忘另一处）
+  const [exVerdict, setExVerdict] = useState<ExerciseState['verdict']>(null)
 
   const startCamera = useCallback(async () => {
     // 并发守卫：挂载自动启动 + 用户在系统对话框点「允许」触发的自动重取流可能撞在一起，
@@ -292,6 +308,15 @@ export default function NeckActivity() {
         if (mode === 'exercise') {
           // 收的是**运动态通道**的分数（动作达成度），不是活动期间的静息姿态分。
           setExScores(p => { const next = [...p, result.score!]; exScoresRef.current = next; return next })
+          // 原始帧是完成度判定的输入。⚠️ 只推入**有姿态**的帧：
+          // `judgeExercise` 把相邻帧的时间差当作"该帧的维持时长"，缺口必须留白而不是补 0。
+          exFramesRef.current.push({
+            t: Date.now(),
+            action: exCurrentRef.current,
+            head_angle: result.head_angle ?? 0,
+            shoulder_diff: result.shoulder_diff ?? 0,
+            spine_angle: result.spine_angle ?? 0,
+          })
         } else {
           // 只记录**静息坐姿**采样。活动期间写库会同时污染两处：
           // 「今日平均分」与「部位健康度」会把"用户在做动作"当成"不良姿态"
@@ -337,6 +362,8 @@ export default function NeckActivity() {
       setExTimeLeft(exercises[0].duration)
       setExScores([])
       exScoresRef.current = []
+      exFramesRef.current = []
+      setExVerdict(null)
       speak('请跟随引导完成肩颈活动')
     }
     const handleStartExerciseMode = () => {
@@ -363,8 +390,50 @@ export default function NeckActivity() {
     setExTimeLeft(exercises[0].duration)
     setExScores([])
     exScoresRef.current = []
+    exFramesRef.current = []
+    setExVerdict(null)
     if (isMobile()) localReminder.beginBreak()
     speak('请跟随引导完成肩颈活动')
+  }, [])
+
+  /**
+   * 逐动作完成度判定 —— 这是 S2 的核心：**结束不再等于完成**。
+   *
+   * 此前不管用户做没做，82 秒倒计时走完就宣布「活动完成!」并记一条记录。
+   * 现在按动作分别判定：每个动作用自己的类型（保持类看幅度+保持时长，
+   * 往复类看幅度+有效次数）与自己的标称时长去评它自己那一段帧。
+   *
+   * ⚠️ 只判**可判定**的动作（`measurable`）：
+   *   - 没有采样的动作不判（摄像头没拍到人、用户中途离开画面都会零采样，
+   *     这时下"你没做"的结论是冤枉用户）；
+   *   - 三个指标测不到的动作不判（转颈 / 扩胸 / 头部后缩，见 ExercisePanel 的说明）——
+   *     对它们说"没检测到动作"同样是冤枉正在做的用户。
+   */
+  const judgeSession = useCallback((): NonNullable<ExerciseState['verdict']> => {
+    const frames = exFramesRef.current
+    let completed = 0
+    let moved = 0
+    let judged = 0
+    let notJudgeable = 0
+    for (let i = 0; i < exercises.length; i++) {
+      const e = exercises[i]
+      if (!e.measurable) {
+        notJudgeable++
+        continue
+      }
+      const mine = frames.filter((f) => f.action === i)
+      if (mine.length === 0) continue
+      judged++
+      const verdict = judgeExercise(mine, {
+        kind: e.kind,
+        duration_ms: e.duration * 1000,
+        min_cycles: e.min_cycles,
+      })
+      if (verdict.grade === 'completed') completed++
+      // 「动过但没到位」要单独计数：收尾文案靠它区分"没动"与"幅度不够"
+      else if (verdict.grade === 'insufficient') moved++
+    }
+    return { completed, moved, judged, notJudgeable }
   }, [])
 
   const finishExercise = useCallback(async () => {
@@ -373,7 +442,17 @@ export default function NeckActivity() {
     const ss = exScoresRef.current
     const avg = ss.length > 0 ? Math.round(ss.reduce((a, b) => a + b, 0) / ss.length) : 0
     const dur = exercises.reduce((s, e) => s + e.duration, 0)
-    speak('活动完成！')
+    const verdict = judgeSession()
+    setExVerdict(verdict)
+    // 语音与收尾文案同源分三种：完成 / 动了但幅度不够 / 一次都没动。
+    // judged === 0（摄像头没拍到人）时不做任何断言。
+    speak(
+      verdict.judged === 0 || verdict.completed > 0
+        ? '活动完成！'
+        : verdict.moved > 0
+          ? '动作做到了，幅度再打开一点效果更好'
+          : '本次没检测到动作，下次跟着引导一起做',
+    )
     if (isMobile()) localReminder.endBreak()
     try {
       await data.recordActivity({
@@ -387,7 +466,7 @@ export default function NeckActivity() {
     } catch (e) {
       console.error('Activity record failed:', e)
     }
-  }, [])
+  }, [judgeSession])
 
   // 用 ref 持有最新的 finishExercise，供计时器回调调用，避免 stale closure
   const finishRef = useRef(finishExercise)
@@ -444,6 +523,42 @@ export default function NeckActivity() {
   const elapsed = totalDur - exercises.slice(exCurrent).reduce((s, e, i) => s + (i === 0 ? exTimeLeft : e.duration), 0)
   const progress = (elapsed / totalDur) * 100
 
+  /**
+   * 实时引导：对**当前动作最近 GUIDE_WINDOW_MS 内的帧**做一次完成度判定。
+   *
+   * 为什么是滚动窗口而不是整段活动：
+   *   1. 用户需要的是"此刻该怎么做"，把几十秒前的帧也算进来只会让提示迟钝；
+   *   2. 每个动作的标称时长就是它自己那 10–12 秒，窗口正好对齐这个量级；
+   *   3. 顺序读取 exFramesRef 不引入额外 state，不会因为"每帧都 setState"
+   *      把渲染压力翻倍 —— 帧写进 ref、由既有的 latestResult 触发的渲染顺带读出来。
+   */
+  /**
+   * 实时引导的滚动窗口长度。
+   *
+   * 取 5 秒而不是 3 秒，是因为往复类动作（肩部环绕）要求窗口内含**一次完整的
+   * "到位→归位"**才计一环：慢慢画圈的人一次循环可能接近 3 秒，窗口太短就会一直
+   * 卡在"再多做几次"的误报上。5 秒对保持类同样成立（0.6 的保持线 = 需要保持 3 秒）。
+   */
+  const GUIDE_WINDOW_MS = 5000
+  const liveQuality: { grade: ExerciseGrade; hint: string } | null = (() => {
+    if (mode !== 'exercise') return null
+    // 指标测不到的动作不给判定 —— 见 ExercisePanel 里 `measurable` 的说明
+    if (!exercises[exCurrent].measurable) return null
+    const frames = exFramesRef.current
+    if (frames.length < 2) return null
+    const end = frames[frames.length - 1].t
+    const win = frames.filter((f) => f.action === exCurrent && f.t > end - GUIDE_WINDOW_MS)
+    if (win.length < 2) return null
+    const e = exercises[exCurrent]
+    const v = judgeExercise(win, {
+      kind: e.kind,
+      duration_ms: GUIDE_WINDOW_MS,
+      // 窗口里只要求看到一次有效归位，整场判定才用动作自己的 min_cycles
+      min_cycles: e.kind === 'cyclic' ? 1 : 0,
+    })
+    return { grade: v.grade, hint: v.hint }
+  })()
+
   const exState: ExerciseState = {
     phase: mode === 'done' ? 'done' : 'active',
     current: exCurrent,
@@ -454,6 +569,9 @@ export default function NeckActivity() {
     sessionScores: exScores,
     totalDur,
     progress,
+    qualityHint: liveQuality?.hint ?? '',
+    qualityGrade: liveQuality?.grade ?? null,
+    verdict: exVerdict,
   }
 
   // ---- 摄像头面板（两端共用）----
@@ -576,6 +694,35 @@ export default function NeckActivity() {
                   }}>{issues.join(' · ')}</span>
                 </motion.div>
               )}
+            </AnimatePresence>
+          )}
+
+          {/* 实时引导（手机端）—— 与上面的姿态提示同一套做法：**画面内浮层**。
+              它随判定结果（没动 / 幅度不够 / 到位）高频切换，做成流式元素会不断改变
+              摄像头高度导致画面跳动；浮层 + 淡入淡出彻底消除这种抖动。
+              right: 92 是为了避开右上角的动作示意（ExerciseGuide size=72）。 */}
+          {mobile && mode === 'exercise' && liveQuality && (
+            <AnimatePresence>
+              <motion.div
+                key="exercise-guide-overlay"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18 }}
+                style={{
+                  position: 'absolute', top: 10, left: 10, right: 92, zIndex: 12,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: liveQuality.grade === 'completed' ? 'rgba(46,125,50,0.88)' : 'rgba(239,108,0,0.9)',
+                  backdropFilter: 'blur(6px)',
+                  borderRadius: 10, padding: '6px 10px',
+                  pointerEvents: 'none',
+                }}
+              >
+                <span style={{
+                  fontSize: 12, color: '#fff', lineHeight: 1.4,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>{liveQuality.hint}</span>
+              </motion.div>
             </AnimatePresence>
           )}
 

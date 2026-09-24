@@ -1,0 +1,33 @@
+{
+  "name": "sit-still",
+  "description": "负样本：全程没动 —— 人坐在那儿没做动作，只有坐姿自身的微小抖动（峰值活动量 0.2，低于 idle 线 0.25）",
+  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0 },
+  "expected_grade": "idle",
+  "frames": [
+    { "t": 0, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 1000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 1500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 2000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 2500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 3000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 3500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 4000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 4500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 5000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 5500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 6000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 6500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 7000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 7500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 8000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 8500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 9000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 9500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 10000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 10500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 11000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 11500, "head_angle": 1.1, "shoulder_diff": 0.4, "spine_angle": 1.0 },
+    { "t": 12000, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 }
+  ]
+}
