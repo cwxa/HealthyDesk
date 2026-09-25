@@ -28,6 +28,41 @@ import {
  * 不一致会出现"电脑说还有 30 天数据、手机只剩 7 天"这种没法查的问题。
  */
 export const RETENTION_DAYS = 30
+export const MIN_RETENTION_DAYS = 7
+export const MAX_RETENTION_DAYS = 365
+
+/**
+ * 把用户填的保留天数收敛到合法区间（与 Python 的 `config.clamp_retention_days` 同语义）。
+ *
+ * 🔴 单点定义：两端的上下界与回落值必须一致，否则会出现"电脑保留 30 天、
+ * 手机保留 1 天"——而 1 天就把历史删干净了。
+ *
+ * 规则（与 Python 侧逐条对齐，每一处差异都实测过）：
+ * - 布尔 → 回落默认值（Python 的 `int(True)` 是 1，会让两端给出 7 与 30 两个答案）
+ * - 数字 → 向零取整（`Math.trunc(30.9) === 30`，与 Python 的 `int()` 一致）
+ * - 字符串 → **只认纯整数**（`^[+-]?\d+$`）：`parseInt` 会接受 `"45abc"`，Python 的
+ *   `int()` 不接受 —— 用共同的正则才等价
+ * - 其它（null / 对象）→ 回落默认值
+ * - 非法输入一律回落**默认值 30**（不是最小值）：填错不该导致最多数据被删
+ */
+export function clampRetentionDays(value: unknown): number {
+  let n: number
+  if (typeof value === 'boolean') {
+    return RETENTION_DAYS
+  } else if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return RETENTION_DAYS
+    n = Math.trunc(value)
+  } else if (typeof value === 'string') {
+    const s = value.trim()
+    if (!/^[+-]?\d+$/.test(s)) return RETENTION_DAYS
+    n = Number(s)
+  } else {
+    return RETENTION_DAYS
+  }
+  if (n < MIN_RETENTION_DAYS) return MIN_RETENTION_DAYS
+  if (n > MAX_RETENTION_DAYS) return MAX_RETENTION_DAYS
+  return n
+}
 
 /** 一天的聚合结果（与 `posture_daily` 表的列一一对应，仅存精确量）。 */
 export interface DayAggregate {

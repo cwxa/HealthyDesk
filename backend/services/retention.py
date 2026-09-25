@@ -22,12 +22,15 @@
 """
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
-from config import RETENTION_DAYS
+from config import DB_PATH, RETENTION_DAYS, clamp_retention_days
 from services.daily_agg import aggregate_day
 
 logger = logging.getLogger("neckguardian.retention")
+
+SETTING_KEY = "retention_days"
 
 
 def _iso(dt: datetime) -> str:
@@ -130,18 +133,38 @@ async def prune_raw(db, keep_days: int = RETENTION_DAYS) -> int:
     return deleted
 
 
-async def maintain(db, keep_days: int = RETENTION_DAYS) -> dict:
-    """先聚合、后清理。启动时与后台定时任务都调用它。"""
+async def retention_days(db) -> int:
+    """用户设置的保留天数（settings 键 `retention_days`），非法/缺失时回落默认值。
+
+    每次维护时读一次而不是缓存在内存里：设置页改完立刻生效，不需要重启后端。
+    """
+    try:
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (SETTING_KEY,))
+        row = await cursor.fetchone()
+        if row is None:
+            return RETENTION_DAYS
+        return clamp_retention_days(row["value"])
+    except Exception as e:
+        logger.warning("读取 %s 失败，回落默认 %d 天：%s", SETTING_KEY, RETENTION_DAYS, e)
+        return RETENTION_DAYS
+
+
+async def maintain(db, keep_days: int | None = None) -> dict:
+    """先聚合、后清理。启动时与后台定时任务都调用它。
+
+    `keep_days=None`（默认）时读用户设置，避免调用方各自决定保留期。
+    """
+    days = keep_days if keep_days is not None else await retention_days(db)
     rolled = await rollup_daily(db)
-    deleted = await prune_raw(db, keep_days)
-    return {"days_rolled_up": rolled, "samples_deleted": deleted, "keep_days": keep_days}
+    deleted = await prune_raw(db, days)
+    return {"days_rolled_up": rolled, "samples_deleted": deleted, "keep_days": days}
 
 
-def retention_summary_sync(db_path: str) -> dict:
-    """同步读取保留状态（给 API 用：不修改数据，只报告）。"""
+def retention_summary_sync() -> dict:
+    """同步读取存储与保留状态（给 API 用：不修改数据，只报告）。"""
     import sqlite3
 
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(DB_PATH)
     try:
         cur = con.execute("SELECT COUNT(*) FROM posture_score")
         raw_count = cur.fetchone()[0]
@@ -150,13 +173,24 @@ def retention_summary_sync(db_path: str) -> dict:
         cur = con.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
         row = cur.fetchone()
         schema_version = row[0] if row else 0
-        return {
-            "raw_samples": raw_count,
-            "daily_rows": days or 0,
-            "first_day": first_day,
-            "last_day": last_day,
-            "keep_days": RETENTION_DAYS,
-            "schema_version": schema_version,
-        }
+        cur = con.execute("SELECT value FROM settings WHERE key = ?", (SETTING_KEY,))
+        row = cur.fetchone()
+        configured = clamp_retention_days(row[0]) if row else RETENTION_DAYS
     finally:
         con.close()
+
+    try:
+        db_bytes = os.path.getsize(DB_PATH)
+    except OSError:
+        db_bytes = 0
+
+    return {
+        "raw_samples": raw_count,
+        "daily_rows": days or 0,
+        "first_day": first_day,
+        "last_day": last_day,
+        "keep_days": configured,
+        "default_keep_days": RETENTION_DAYS,
+        "schema_version": schema_version,
+        "db_bytes": db_bytes,
+    }

@@ -3,6 +3,11 @@ import { motion } from 'framer-motion'
 import { useApi } from '../hooks/useApi'
 import { useAI } from '../hooks/useAI'
 import { isMobile, platformLabel } from '../platform/runtime'
+import { data, exportFileName } from '../platform/dataLayer'
+import type { DataStatus } from '../platform/dataLayer'
+import { MAX_RETENTION_DAYS, MIN_RETENTION_DAYS, clampRetentionDays } from '../platform/dailyAgg'
+import { pickTextFile, saveTextFile } from '../platform/dataFiles'
+import { formatBytes } from '../utils/format'
 import type { Settings as SettingsType } from '../types'
 import { EyeIcon, EyeOffIcon } from '../components/icons'
 
@@ -31,6 +36,13 @@ export default function Settings() {
   const [aiSaving, setAiSaving] = useState(false)
   const [aiMsg, setAiMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [testing, setTesting] = useState(false)
+
+  // ---- 数据管理状态（导出 / 导入 / 清除 / 保留期） ----
+  const [dataStatus, setDataStatus] = useState<DataStatus | null>(null)
+  const [dataBusy, setDataBusy] = useState<DataBusy>(null)
+  const [dataMsg, setDataMsg] = useState<DataMsg | null>(null)
+  /** 清除是两步：第一次点击只切到"确认"，避免误触把数据删了。 */
+  const [confirmClear, setConfirmClear] = useState(false)
 
   useEffect(() => {
     window.electronAPI?.getAppVersion?.().then(setAppVersion).catch(() => {})
@@ -115,6 +127,154 @@ export default function Settings() {
       console.error('Test AI connection failed:', e)
     } finally {
       setTesting(false)
+    }
+  }
+
+  // -------------------- 数据管理 --------------------
+  //
+  // 三条语义在两端一致（桌面 backend/api/data.py、移动 localData.ts）：
+  // 导出不含 API Key；导入=覆盖数据表（设置项合并）；清除只清健康数据。
+
+  const refreshDataStatus = useCallback(() => {
+    data.getDataStatus().then(setDataStatus).catch((e) => {
+      console.error('读取存储状态失败:', e)
+    })
+  }, [])
+
+  useEffect(() => { refreshDataStatus() }, [refreshDataStatus])
+
+  const handleExportJson = async () => {
+    setDataBusy('export')
+    setDataMsg(null)
+    try {
+      const { bundle, skipped } = await data.exportData()
+      const rows = Object.values(bundle.tables).reduce((n, r) => n + r.length, 0)
+      const out = await saveTextFile(exportFileName('json'), JSON.stringify(bundle, null, 2))
+      if (!out.saved) return // 用户主动取消：不提示，也不报错
+      setDataMsg({
+        kind: 'ok',
+        text: `已导出 ${rows} 行（不含 DeepSeek API Key）${skippedText(skipped)}`,
+      })
+    } catch (e) {
+      console.error('导出备份失败:', e)
+      setDataMsg({ kind: 'err', text: '导出失败，请重试' })
+    } finally {
+      setDataBusy(null)
+    }
+  }
+
+  const handleExportCsv = async () => {
+    setDataBusy('csv')
+    setDataMsg(null)
+    try {
+      const csv = await data.exportDailyCsv()
+      const days = Math.max(0, csv.split('\r\n').filter((l) => l.trim()).length - 1)
+      const out = await saveTextFile(exportFileName('csv'), csv, 'text/csv')
+      if (!out.saved) return
+      setDataMsg(days > 0
+        ? { kind: 'ok', text: `已导出 ${days} 天的每日汇总` }
+        : { kind: 'warn', text: '还没有每日归档，导出的是空表头（先记录一会儿数据再导）' })
+    } catch (e) {
+      console.error('导出 CSV 失败:', e)
+      setDataMsg({ kind: 'err', text: '导出失败，请重试' })
+    } finally {
+      setDataBusy(null)
+    }
+  }
+
+  const handleImport = async () => {
+    setDataMsg(null)
+    let picked: { name: string; text: string } | null
+    try {
+      picked = await pickTextFile()
+    } catch (e) {
+      console.error('读取文件失败:', e)
+      setDataMsg({ kind: 'err', text: '读取文件失败' })
+      return
+    }
+    if (!picked) return // 取消选择
+
+    let payload: unknown
+    try {
+      payload = JSON.parse(picked.text)
+    } catch {
+      setDataMsg({ kind: 'err', text: `「${picked.name}」不是有效的 JSON 文件` })
+      return
+    }
+
+    setDataBusy('import')
+    try {
+      const res = await data.importData(payload)
+      if (!res.ok) {
+        setDataMsg({ kind: 'err', text: importErrorText(res.error) })
+        return
+      }
+      const rows = Object.values(res.imported).reduce<number>((n, v) => n + (v ?? 0), 0)
+      setDataMsg({
+        kind: 'ok',
+        text: `已导入 ${rows} 行：原有健康数据被覆盖，设置项为合并 ${skippedText(res.skipped)}`,
+      })
+      refreshDataStatus()
+    } catch (e) {
+      console.error('导入失败:', e)
+      setDataMsg({ kind: 'err', text: '导入失败，请检查后端是否在运行' })
+    } finally {
+      setDataBusy(null)
+    }
+  }
+
+  const handleClear = async () => {
+    if (!confirmClear) {
+      setConfirmClear(true)
+      setDataMsg({
+        kind: 'warn',
+        text: '再点一次即清除本机全部健康数据（不可恢复）。设置与 API Key 不受影响。',
+      })
+      setTimeout(() => setConfirmClear(false), 8000)
+      return
+    }
+    setConfirmClear(false)
+    setDataBusy('clear')
+    setDataMsg(null)
+    try {
+      const cleared = await data.clearHealthData()
+      const rows = Object.values(cleared).reduce<number>((n, v) => n + (v ?? 0), 0)
+      setDataMsg({
+        kind: 'ok',
+        text: `已清除 ${rows} 行健康数据（提醒间隔、AI 配置等设置已保留）`,
+      })
+      refreshDataStatus()
+    } catch (e) {
+      console.error('清除数据失败:', e)
+      setDataMsg({ kind: 'err', text: '清除失败，请重试' })
+    } finally {
+      setDataBusy(null)
+    }
+  }
+
+  /**
+   * 改保留期后**立刻跑一次维护**：后台是 30 分钟一轮，不主动触发的话
+   * 用户看不到任何变化，会以为设置没生效。
+   */
+  const handleRetentionChange = async (raw: string) => {
+    const days = clampRetentionDays(raw)
+    setDataBusy('retention')
+    setDataMsg(null)
+    try {
+      await updateSetting('retention_days', String(days))
+      const res = await data.maintainData()
+      refreshDataStatus()
+      setDataMsg({
+        kind: 'ok',
+        text: res.samplesDeleted > 0
+          ? `保留期已设为 ${res.keepDays} 天，已清理 ${res.samplesDeleted} 条超期原始采样`
+          : `保留期已设为 ${res.keepDays} 天，暂无需清理的原始采样`,
+      })
+    } catch (e) {
+      console.error('保存保留期失败:', e)
+      setDataMsg({ kind: 'err', text: '保存保留期失败，请重试' })
+    } finally {
+      setDataBusy(null)
     }
   }
 
@@ -354,6 +514,109 @@ export default function Settings() {
           </motion.p>
         )}
 
+        {/* ---- 数据管理（桌面 / 移动共用，都走两端一致的数据层） ---- */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.28 }}
+          style={{ ...cardStyle, marginTop: 16 }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 16 }}>🗂</span>
+            <p style={{ fontSize: 15, fontWeight: 700 }}>数据管理</p>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.7 }}>
+            所有数据只存在本机。导出的备份文件两端通用 ——{' '}
+            {isMobile() ? '手机的备份可以导回电脑' : '电脑的备份可以导进手机'}。
+            <br />
+            <b style={{ color: 'var(--text)' }}>导出不包含 DeepSeek API Key</b>；
+            「清除数据」也只清健康数据，提醒间隔、AI 配置等设置一律保留。
+          </p>
+
+          {dataStatus && (
+            <div style={{
+              fontSize: 12, color: 'var(--text-secondary)', lineHeight: 2,
+              background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', marginBottom: 4,
+            }}>
+              占用空间：<b style={valueStyle}>{formatBytes(dataStatus.db_bytes)}</b>
+              {dataStatus.quota_bytes
+                ? <span>（浏览器配额 {formatBytes(dataStatus.quota_bytes)}）</span>
+                : null}
+              <br />
+              原始采样：<b style={valueStyle}>{dataStatus.raw_samples.toLocaleString()}</b> 条
+              <span>　·　</span>
+              每日归档：<b style={valueStyle}>{dataStatus.daily_rows}</b> 天
+              {dataStatus.first_day && (
+                <span>（{dataStatus.first_day} ~ {dataStatus.last_day}）</span>
+              )}
+              <br />
+              数据表版本：v{dataStatus.schema_version}
+            </div>
+          )}
+
+          <SettingRow
+            label="原始采样保留期（天）"
+            description={`超过保留期的逐帧采样会被清理，但每日汇总永久保留（可填 ${MIN_RETENTION_DAYS}-${MAX_RETENTION_DAYS}）`}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min={MIN_RETENTION_DAYS}
+                max={MAX_RETENTION_DAYS}
+                value={dataStatus?.keep_days ?? ''}
+                disabled={!dataStatus || dataBusy === 'retention'}
+                onChange={(e) => handleRetentionChange(e.target.value)}
+                style={{
+                  width: 80, padding: '8px 12px', borderRadius: 6,
+                  border: '1px solid var(--border)', fontSize: 14, textAlign: 'center',
+                }}
+              />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>天</span>
+            </div>
+          </SettingRow>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+            <button
+              onClick={handleExportJson}
+              disabled={dataBusy !== null}
+              style={btnStyle(dataBusy !== null)}
+            >
+              {dataBusy === 'export' ? '导出中…' : '导出备份 (JSON)'}
+            </button>
+            <button
+              onClick={handleExportCsv}
+              disabled={dataBusy !== null}
+              style={ghostBtnStyle(dataBusy !== null)}
+            >
+              {dataBusy === 'csv' ? '导出中…' : '导出每日汇总 (CSV)'}
+            </button>
+            <button
+              onClick={handleImport}
+              disabled={dataBusy !== null}
+              style={ghostBtnStyle(dataBusy !== null)}
+            >
+              {dataBusy === 'import' ? '导入中…' : '导入备份'}
+            </button>
+            <button
+              onClick={handleClear}
+              disabled={dataBusy !== null}
+              style={dangerBtnStyle(dataBusy !== null, confirmClear)}
+            >
+              {dataBusy === 'clear' ? '清除中…' : confirmClear ? '确认清除' : '清除健康数据'}
+            </button>
+          </div>
+
+          {dataMsg && (
+            <p style={{
+              fontSize: 12, marginTop: 12, lineHeight: 1.7,
+              color: dataMsg.kind === 'ok' ? 'var(--success)'
+                : dataMsg.kind === 'warn' ? '#E65100' : 'var(--danger)',
+            }}>
+              {dataMsg.kind === 'ok' ? '✓ ' : '⚠ '}{dataMsg.text}
+            </p>
+          )}
+        </motion.div>
+
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -444,3 +707,63 @@ const switchTrack: React.CSSProperties = {
 const switchThumb: React.CSSProperties = {
   width: 20, height: 20, borderRadius: '50%', background: '#fff', display: 'block',
 }
+
+// ---------------------------------------------------------------------------
+// 数据管理：文案与按钮样式
+// ---------------------------------------------------------------------------
+
+type DataBusy = 'export' | 'csv' | 'import' | 'clear' | 'retention' | null
+interface DataMsg { kind: 'ok' | 'err' | 'warn'; text: string }
+
+/** 数据层的错误码 → 用户看得懂的话。码是约定的（两端同码），文案只属于界面。 */
+const IMPORT_ERRORS: Record<string, string> = {
+  not_an_object: '文件内容不是一个对象，可能不是备份文件',
+  bad_format: '这不是 NeckGuardian 的备份文件',
+  unsupported_version: '备份文件版本不受支持，请升级到最新版后再试',
+  missing_tables: '备份文件缺少数据段，可能已损坏',
+}
+
+function importErrorText(code: string | null): string {
+  if (!code) return '导入失败'
+  const prefix = 'missing_table:'
+  if (code.startsWith(prefix)) {
+    return `备份文件缺少「${code.slice(prefix.length)}」数据段，可能已损坏`
+  }
+  return IMPORT_ERRORS[code] ?? `导入失败：${code}`
+}
+
+const TABLE_LABELS: Record<string, string> = {
+  settings: '设置',
+  posture_score: '姿态采样',
+  posture_daily: '每日归档',
+  usage_record: '使用记录',
+  activity_log: '活动记录',
+}
+
+/** 把「跳过 N 行」的诊断计数说成一句人话（没有脏行时返回空串）。 */
+function skippedText(skipped: Partial<Record<string, number>>): string {
+  const parts = Object.entries(skipped)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([table, n]) => `${TABLE_LABELS[table] ?? table} ${n} 行`)
+  return parts.length ? `（已跳过格式异常：${parts.join('、')}）` : ''
+}
+
+const valueStyle: React.CSSProperties = { color: 'var(--text)', fontWeight: 600 }
+
+const btnStyle = (disabled: boolean): React.CSSProperties => ({
+  ...primaryBtn, opacity: disabled ? 0.6 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
+})
+
+const ghostBtnStyle = (disabled: boolean): React.CSSProperties => ({
+  ...ghostBtn, opacity: disabled ? 0.6 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
+})
+
+/** 「清除」两步走的按钮：第一次点击后变实心红，第二次才真的执行。 */
+const dangerBtnStyle = (disabled: boolean, armed: boolean): React.CSSProperties => ({
+  ...ghostBtn,
+  opacity: disabled ? 0.6 : 1,
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  borderColor: armed ? 'var(--danger)' : 'var(--border)',
+  color: armed ? '#fff' : 'var(--danger)',
+  background: armed ? 'var(--danger)' : 'transparent',
+})

@@ -104,10 +104,25 @@ DAILY_AGG_SQL = """
 """
 
 
+# ---------------------------------------------------------------------------
+# 迁移 3：保留天数的设置项。
+#
+# 为什么单独一条迁移、而不是往迁移 1 里补一行 INSERT：迁移 1 早已在用户的库里跑过，
+# 改它对老库无效、对新库生效，两端结构就会分叉（见模块顶部的"迁移只增不改"）。
+# 这一条同时是迁移机制的第二次实战 —— 它证明"加一个设置项"确实能推到老库上。
+# 读不到的兜底在 `services/retention.retention_days()`（回落默认 30），
+# 所以这条迁移失败也不会让功能不可用。
+# ---------------------------------------------------------------------------
+RETENTION_SETTING_SQL = """
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('retention_days', '30');
+"""
+
+
 # (版本号, SQL)。顺序即执行顺序；编号必须连续递增。
 MIGRATIONS: list[tuple[int, str]] = [
     (1, BASELINE_SQL),
     (2, DAILY_AGG_SQL),
+    (3, RETENTION_SETTING_SQL),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

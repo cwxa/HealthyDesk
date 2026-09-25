@@ -31,6 +31,9 @@ import { dayKeyFromTs } from './localDay'
 const DB_NAME = 'neckguardian'
 const DB_VERSION = 2
 
+/** 供数据管理层在导出包里记录 schema 版本（与桌面端 `migrations.LATEST_VERSION` 对应）。 */
+export { DB_VERSION }
+
 export interface PostureRecord {
   id?: number
   timestamp: string
@@ -137,6 +140,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   ai_enabled: 'false',
   auto_start: 'false',
   voice_enabled: 'true',
+  // 与后端 config.RETENTION_DAYS 同值；读取时统一走 dailyAgg.clampRetentionDays
+  retention_days: '30',
 }
 
 export async function getLocalSettings(): Promise<Record<string, string>> {
@@ -246,6 +251,52 @@ export async function getDailyRows(sinceDay?: string): Promise<DailyRow[]> {
   const all = await getAll<DailyRow>('posture_daily')
   const rows = sinceDay ? all.filter((r) => r.date >= sinceDay) : all
   return rows.sort((a, b) => (a.date < b.date ? -1 : 1))
+}
+
+// ---------------- 批量读写（导入 / 用量统计） ----------------
+
+/** 某张表的行数（用 count()，不把数据读进内存）。 */
+export function countStore(store: StoreName): Promise<number> {
+  return tx<number>(store, 'readonly', (s) => s.count())
+}
+
+/**
+ * 用给定行**整体替换**某张表的内容（单事务）。
+ *
+ * 导入用。刻意不在业务层逐行 `await`：原始采样动辄数十万行，
+ * 一行一个事务会慢到不可用（且中途失败会留下半份数据）。
+ */
+export function replaceStoreRows(
+  store: StoreName,
+  rows: Record<string, unknown>[],
+): Promise<number> {
+  return openDb().then(
+    (db) =>
+      new Promise<number>((resolve, reject) => {
+        const t = db.transaction(store, 'readwrite')
+        const os = t.objectStore(store)
+        os.clear()
+        for (const r of rows) os.add(r)
+        t.oncomplete = () => resolve(rows.length)
+        t.onerror = () => reject(t.error)
+        t.onabort = () => reject(t.error)
+      }),
+  )
+}
+
+/** 批量 upsert（设置表用：keyPath 是 `key`，重复写即覆盖）。 */
+export function putStoreRows(store: StoreName, rows: Record<string, unknown>[]): Promise<number> {
+  return openDb().then(
+    (db) =>
+      new Promise<number>((resolve, reject) => {
+        const t = db.transaction(store, 'readwrite')
+        const os = t.objectStore(store)
+        for (const r of rows) os.put(r)
+        t.oncomplete = () => resolve(rows.length)
+        t.onerror = () => reject(t.error)
+        t.onabort = () => reject(t.error)
+      }),
+  )
 }
 
 // ---------------- usage_record ----------------

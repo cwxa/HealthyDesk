@@ -14,15 +14,32 @@
  * `maintainLocalData()` 把这个顺序固定在函数里，调用方不必记住。
  */
 
-import { RETENTION_DAYS, aggregateDay } from './dailyAgg'
+import { RETENTION_DAYS, aggregateDay, clampRetentionDays } from './dailyAgg'
 import { dayBoundsIso, shiftDay, todayLocalDay } from './localDay'
 import {
   deletePostureBefore,
   getDailyRows,
+  getLocalSettings,
   putDailyRow,
   readPostureDayCounts,
   readPostureRange,
 } from './localDb'
+
+/**
+ * 用户设置的保留天数（settings 键 `retention_days`），缺失/非法时回落默认值。
+ *
+ * ⚠️ 每次维护都现读一次，**不要**缓存在模块变量里：设置页改完要立刻生效。
+ * 与桌面端 `retention.retention_days(db)` 同语义。
+ */
+export async function localRetentionDays(): Promise<number> {
+  try {
+    const settings = await getLocalSettings()
+    return clampRetentionDays(settings.retention_days)
+  } catch (e) {
+    console.warn('读取保留天数设置失败，回落默认值：', e)
+    return RETENTION_DAYS
+  }
+}
 
 /** 把原始采样折成每日归档，只重算**样本数发生变化**的日子，返回重算天数。 */
 export async function rollupDaily(): Promise<number> {
@@ -49,20 +66,26 @@ export async function pruneRaw(keepDays: number = RETENTION_DAYS): Promise<numbe
   return deletePostureBefore(startIso)
 }
 
-/** 先聚合、后清理。应用启动时调用。 */
-export async function maintainLocalData(keepDays: number = RETENTION_DAYS): Promise<{
+/**
+ * 先聚合、后清理。应用启动时调用。
+ *
+ * `keepDays` 省略时**读用户设置**（与桌面端 `maintain(db, keep_days=None)` 一致）——
+ * 调用方不该各自决定保留期，否则"设置页改了但没人读"这种 bug 会反复出现。
+ */
+export async function maintainLocalData(keepDays?: number): Promise<{
   daysRolledUp: number
   samplesDeleted: number
   keepDays: number
 }> {
   try {
+    const days = keepDays ?? (await localRetentionDays())
     const daysRolledUp = await rollupDaily()
-    const samplesDeleted = await pruneRaw(keepDays)
-    return { daysRolledUp, samplesDeleted, keepDays }
+    const samplesDeleted = await pruneRaw(days)
+    return { daysRolledUp, samplesDeleted, keepDays: days }
   } catch (e) {
     // 维护失败不能影响应用可用性（例如 IndexedDB 在某些隐私模式下不可用）
     console.error('本地数据维护失败:', e)
-    return { daysRolledUp: 0, samplesDeleted: 0, keepDays }
+    return { daysRolledUp: 0, samplesDeleted: 0, keepDays: keepDays ?? RETENTION_DAYS }
   }
 }
 

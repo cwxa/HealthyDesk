@@ -1,7 +1,11 @@
 import { hasLocalBackend } from './runtime'
 import * as local from './localDb'
+import * as localData from './localData'
+import * as localMaintenance from './localMaintenance'
 import * as stats from './localStats'
 import type { WeeklyReport, ActivityRecord } from '../types'
+import type { DataStatus, ImportOutcome } from './localData'
+import type { ExportBundle, Skipped } from './exportFormat'
 
 /**
  * 统一数据层。
@@ -142,4 +146,81 @@ export const data = {
       await http('/api/reminder/snooze', { method: 'POST', body: JSON.stringify({ minutes }) })
     }
   },
+
+  // ---------------- 数据管理（ROADMAP 需求 4） ----------------
+  //
+  // 三条语义在两端必须一致（桌面端 backend/api/data.py，移动端 localData.ts）：
+  // 导入=覆盖数据表、设置表 upsert；清除只清健康数据不清设置；校验失败回错误码。
+
+  /** 存储用量与保留状态。 */
+  async getDataStatus(): Promise<DataStatus> {
+    if (hasLocalBackend()) return http<DataStatus>('/api/data/status')
+    return localData.getLocalDataStatus()
+  },
+
+  /** 导出全部数据。`bundle` 是要写进文件的内容，`skipped` 只是诊断信息。 */
+  async exportData(): Promise<{ bundle: ExportBundle; skipped: Skipped }> {
+    if (hasLocalBackend()) {
+      return http<{ bundle: ExportBundle; skipped: Skipped }>('/api/data/export')
+    }
+    return localData.exportLocalData()
+  },
+
+  /** 每日汇总 CSV。 */
+  async exportDailyCsv(): Promise<string> {
+    if (hasLocalBackend()) {
+      const res = await http<{ csv: string }>('/api/data/export.csv')
+      return res.csv
+    }
+    return localData.exportLocalDailyCsv()
+  },
+
+  /** 导入一个导出包（覆盖数据表；设置表 upsert）。 */
+  async importData(payload: unknown): Promise<ImportOutcome> {
+    if (hasLocalBackend()) {
+      return http<ImportOutcome>('/api/data/import', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    }
+    return localData.importLocalData(payload)
+  },
+
+  /** 清除全部健康数据（保留设置）。 */
+  async clearHealthData(): Promise<Partial<Record<string, number>>> {
+    if (hasLocalBackend()) {
+      const res = await http<{ ok: boolean; cleared: Partial<Record<string, number>> }>(
+        '/api/data/clear',
+        { method: 'POST', body: '{}' },
+      )
+      return res.cleared
+    }
+    return localData.clearLocalHealthData()
+  },
+
+  /**
+   * 立即执行一次维护（日聚合 + 保留期清理）。
+   *
+   * 改完「保留天数」后调用：后台维护 30 分钟一轮，不主动触发的话用户看不到任何
+   * 变化，会以为设置没生效。
+   */
+  async maintainData(): Promise<{ daysRolledUp: number; samplesDeleted: number; keepDays: number }> {
+    if (hasLocalBackend()) {
+      const res = await http<{ days_rolled_up: number; samples_deleted: number; keep_days: number }>(
+        '/api/data/maintain',
+        { method: 'POST', body: '{}' },
+      )
+      return {
+        daysRolledUp: res.days_rolled_up,
+        samplesDeleted: res.samples_deleted,
+        keepDays: res.keep_days,
+      }
+    }
+    return localMaintenance.maintainLocalData()
+  },
 }
+
+export type { DataStatus, ImportOutcome }
+export { exportFileName } from './localData'
+export type { ExportBundle, Skipped } from './exportFormat'
+
