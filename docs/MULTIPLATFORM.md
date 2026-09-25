@@ -533,11 +533,28 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 **"构建成功"不等于"产物可用"。** 下面每一条都是可复现的证据，不是"看起来对"。
 踩过的坑都标了 🔴。
 
+### 9.0 🔴 真机验证（这是**门**，不是补充项）
+
+清单再全也证明不了「用户装上去能用一遍」。**每个要对外说"可用"的平台，
+必须在 [device-matrix.md](device-matrix.md) 里至少有一行「通过」记录**，
+含固定 7 条路径逐条结论 + 可复现证据（命令输出 / 截图 / 录屏）。
+
+- [ ] Android：`device-matrix.md` 有通过行（重点：**「拒绝权限后再允许」**一条必须真机走）
+- [ ] macOS：有通过行（含 Gatekeeper 处理、摄像头链路）
+- [ ] Windows：有通过行（**装安装包**验，不是跑开发模式）
+- [ ] iOS：无通过行时，任何对外的 iOS「可用」表述都不成立（当前缺付费开发者账号，
+      产物是未签名归档 —— 如实写「不可安装」，见需求 3）
+
+🔴 **换过签名密钥 / 改过权限桥 / 改过 `Info.plist` / 动过打包配置后，对应行作废、必须重验。**
+这三处是"改一行、崩一片"的典型，而 CI 对它们**一无所知**（能构建、结构对、就是装上去不能用）。
+
 ### 9.1 通用（先跑，不过就别打包）
 
 ```bash
 npm run verify:all          # 数值对拍 + 五处版本号一致性
 npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
+npm run build:web           # UI 冒烟需要 dist（下一行依赖它）
+npm run verify:ui           # 界面渲染 / 路由 / 平台判定（无头 Chrome，5 平台 × 3 页）
 ```
 
 - [ ] `verify:parity` 全通过：21 常量 + 80 评分用例 + 439 帧平滑 + 8 角度 + 不变量
@@ -664,3 +681,59 @@ curl -fsS http://127.0.0.1:18920/api/health
       主二进制为 Mach-O arm64；**无** `embedded.mobileprovision`
       ⇒ 未签名归档，**不可安装**，分发需另行签名导出 IPA
 
+---
+
+### 9.8 UI 冒烟：`npm run verify:ui`（界面层的第一道网）
+
+数值层（`verify:parity`）与产物层（`verify:source` / `verify:backend`）之间，
+一直空着「**界面还画得出来吗**」这一层：
+
+> `vite build` 成功、`tsc` 通过、产物 sha256 对得上，
+> 但页面白屏 / 路由指不到 / `?platform=` 覆盖失效 —— 现有守卫全是绿的。
+
+这正是需求 1 里"最便宜的一道网"。
+
+**它做什么**：无头 Chrome（CDP 直连）+ Node 内置静态服务，把
+**5 种运行时平台 × 3 个路由**真实渲染一遍，共 **75 项断言**：
+
+| 断言类别 | 抓什么 |
+|---|---|
+| 应用壳渲染 | 启动闸门后面的白屏（`readyState` 完成 ≠ 界面出来了） |
+| 路由渲染 | 三页各自的标题 / 关键区块文案在位 |
+| **导航交互** | 真的**点击**导航项（`<a href="#/...">`）切页，且**没有整页刷新**（哨兵存活） |
+| **平台判定** | 桌面/移动**互斥文案的出现与消失**都要对（只查"应有出现"抓不到 `isMobile()` 恒 false） |
+| 平台自述 | 设置页显示的 `平台：<名>（桌面端/移动端）` = URL 覆盖声明的平台 |
+| 版本一致 | 界面自报版本 = `package.json` 版本（五处/六处同步漏一处，界面层也能抓到） |
+| 摄像头流程落定 | 🔴 **不能永久停在「正在启动摄像头...」** —— "卡 loading 而非报错"是本项目踩过的一类真 bug |
+| 运行时错误 | 未捕获异常、非预期控制台错误、非预期资源 404（后端 / MediaPipe 的预期失败已明确白名单） |
+
+```bash
+npm run build:web                                  # 冒烟跑的是 dist
+npm run verify:ui
+node scripts/verify-ui-smoke.mjs --case=android     # 只跑一个平台组合
+node scripts/verify-ui-smoke.mjs --evidence=.buildenv/ui-shots   # 顺带出截图（15 张）
+node scripts/verify-ui-smoke.mjs --dump             # 守卫失败时打印页面实际文本，别猜
+```
+
+**为什么不用 playwright / puppeteer**：① 不该让一个"便宜的门"拖 100MB+ 浏览器进 CI，
+而本机与 CI runner 本来就有 Chrome；② **依赖越少，守卫自己坏掉的概率越低 —— 守卫坏了会伪装成全绿**。
+
+**🔴 找不到浏览器时必须显式失败，不许静默跳过**：一个"检测不到就不查"的守卫，
+等于一个永远绿的守卫。指定路径用 `NG_CHROME` / `CHROME_PATH`。
+
+**它不覆盖什么**（别读成"UI 已经验过了"）：摄像头与姿态推理（无头环境没有摄像头，
+且 plain `vite build` 的 dist 里没有 MediaPipe 的 wasm/模型）、样式与视觉回归、
+真机 WebView 行为 —— 后者见 [device-matrix.md](device-matrix.md)。
+
+**守卫的有效性用变异测试证明**（路线图需求 1 的验收硬条件）。
+`.buildenv/mutate-ui-smoke.py` 植入 4 种回归并要求冒烟**退出码非 0 且原因指向正确那一处**：
+
+| 变异 | 期望被哪条断言抓住 |
+|---|---|
+| M1 删掉 `/settings` 路由 | `#/settings` 渲染超时 |
+| M2 `runtime.ts` 不再采纳 `?platform=` 覆盖 | 移动端平台断言（互斥文案 / 平台自述） |
+| M3 Dashboard 页头文案写坏 | `#/dashboard` 渲染超时 |
+| M4 只改 `package.json` 版本（模拟 set-version 漏同步） | 设置页自报版本不一致 |
+
+⚠️ 变异测试**不进 CI**（要重构建 3 次，约 3 分钟）：它验的是"守卫本身有效"，
+属于**改动守卫时**才跑的一次性证据，不是每次提交都跑的门。

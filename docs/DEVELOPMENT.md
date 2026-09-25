@@ -13,6 +13,7 @@
 | [MULTIPLATFORM.md](MULTIPLATFORM.md) | 四端构建与打包、CI/CD、macOS 签名公证、iOS 权限链、**发布前验证清单** |
 | [ANDROID_BUILD.md](ANDROID_BUILD.md) | 安卓工具链（JDK/SDK/Gradle）、出包、release 签名与密钥备份 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 历年踩坑与排查手册（"又坏了"先翻这个） |
+| [device-matrix.md](device-matrix.md) | **真机验证台账**：固定 7 条验证路径、逐端通过记录、发布的门。四端「可用」结论只来自这里 |
 | [ROADMAP.md](ROADMAP.md) | **后续 10 个需求**与排序理由、依赖关系、验收标准；含现状快照与「暂不做」清单 |
 | [ROADMAP-SCORING.md](ROADMAP-SCORING.md) | **评分与动作子系统专项**（S1–S10）：评分链路 / 动作链路的缺陷与迭代设计。它**取代** ROADMAP 需求 7 的粗粒度描述，两者同时看 |
 | [archive/vibe-code-prompt.md](archive/vibe-code-prompt.md) | 立项时的原始提示词，**仅历史参考**（写的是单机 Windows 版本，**勿照它实现**） |
@@ -265,6 +266,7 @@ HealthyDesk/
 │   ├── verify-daily-agg.mjs    # 日聚合 / 合并 / 本地日边界等价性对拍
 │   ├── verify-export-format.mjs # 导出/导入格式对拍（含 round-trip、凭据排除、CSV BOM）
 │   ├── verify-same-source.mjs  # 产物内前端 == 本次 dist（逐文件 sha256）
+│   ├── verify-ui-smoke.mjs     # UI 冒烟：无头 Chrome 渲染 5 平台 × 3 路由（零依赖 CDP）
 │   ├── gen-*.py                # 生成期望值 / 图标 / 启动图
 │   ├── samples/                # 动作完成度的离线样本（真跑出来的帧序列）
 │   └── gen-mac-icons.js        # ICNS / 菜单栏 Template / iOS 图标与启动图
@@ -744,6 +746,17 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 | 28 | 测「本地日 / 当前时间」这类逻辑，必须**显式钉时区**（CI 里 `env: TZ=Asia/Shanghai`），不能只靠 runner 默认的 UTC | runner 是 UTC 时 `local == UTC`，「实现改用 UTC 零点」这类回归**完全看不出来**（实测漏网）；守必须能在非 UTC 时区下跑一遍 |
 | 29 | 别在脚本里 spawn 子进程"换个 TZ"来验时区逻辑，要靠**进程环境变量** | Windows CRT 上父进程 `TZ=UTC` 时子进程拿到的是 `+1:00` 而不是 `+8:00`（实测），嵌套传 TZ 不可靠 |
 | 30 | 日期类用例必须覆盖**夏令时切换日**（美 3/8、11/1；欧 3/29、10/25） | 没有切换日时，「`end` 用固定 +24h」这种实现不会被抓住（实测漏网），只有当地 23h/25h 那天才暴露 |
+| 31 | UI 断言不能只等 `document.readyState === 'complete'`，要等**标志性元素**出现 | 应用有启动闸门（`App.tsx`: `setTimeout(() => setBackendReady(true), mobile ? 300 : 5000)`）。`readyState` 完成时界面可能还停在「正在启动服务...」，此时找导航项必然落空 —— 实测首次跑冒烟就是这么红的 |
+| 32 | **平台判定**的断言必须**双向**：该出现的要出现，**不该出现的要断言它不出现** | 只查"桌面专属文案是否存在"抓不到 `isMobile()` 恒为 false（两端都渲染桌面布局，断言照样绿） |
+| 33 | UI 守卫**找不到浏览器时必须显式失败**，不许降级成"跳过该项" | 一个"检测不到就不查"的守卫 = 一个永远绿的守卫。同理：`--case=` 写错、`dist` 不存在，都要 exit≠0 |
+| 34 | 有异步自流程的页面要断言它**落到确定态**（出结果或给出可照做的提示），不能只断言"有内容" | 「卡 loading 而非报错」（某 `await` 永不 settle）是本项目踩过的真 bug 类型：不崩、不报错、日志全绿。`NeckActivity` 的取流流程就是这类 |
+| 35 | 截图留证要在**动画落定后**拍 | 页面大量 `framer-motion` 的 `initial={{opacity:0}}`；立刻截图会拍到"下半屏还没淡入"的中间帧，那种图看不出问题还会误导人 |
+| 36 | 「可构建 + 产物结构对 + CI 全绿」**不能**推出「用户装上去能用」。每端要对外说可用，必须有真机通过行 | mac/iOS 的 GUI 与摄像头一次都没在真机跑过；Android 权限桥自 v1.3.4 后改动数轮却再未上过真机。见 [device-matrix.md](device-matrix.md) |
 
+> 🔴 **维护本表的规矩**：编号必须**唯一且递增**。向表尾追加新条目之前，**先扫一眼表尾**有没有
+> 因历史上"追加在末尾"而错位的条目 —— v1.6.0 实测踩到：追加 UI 六条（当时编号 #30–35）时，
+> 原有的 #30（夏令时用例）被挤到新条目后面却忘了重编号，表里同时出现两个 `| 30 |`。
+> 改完用 `grep -c "^| 30 |"` 之类的方式数一遍，别靠眼睛。
+>
 > 更细的排查手册见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)；
 > 本机（Windows + 沙箱 + 代理）特有的环境坑见技能 `windows-powershell-pitfalls`。
