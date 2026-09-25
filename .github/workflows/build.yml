@@ -111,6 +111,21 @@ jobs:
       - name: 跨语言一致性（评分 / 平滑 / 角度）
         run: npm run verify:parity
 
+      # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
+      # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
+      # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，
+      # 详见 docs/MULTIPLATFORM.md §9.8。
+      #
+      # 🔴 用 runner 自带的 Chrome，**不引 playwright/puppeteer**：
+      #    ① 这道门要便宜（几十秒），不该拖 100MB+ 浏览器进 CI；
+      #    ② 守卫的依赖越少，守卫自己坏掉的概率越低 —— 守卫坏了会伪装成全绿。
+      #    ubuntu-24.04 镜像预装 google-chrome；找不到时脚本会**显式失败**而不是跳过。
+      - name: 构建前端（UI 冒烟的前置）
+        run: npm run build:web
+
+      - name: UI 冒烟（5 个平台 × 3 个路由）
+        run: npm run verify:ui
+
       - name: 版本号五处一致
         run: node scripts/set-version.js --check
 
