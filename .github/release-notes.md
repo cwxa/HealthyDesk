@@ -7,7 +7,7 @@
 | 🖥️ Windows 10/11 | `NeckGuardian.Setup.<版本>.exe` | 双击安装，**无需预装 Python** |
 | 🍎 macOS（Apple 芯片 M1~M4） | `NeckGuardian-<版本>-mac-arm64.dmg` | 拖进「应用程序」。**未签名**，首次要右键 →「打开」（见下） |
 | 🍎 macOS（Intel 芯片） | `NeckGuardian-<版本>-mac-x64.dmg` | 同上 |
-| 📱 Android 8.0+ | `NeckGuardian-Android-<版本>.apk` | 需允许「安装未知来源应用」 |
+| 📱 Android 8.0+ | `NeckGuardian-<版本>-android-release.apk` | 需允许「安装未知来源应用」 |
 | 📱 iPhone / iPad | `NeckGuardian.xcarchive.tgz` | **不是安装包**，普通用户装不上（见下） |
 
 - 安装包已内置推理后端，**不需要另外装 Python、也不需要联网**
