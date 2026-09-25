@@ -47,6 +47,7 @@
 | 8 | **无主题系统** | 无 dark mode 实现（图标集里已有 `MoonIcon`/`SunIcon` 但没用上）；颜色大量内联硬编码（`'#999'`、`'#4CAF50'`…） |
 | 9 | **无 i18n** | 全中文硬编码在 JSX 里 |
 | 10 | **移动端无 AI** | 见 0.2 |
+| 11 | ~~**帧时间戳口径错位**~~ ✅ 已解决（v1.6.1） | `camera_ws.py` 用 `datetime.now().isoformat()` 写**无时区标记的本地时间**；SQLite `'localtime'` 假定输入是 UTC → 偏移被再减一次 → 本地 16:00 后的采样全算到次日。实测 `date('2026-09-25T20:00:00','localtime')` → `2026-09-26`，且全库 7657 条**无一带 `Z`**。→ 已收敛单点定义 + 迁移 4 统一格式并重算归档 + `verify:timestamps` 守卫（5/5 变异），见补丁 4b |
 
 ---
 
@@ -248,7 +249,7 @@
 | 数据管理层 | `src/platform/dataLayer.ts`、`src/platform/localData.ts` |
 | 文件存取通道 | `src/platform/dataFiles.ts`（桌面 `<a download>`，移动端系统分享面板） |
 | 界面 | `src/pages/Settings.tsx`「数据管理」区 |
-| 守卫 | `scripts/verify-daily-agg.mjs`、`scripts/verify-export-format.mjs`（均挂在 `verify:parity`） |
+| 守卫 | `scripts/verify-daily-agg.mjs`、`scripts/verify-export-format.mjs`、`scripts/verify-timefmt.mjs`（均挂在 `verify:parity`） |
 
 三条验收标准的证明方式：
 
@@ -262,7 +263,31 @@
 3. **迁移不丢数据** —— `probe-migrations.py` 覆盖四类库：老库（1000 条采样 + 自定义设置）、
    幂等重跑、半升级（有 v1 无 `posture_daily`）、全新库。
 
-变异测试：`mutate-daily-agg.py` 9/9、`mutate-data-api.py` 12/12 全部被抓住且原因正确。
+变异测试：`mutate-daily-agg.py` 9/9、`mutate-data-api.py` 12/12、`mutate-timefmt.py` 5/5 全部被抓住且原因正确。
+
+#### 补丁 4b · 帧时间戳口径错位（v1.6.1）🔴 数据正确性
+
+**为什么插在需求 5 之前**：按 §一 原则 3「数据风险优先于体验优化」。
+这不是体验问题 —— 帧时间戳被写成本地时间且无时区标记，SQLite `'localtime'` 会再减一次偏移，
+**本地 16:00 之后的采样全部落到"次日"**；而 `posture_daily` 是长期保留层，原始采样清理后
+归档是唯一副本，**错误日期会被永久固化**。详见 [TROUBLESHOOTING.md §10b](TROUBLESHOOTING.md)。
+
+**为什么 CI 抓不到**：runner `TZ=UTC`、偏移 0 时"本地串 == UTC 串"，错位不可复现
+（与 §一 原则 1「没法被证明生效 = 等于没改」同源）。
+
+| 落点 | 文件 |
+| --- | --- |
+| 契约单点定义 | `backend/services/timefmt.py`（`now_iso_ms` / `to_iso_ms` / `is_iso_ms`） |
+| 根因 | `backend/ws/camera_ws.py`（两处 `datetime.now().isoformat()` → `now_iso_ms()`） |
+| 收敛重复实现 | `backend/services/retention.py`、`backend/api/data.py`、`backend/db/migrations.py` |
+| 存量数据迁移 | `backend/db/migrations.py` 迁移 4（统一格式 + 归档重算 + 范围外保留） |
+| 守卫 | `scripts/timefmt-probe.py`（收证据）+ `scripts/verify-timefmt.mjs`（判绿），挂在 `verify:parity` |
+
+**关键不变式**：① 契约 = `YYYY-MM-DDTHH:MM:SS.sssZ` ≡ JS `toISOString()`；
+② 迁移前后**本地日不变**（`date(strftime(…,'utc'),'localtime') == substr(ts,1,10)`）；
+③ 迁移幂等（二次执行 0 行）；④ **总量守恒** `Σ归档 sample_count == 原始表总行数`
+（"归档 == 窗口"恒成立，抓不到"窗口本身错"这类回归）。
+变异测试 `mutate-timefmt.py` 5/5 全部被抓住（含"日边界改用 UTC 零点"这条最难抓的）。
 
 已知未验证项（不当作已完成）：
 - 移动端的系统分享通道、IndexedDB 的导入/清除路径 —— 只过了类型与逻辑层，**没有真机/浏览器实测**。
@@ -469,6 +494,9 @@ CORS 方面 DeepSeek 是否允许浏览器直连需先验证（不允许则改�
 - 🔴 需求 2 与需求 6 **不要并行**：一个碰权限桥、一个碰双端评分，都是高危区，
   出问题会互相干扰归因
 - 需求 4 越早做越好：它是「数据只增不删」的止损，且需求 7/9 都依赖其聚合结果
+- 🔴 **补丁 4b（帧时间戳口径）必须排在需求 4 之后、需求 5 之前**：它修的是归档层的**数据正确性**
+  （日期整体错位且会被永久固化），属 §一 原则 3「数据风险优先」；又因为改的是
+  `migrations.py` 与 `retention.py`（与需求 4 同一敏感区），**必须串行**、且要和需求 4 一起跑满 `verify:parity`
 - 需求 3 的启动前置条件是 Apple 开发者账号，账号未到位期间可先做需求 4/5
 
 ---

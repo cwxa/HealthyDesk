@@ -197,6 +197,57 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
 
 ---
 
+### 10b. 帧时间戳写成本地时间 → 归档日期错位 🔴（v1.6.1 修复）
+
+**现象**（用户侧，很容易被当成"统计就是不准"）：
+- 仪表盘「今日均分」到**下午 16 点之后就不再增长**（当晚的采样都记到"明天"去了）。
+- 趋势图上出现**未来日期**的行（幽灵日）；昨天的行数字明显偏小。
+- 保留期清理的边界天跟着偏一天。
+
+**根因链条**（每一环单独看都"没问题"）：
+
+1. `backend/ws/camera_ws.py` 用 `datetime.now().isoformat()` 写帧时间戳，
+   产出形如 `2026-09-25T20:00:00.123456` —— **本地时间、且不带时区标记**。
+2. 前端把它原样写进 `posture_score.timestamp`，**全库 7657 条无一带 `Z`**（实测）。
+3. 归档分组用 `date(timestamp, 'localtime')`。SQLite 的 `'localtime'` 修饰符
+   的语义是"把输入**当作 UTC** 转成本地"；输入**没有时区标记**时它照样按 UTC 解释。
+4. 于是本地时间被**再减一次**本地偏移（UTC+8 下 8 小时）：
+   `date('2026-09-25T20:00:00','localtime')` → **`2026-09-26`**（实测），
+   而正确的契约串 `date('2026-09-25T20:00:00.000Z','localtime')` → `2026-09-25`。
+
+**为什么 CI 上看不见**：runner 是 `TZ=UTC`，偏移为 0，"本地串"与"UTC 串"**恰好相同**，
+错位完全无法复现。必须**显式构造跨日界时刻**（本地 16:00 之后）才能抓住 ——
+这也是 `scripts/timefmt-probe.py` 里有一段"负样本留证"的原因。
+
+**为什么比"实时数字难看"更严重**：`posture_daily` 是**长期保留层**，原始采样会被
+保留策略清掉，错误日期一旦写进归档就**被固化**，越往后越难纠正。
+
+**修复**（三件事，缺一不可）：
+1. **收敛单点**：新建 `backend/services/timefmt.py`（`now_iso_ms` / `to_iso_ms` / `is_iso_ms`），
+   把此前散在 `retention._iso` / `data._now_iso` / `migrations._now_iso` / `camera_ws` 的
+   **四份重复实现**统一掉 —— 其中相机那份是错的，其它三份恰好对。
+2. **新增迁移 4**：把存量数据里所有"不带 `Z` / 不带 `+`"的时间戳
+   `strftime('%Y-%m-%dT%H:%M:%fZ', timestamp, 'utc')` 转成契约格式（**幂等**，二次执行 0 行）；
+   同时 `DELETE FROM posture_daily WHERE date >= (SELECT date(MIN(timestamp),'localtime') …)`
+   让**原始表覆盖范围内**的归档整体重算，**范围之外的必须保留**（那些天的原始采样已被清理，
+   归档是唯一副本）。
+3. **守卫**：`npm run verify:timestamps`（挂进 `verify:parity`），
+   并用变异测试证明它有牙（5/5 全部被抓住）。
+
+**迁移不变式**：转换前后**本地日不变** ——
+`date(strftime('%Y-%m-%dT%H:%M:%fZ', ts, 'utc'), 'localtime') == substr(ts, 1, 10)`。
+`'utc'` 修饰符把"无标记串"按 UTC 解释（与后面 `'localtime'` 的假设一致），
+两者相消。⚠️ 反过来 `strftime(…, 'Z'串, 'utc')` 实测是恒等变换，但**别依赖**这个未文档化行为
+—— 迁移里显式用 `WHERE … NOT LIKE '%Z' AND … NOT LIKE '%+'` 排除掉。
+
+**总量守恒断言**：`Σ归档 sample_count == 原始表总行数`。
+"本地零点 → UTC 零点"这类回归会让本地凌晨的样本被窗口**静默漏掉**，
+而"归档 == 窗口"反而**恒成立**（`rollup_daily` 用的就是同一个窗口），
+只有总量守恒能抓住。⚠️ 压日界的样本必须放在**最早那天**，
+否则"按天计数不一致"会先失败、总量守恒这一条根本不会跑到（实测踩到）。
+
+---
+
 ## 三、前端健壮性
 
 ### 11. React StrictMode 下摄像头流泄漏
