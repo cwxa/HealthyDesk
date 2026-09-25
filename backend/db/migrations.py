@@ -25,9 +25,10 @@
 """
 
 import logging
-from datetime import datetime, timezone
 
 import aiosqlite
+# 时间戳格式单点定义（见 services/timefmt.py）。本文件此前也自己拼了一遍。
+from services.timefmt import now_iso_ms
 
 logger = logging.getLogger("neckguardian.db.migrations")
 
@@ -118,18 +119,60 @@ RETENTION_SETTING_SQL = """
 """
 
 
+# ---------------------------------------------------------------------------
+# 迁移 4：把历史时间戳统一到 UTC 契约格式，并让归档按新口径重算。
+#
+# 根因见 `services/timefmt.py`：桌面端此前用 `datetime.now().isoformat()`（**本地
+# 时间、无时区标记**）写 `posture_score`，而所有按天判定都走
+# `date(timestamp,'localtime')` —— SQLite 的 `localtime` 修饰符**假定输入是 UTC**。
+# 在 UTC+8，本地 16:00 之后的采样会被算到次日，于是「今日均分」下午起就不再增长、
+# 趋势图日期整体错位、保留期边界跟着偏、而错位的归档行一写进去就长期保留。
+# 🔴 该缺陷在 CI runner（TZ=UTC、偏移为 0）上**完全不可见**，所以它需要构造
+# 跨日界时刻的显式用例，不能指望换个环境自己暴露。
+#
+# 两步：
+#
+# 1. **统一格式**：把没有时区标记的串按「它是本地时间」换算成 UTC。
+#    `'utc'` 修饰符正是这个语义（假定输入为本地时间、输出 UTC），因此转换前后
+#    **本地日不变** —— 这是守卫断言的核心不变式：
+#        date(转换后, 'localtime') == substr(原串, 1, 10)
+#    已经带 `Z` / `+HH:MM` 的一律跳过：移动端导入的数据本来就是 UTC，再转一次
+#    会把它算错。判断用 `NOT LIKE '%Z'` + `NOT LIKE '%+%'` —— 宁可漏、不可错。
+#
+# 2. **让归档重算**：`posture_daily` 的日期键是按旧口径（错位）算出来的，必须
+#    整体重来。做法是删掉**原始表仍能覆盖的日期范围**内的归档行，交给紧随其后的
+#    `rollup_daily` 重建 —— 启动流程是 `lifespan: init_db() → _run_maintenance()`，
+#    两者之间没有请求窗口，所以不存在"界面看到空归档"的空档。
+#    ⚠️ 范围**之外**的归档必须保留：那些天的原始采样已被保留策略清理，删掉就永久
+#    消失 —— 保留它们正是 `posture_daily` 存在的意义。
+#
+# 幂等：第 1、2 条第二次执行时所有串都已带时区标记 → 0 行受影响；第 3 条在重跑时
+# 会删掉上一次 `rollup_daily` 重建出来的行，但紧随其后的 `rollup_daily` 用同样的
+# 输入重建出同样的结果 —— 守卫里有专门的幂等性用例。
+# ---------------------------------------------------------------------------
+TIMESTAMP_UTC_SQL = """
+    UPDATE posture_score
+    SET timestamp = strftime('%Y-%m-%dT%H:%M:%fZ', timestamp, 'utc')
+    WHERE timestamp NOT LIKE '%Z' AND timestamp NOT LIKE '%+%';
+
+    UPDATE activity_log
+    SET timestamp = strftime('%Y-%m-%dT%H:%M:%fZ', timestamp, 'utc')
+    WHERE timestamp NOT LIKE '%Z' AND timestamp NOT LIKE '%+%';
+
+    DELETE FROM posture_daily
+    WHERE date >= (SELECT date(MIN(timestamp), 'localtime') FROM posture_score);
+"""
+
+
 # (版本号, SQL)。顺序即执行顺序；编号必须连续递增。
 MIGRATIONS: list[tuple[int, str]] = [
     (1, BASELINE_SQL),
     (2, DAILY_AGG_SQL),
     (3, RETENTION_SETTING_SQL),
+    (4, TIMESTAMP_UTC_SQL),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 async def current_version(db: aiosqlite.Connection) -> int:
@@ -164,7 +207,7 @@ async def apply_migrations(db: aiosqlite.Connection) -> int:
         # 版本号在脚本**成功执行之后**才记录：中途崩溃 → 下次重跑（幂等，安全）
         await db.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
-            (version, _now_iso()),
+            (version, now_iso_ms()),
         )
         await db.commit()
         applied.append(version)

@@ -2,7 +2,6 @@ import asyncio
 import base64
 import json
 import logging
-from datetime import datetime
 import cv2
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -12,6 +11,11 @@ from services.scorer import MODE_EXERCISE, MODE_MONITOR, compute_score
 from services.scheduler import record_break
 # 平滑器单独成模块（要参与双端等价性验证，见 backend/services/smoother.py 顶部说明）
 from services.smoother import PoseSmoother
+# 🔴 帧的时间戳必须是 UTC 契约格式，**不能**用 `datetime.now().isoformat()`：
+# 那会写成本地时间且不带时区标记，而前端会把它原样写进 posture_score，
+# 按天查询都走 SQLite 的 `date(timestamp,'localtime')`（假定输入是 UTC）
+# → 偏移被再减一次，本地 16:00 后的采样全部落到"次日"。详见 services/timefmt.py。
+from services.timefmt import now_iso_ms
 
 logger = logging.getLogger("neckguardian.ws")
 router = APIRouter()
@@ -88,7 +92,7 @@ async def camera_websocket(ws: WebSocket):
                     )
                     response = {
                         "type": "pose",
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": now_iso_ms(),
                         **scored,
                         "visibility": pose_result.get("visibility", 1.0),
                         "landmarks": pose_result["landmarks"],
@@ -96,7 +100,7 @@ async def camera_websocket(ws: WebSocket):
                 else:
                     # Pose lost — reset smoother so stale values don't persist
                     smoother.reset()
-                    response = {"type": "no_pose", "timestamp": datetime.now().isoformat(), "message": "No pose detected"}
+                    response = {"type": "no_pose", "timestamp": now_iso_ms(), "message": "No pose detected"}
 
                 await ws.send_json(response)
 

@@ -23,23 +23,18 @@
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from config import DB_PATH, RETENTION_DAYS, clamp_retention_days
 from services.daily_agg import aggregate_day
+# 🔴 时间戳格式单点定义在 services/timefmt.py。此前本文件、api/data.py、
+# db/migrations.py、ws/camera_ws.py 各写了一遍（四份实现），其中相机那份写成了
+# **本地时间**、与其余三份的 UTC 不一致 —— 那正是「归档日期错位」的根因。
+from services.timefmt import now_iso_ms, to_iso_ms
 
 logger = logging.getLogger("neckguardian.retention")
 
 SETTING_KEY = "retention_days"
-
-
-def _iso(dt: datetime) -> str:
-    """与前端 `new Date().toISOString()` **同格式**（毫秒 + `Z`）。
-
-    这很关键：只有格式一致，字符串比较才等价于时间比较（`timestamp < ?` 这类
-    WHERE 才能正确工作）。前端写库用的就是 `toISOString()`。
-    """
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def local_day_bounds_utc(day: str) -> tuple[str, str]:
@@ -50,7 +45,7 @@ def local_day_bounds_utc(day: str) -> tuple[str, str]:
     否则导出的数据在两端会落在不同的 `date` 上。
     """
     start = datetime.strptime(day, "%Y-%m-%d").astimezone()  # naive → 按本地时区解释
-    return _iso(start), _iso(start + timedelta(days=1))
+    return to_iso_ms(start), to_iso_ms(start + timedelta(days=1))
 
 
 def today_local() -> str:
@@ -73,7 +68,7 @@ async def rollup_daily(db) -> int:
     )
     pending = [r for r in await cursor.fetchall() if r["day"] is not None and r["n"] != r["stored"]]
 
-    stamp = _iso(datetime.now(timezone.utc))
+    stamp = now_iso_ms()
     updated = 0
     for row in pending:
         day = row["day"]

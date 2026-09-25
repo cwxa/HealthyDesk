@@ -31,6 +31,8 @@ from services.export_format import (
     validate_export,
 )
 from services.retention import maintain, retention_summary_sync
+# 时间戳格式单点定义（见 services/timefmt.py）
+from services.timefmt import now_iso_ms
 from config import APP_VERSION
 from db.migrations import LATEST_VERSION
 
@@ -68,7 +70,7 @@ async def export_data():
             tables,
             app_version=APP_VERSION,
             schema_version=LATEST_VERSION,
-            exported_at=_now_iso(),
+            exported_at=now_iso_ms(),
         )
     finally:
         await db.close()
@@ -178,9 +180,3 @@ async def _insert_rows(db, table: str, rows: list) -> None:
     placeholders = ", ".join("?" for _ in columns)
     sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
     await db.executemany(sql, [[row[c] for c in columns] for row in rows])
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
