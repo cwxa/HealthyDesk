@@ -625,7 +625,7 @@ export default function Settings() {
         >
           <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>关于 NeckGuardian</p>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-            版本：{appVersion || '1.6.0'}<br />
+            版本：{appVersion || '1.6.1'}<br />
             平台：{platformLabel()}（{isMobile() ? '移动端' : '桌面端'}）<br />
             技术栈：{isMobile()
               ? 'Capacitor + React + TypeScript + MediaPipe(本地推理)'
