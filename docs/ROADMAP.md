@@ -40,8 +40,8 @@
 | 1 | **真机验证空白** | Android 最后一次真机验证是 v1.3.4，此后权限桥反复改动（2026-09-24 才改成继承 `BridgeWebChromeClient`）；mac/iOS **GUI 与摄像头一次都没在真机跑过** |
 | 2 | **移动端后台停止** | `AndroidManifest.xml` 无 `Service`、无 `FOREGROUND_SERVICE`、无 `POST_NOTIFICATIONS`；`android/app/src/main/java/` 下只有 `MainActivity.java`；`MULTIPLATFORM.md §七` 明写「未实现」 |
 | 3 | **两端分发不可用** | mac 包未签名未公证（Gatekeeper 拦）；iOS 只有未签名 `.xcarchive`，**连 IPA 都不是**，无 `embedded.mobileprovision` |
-| 4 | **数据只增不删** | `NeckActivity.tsx:283` 每 **1500ms** 写一条 `posture_score`；全仓库 `grep "DELETE FROM\|cleanup\|retention"` **零命中**。8 小时/天 ≈ **1.9 万条/天、57 万条/月** |
-| 5 | **无数据导出** | `dataLayer` 只有读接口，无 export/import；移动端「卸载即清除」，桌面 DB 在安装目录 |
+| 4 | ~~**数据只增不删**~~ ✅ 已解决（v1.5.0） | `NeckActivity.tsx:283` 每 **1500ms** 写一条 `posture_score`，全仓库零清理。8 小时/天 ≈ **1.9 万条/天、57 万条/月**。→ 已有 `posture_daily` 归档 + 保留期清理（默认 30 天，可配 7–365），见需求 4 |
+| 5 | ~~**无数据导出**~~ ✅ 已解决（v1.5.0） | `dataLayer` 只有读接口，无 export/import；移动端「卸载即清除」，桌面 DB 在安装目录。→ 已有两端互通的 JSON 备份 + CSV + 一键清除 + 存储用量，见需求 4 |
 | 6 | **性能无实测** | `usePoseEngine.ts` 用 `requestAnimationFrame` **全速**跑 `detect()`，无节流、无帧率统计、无 CPU/内存指标 |
 | 7 | **阈值全人类共用** | `config.py` 里 `HEAD_TILT_THRESHOLD=5.0` / `SHOULDER_DIFF_THRESHOLD=4.0` / `SPINE_ANGLE_THRESHOLD=10.0` 是常量，不随体型与工位（笔记本 vs 外接屏）区分 |
 | 8 | **无主题系统** | 无 dark mode 实现（图标集里已有 `MoonIcon`/`SunIcon` 但没用上）；颜色大量内联硬编码（`'#999'`、`'#4CAF50'`…） |
@@ -164,6 +164,8 @@
 ### 需求 4 · 数据保留、聚合与导出/导入
 
 - **优先级** P1 ｜ **规模** 大 ｜ **依赖** 无（但越早越好，见排序原则 3）
+- **状态** ✅ **已完成**（v1.5.0）。分两次提交：`15ed236`（上半：迁移 + 归档 + 保留）、
+  `3174e74`（下半：导出/导入 + 清除 + 用量 + 保留期可配置）
 
 **现状**：`NeckActivity.tsx:283` 每 1500ms 写一条姿态记录，**全项目零清理逻辑**。
 按每天 8 小时算约 1.9 万条/天、57 万条/月；移动端 IndexedDB 在 iOS 上有配额压力，
@@ -192,6 +194,41 @@
 **风险**：聚合口径必须与仪表盘现有 `getSummary()` / `getWeekly()` 保持一致，
 否则会出现「趋势图和周报对不上」这类极难排查的问题。建议**聚合口径只实现一次**，
 让仪表盘改为消费聚合结果。
+
+**实施记录（v1.5.0）**
+
+| 落点 | 文件 |
+| --- | --- |
+| 迁移（桌面） | `backend/db/migrations.py`（3 条迁移）、`backend/db/database.py` |
+| 迁移（移动） | `src/platform/localDb.ts`（`DB_VERSION` 1→2） |
+| 日聚合纯函数 | `backend/services/daily_agg.py` ↔ `src/platform/dailyAgg.ts` |
+| 保留与维护 | `backend/services/retention.py` ↔ `src/platform/localMaintenance.ts` |
+| 导出格式 | `backend/services/export_format.py` ↔ `src/platform/exportFormat.ts` |
+| 数据管理接口 | `backend/api/data.py`（status / export / export.csv / import / clear / maintain） |
+| 数据管理层 | `src/platform/dataLayer.ts`、`src/platform/localData.ts` |
+| 文件存取通道 | `src/platform/dataFiles.ts`（桌面 `<a download>`，移动端系统分享面板） |
+| 界面 | `src/pages/Settings.tsx`「数据管理」区 |
+| 守卫 | `scripts/verify-daily-agg.mjs`、`scripts/verify-export-format.mjs`（均挂在 `verify:parity`） |
+
+三条验收标准的证明方式：
+
+1. **聚合一致** —— `probe-retention.py`（40 天合成数据）逐字段复算 31 天，
+   `probe-data-api.py` 断言「保留边界 = 本地今天 − 30 天的零点」「归档在清理后仍在」；
+   `verify-daily-agg.mjs` 另有**可结合性不变量**（`merge([agg(a), agg(b)]) === agg(a ++ b)`），
+   它从数学上保证跨天合并不漂移，并能抓住 `min_score` 这类忘记合并的字段。
+2. **round-trip** —— `verify-export-format.mjs` 的 `e1` 断言 3 个包「导出 →（JSON 往返）→
+   导入 → 再导出」逐字段不变；`probe-data-api.py` 另做**跨库**验证
+   （A 库导出 → B 库导入 → B 库再导出逐字段相等）。
+3. **迁移不丢数据** —— `probe-migrations.py` 覆盖四类库：老库（1000 条采样 + 自定义设置）、
+   幂等重跑、半升级（有 v1 无 `posture_daily`）、全新库。
+
+变异测试：`mutate-daily-agg.py` 9/9、`mutate-data-api.py` 12/12 全部被抓住且原因正确。
+
+已知未验证项（不当作已完成）：
+- 移动端的系统分享通道、IndexedDB 的导入/清除路径 —— 只过了类型与逻辑层，**没有真机/浏览器实测**。
+- `posture_daily` 在桌面端报 `schema_version = 3`、移动端报 2：两者是**各自存储的结构版本**
+  （移动端那一步是 `onupgradeneeded`，桌面端多一条"补默认设置"的迁移），不可直接比较；
+  导出文件里的 `schema_version` 只是诊断信息，导入时**不参与校验**（只校验 `format_version`）。
 
 ---
 

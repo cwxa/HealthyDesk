@@ -190,16 +190,23 @@ HealthyDesk/
 │   ├── api/                    # REST API 路由层
 │   │   ├── activity.py         # 活动记录 CRUD
 │   │   ├── ai.py               # AI 顾问接口
+│   │   ├── data.py             # 存储状态 / 导出 / 导入 / 清除 / 立即维护
 │   │   ├── posture.py          # 姿势数据接口
 │   │   ├── reminder.py         # 提醒系统控制
 │   │   ├── settings.py         # 用户设置管理
-│   │   └── stats.py            # 统计数据查询
-│   ├── db/database.py          # SQLite ORM 封装（表结构以 init_db() 为准）
+│   │   └── stats.py            # 统计数据查询（消费归档层）
+│   ├── db/                     # 🔴 表结构与版本演进都在 migrations.py
+│   │   ├── migrations.py       # schema_version + 有序迁移（改表结构只改这里）
+│   │   └── database.py         # 连接与 init_db()（只负责调用迁移）
 │   ├── services/               # 业务逻辑层
 │   │   ├── ai_advisor.py       # AI 健康建议 / 综合报告生成
 │   │   ├── ai_config.py        # DeepSeek 配置解析（DB > 环境变量）
+│   │   ├── daily_agg.py        # 🔴 日聚合纯函数（双端一致性的一端）
+│   │   ├── export_format.py    # 🔴 导出/导入格式（双端一致性的一端）
 │   │   ├── fallback.py         # AI 不可用时的降级方案
 │   │   ├── pose_detector.py    # MediaPipe 姿势检测核心
+│   │   ├── retention.py        # 归档 + 保留期清理（🔴 顺序不可颠倒）
+│   │   ├── rounding.py         # 取整口径（双端共享的唯一实现）
 │   │   ├── scheduler.py        # APScheduler 定时任务
 │   │   ├── scorer.py           # 🔴 姿势评分算法（双端一致性的一端）
 │   │   └── smoother.py         # 🔴 EMA 平滑器（同属评分链路）
@@ -217,12 +224,18 @@ HealthyDesk/
 │   │   ├── runtime.ts          # 平台 / 宿主 OS 判定 + 能力矩阵（唯一真相来源）
 │   │   ├── nativeDiag.ts       # 原生权限诊断（Android 原生桥 · iOS/Web Permissions API）
 │   │   ├── dataLayer.ts        # 统一数据层（HTTP vs IndexedDB）
-│   │   ├── localDb.ts          # 移动端 IndexedDB 封装
+│   │   ├── dailyAgg.ts         # 🔴 日聚合纯函数（↔ daily_agg.py）
+│   │   ├── exportFormat.ts     # 🔴 导出/导入格式（↔ export_format.py）
+│   │   ├── localData.ts        # 移动端导出/导入/清除/存储用量
+│   │   ├── dataFiles.ts        # 数据文件存取通道（桌面下载 / 移动端系统分享）
+│   │   ├── localDay.ts         # 本地自然日与日边界
+│   │   ├── localDb.ts          # 移动端 IndexedDB 封装（DB_VERSION + 升级分支）
+│   │   ├── localMaintenance.ts # 移动端归档 + 保留清理（顺序同 retention.py）
 │   │   ├── localStats.ts       # 移动端统计聚合（对齐后端 SQL）
 │   │   ├── localPoseEngine.ts  # 🔴 移动端本地推理与评分（与 scorer.py 逐行等价）
 │   │   └── localReminder.ts    # 移动端本地提醒调度器
-│   ├── pages/                  # Dashboard / NeckActivity / Settings
-│   ├── utils/speech.ts         # 语音播报封装
+│   ├── pages/                  # Dashboard / NeckActivity / Settings（含「数据管理」区）
+│   ├── utils/                  # speech.ts（语音）/ withTimeout.ts / format.ts（字节格式化）
 │   ├── App.tsx                 # 应用根组件（含移动端布局分流）
 │   └── types.ts                # TypeScript 类型定义
 ├── android/                    # Capacitor 安卓工程
@@ -248,8 +261,12 @@ HealthyDesk/
 │   ├── verify-scoring.mjs      # 评分与平滑等价性对拍
 │   ├── verify-angles.mjs       # 角度等价性对拍
 │   ├── verify-part-health.mjs  # 部位健康度聚合等价性对拍
+│   ├── verify-exercise-quality.mjs # 动作完成度判定等价性对拍（含离线样本回放）
+│   ├── verify-daily-agg.mjs    # 日聚合 / 合并 / 本地日边界等价性对拍
+│   ├── verify-export-format.mjs # 导出/导入格式对拍（含 round-trip、凭据排除、CSV BOM）
 │   ├── verify-same-source.mjs  # 产物内前端 == 本次 dist（逐文件 sha256）
 │   ├── gen-*.py                # 生成期望值 / 图标 / 启动图
+│   ├── samples/                # 动作完成度的离线样本（真跑出来的帧序列）
 │   └── gen-mac-icons.js        # ICNS / 菜单栏 Template / iOS 图标与启动图
 ├── docs/                       # 文档（见上方「文档地图」）
 ├── .github/workflows/build.yml # CI/CD：四端构建 + 同源/架构/版本校验 + tag 发 draft Release
@@ -415,6 +432,9 @@ Python 后端 —— 后端必须知道用户此刻在做什么。
 | `backend/services/pose_detector.py`（角度） | `localPoseEngine.ts` 的角度计算 |
 | `backend/services/part_health.py`（部位健康度） | `src/platform/partHealth.ts` |
 | `backend/services/exercise_quality.py`（动作完成度） | `src/platform/exerciseQuality.ts` |
+| `backend/services/daily_agg.py`（日聚合/合并） | `src/platform/dailyAgg.ts` |
+| `backend/services/export_format.py`（导出/导入格式） | `src/platform/exportFormat.ts` |
+| `backend/services/retention.py`（归档 + 保留清理顺序） | `src/platform/localMaintenance.ts` |
 | `backend/api/stats.py`（统计聚合） | `src/platform/localStats.ts` |
 | `backend/services/rounding.py`（取整口径） | `scoringModel.pyRound` / `pyRound1` |
 
@@ -423,6 +443,8 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
                           # 运动：32 用例 + 措辞断言 + 不变量 + 语音隔离（源码级守卫）
                           # 部位健康度：9 常量 + 3 映射 + 18 用例 + 取整灵敏度自检
                           # 动作完成度：17 常量 + 3 段离线样本 + 29 用例 + 语义硬断言 + 取整灵敏度自检
+                          # 日聚合：4 常量 + 3 映射 + 21 用例 + 4 合并 + 22 项本地日口径 + 可结合性不变量
+                          # 导出格式：10 常量 + 3 组装 + 15 校验 + 2 CSV + 20 项保留天数收敛
 ```
 
 > **跨语言比对拿不到"运行时的类型"**：`src/platform/exerciseQuality.ts` 里的结论
@@ -510,7 +532,10 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
 
 ## 五、数据库设计
 
-> 以下为概览，**实际表结构以 `backend/db/database.py` 的 `init_db()` 为准**。
+> 🔴 **实际表结构以 `backend/db/migrations.py` 为准**（移动端对应 `src/platform/localDb.ts`
+> 的 `DB_VERSION` + `onupgradeneeded`）。**不要**再回到 `database.py:init_db()` 里写建表 SQL ——
+> 那里曾经是一串 `CREATE TABLE IF NOT EXISTS`，表已存在就整条跳过，**加字段会静默失败**
+> （见 §5.1）。
 
 **usage_record**（每日使用时长）
 
@@ -543,9 +568,62 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
 | duration_sec | INTEGER | 活动时长（秒） |
 | avg_score | INTEGER | 活动期间平均姿态评分 |
 
+**posture_daily**（每日归档，迁移 2 新增）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| date | TEXT | 主键，**本地自然日** `YYYY-MM-DD` |
+| sample_count | INTEGER | 当日采样条数 |
+| score_sum | REAL | 当日分数**之和**（精确量，不存已取整的均分） |
+| min_score | INTEGER | 当日最低分 |
+| head_bad_count / shoulder_bad_count / spine_bad_count | INTEGER | 当日各部位**超标**的帧数（严格大于阈值） |
+| updated_at | TEXT | 该行最后一次重算时间 |
+
+日均分与问题占比由 `daily_agg` 现算（`Σscore_sum/Σsample_count`）。**只存精确可加量**：
+存已取整的派生量，跨天合并时会累积误差。
+
 **settings**（用户设置）：`key` TEXT PK / `value` TEXT。
 默认值：`reminder_interval='30'`、`ai_enabled='false'`、`auto_start='false'`、
-`voice_enabled='true'`、`deepseek_api_key=''`、`deepseek_base_url=''`、`deepseek_model='deepseek-chat'`。
+`voice_enabled='true'`、`deepseek_api_key=''`、`deepseek_base_url=''`、`deepseek_model='deepseek-chat'`、
+`retention_days='30'`（迁移 3 新增）。
+
+**schema_version**（迁移版本）：`version` INTEGER PK / `applied_at` TEXT。
+
+### 5.1 schema 迁移（改表结构必读）
+
+`backend/db/migrations.py` 里是一个**有序**列表 `MIGRATIONS: [(版本号, SQL)]`。
+
+- 🔴 **迁移只增不改**。已发布的编号与内容不得修改 —— 用户的库里已经跑过了，
+  改它对老库无效、对新库生效，两端结构会分叉。新增改动一律**追加新编号**。
+- 🔴 **每个迁移必须是幂等的 SQL**（`IF NOT EXISTS` / `INSERT OR IGNORE`）。
+  `executescript` 会先隐式 COMMIT，无法把整个迁移包进一个事务；中途崩溃会留下"半升级"
+  状态，此时**重跑必须安全**。版本号在脚本全部执行成功后才记录，所以重跑会重新执行同一编号。
+- 移动端等价物是 `localDb.ts` 的 `DB_VERSION` + `onupgradeneeded` 分支（用
+  `objectStoreNames.contains` 判断，而非只信 `oldVersion`）。🔴 加表/加字段必须同时做三件事：
+  建 store 语句、`DB_VERSION` 加一、`onupgradeneeded` 里补建的分支 —— 少做最后一件，
+  老用户升级后新表不存在，**写入静默失败**。
+
+### 5.2 保留策略与数据管理
+
+`backend/services/retention.py` ↔ `src/platform/localMaintenance.ts`（同构）。
+
+- 🔴 **顺序不可颠倒**：先 `rollup_daily` 再 `prune_raw`。反过来被删那天的数据就永久消失了。
+- 保留边界 = **本地今天 − `retention_days` 天的零点** ⇒ 实际保留最近 `retention_days + 1`
+  个自然日（含今天）。`retention_days` 可配 7–365，非法输入回落**默认值 30**（不是最小值）。
+- 桌面端在 `lifespan` 里启动跑一次 + 每 30 分钟一次；移动端在 `App` 启动时跑一次；
+  设置页改完保留期会直接调 `POST /api/data/maintain` 跑一次（否则要等 30 分钟，用户以为没生效）。
+- 所有按天过滤都走**时间列的范围查询**（先算本地日对应的 UTC 瞬时区间），
+  不要用 `date(timestamp,'localtime')` —— 对列做表达式会让 `idx_posture_score_ts` 失效。
+
+**导出/导入格式**：`backend/services/export_format.py` ↔ `src/platform/exportFormat.ts`
+（同一规格的两种实现，由 `scripts/verify-export-format.mjs` 逐字段对拍）。
+
+- 只导**数据**不导派生量；只认字段名与类型，表外的键一律忽略；脏行跳过并计数（放**返回值**
+  的 `skipped`，不写进文件 —— 否则「导出→导入→再导出」不是同一个文件）。
+- `deepseek_api_key` 等凭据**不进导出文件**，且不计入 `skipped`。
+- 导入 = **覆盖数据表**（先清后写）；设置表用 upsert（恢复备份不该抹掉本机密钥）。
+- 校验失败返回 **HTTP 200 + 错误码**，不在 HTTP 层表达。
+  🔴 路由形参必须是 `Any`：写 `dict` 时 FastAPI 会在进路由前抛 422，`not_an_object` 不可达。
 
 ---
 
@@ -556,11 +634,12 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
 | 模块 | 接口数 | 功能 |
 |------|----------|----------|
 | posture | 4 | 姿势评分记录、历史、均值、趋势 |
-| stats | 2 | 周报统计、今日摘要 |
+| stats | 3 | 周报统计、今日摘要、日历史（`/stats/daily`，读归档层） |
 | reminder | 3 | 结束休息、延迟提醒、状态查询 |
 | ai | 5 | 配置读写、连通性测试、实时建议、综合分析 |
 | settings | 3 | 获取全部/单个设置、更新设置 |
 | activity | 3 | 记录活动、最近活动、今日活动数 |
+| data | 6 | 存储状态、导出 JSON、导出 CSV、导入、清除、立即维护（见 §5.2） |
 
 **`POST /api/ai/suggestion`** 请求：
 
@@ -635,7 +714,7 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 
 | # | 铁律 | 违反的后果 |
 |---|---|---|
-| 1 | 改 `scorer.py` / `smoother.py` / `pose_detector.py` / `part_health.py` / `exercise_quality.py` / `localPoseEngine.ts` / `partHealth.ts` / `exerciseQuality.ts` 后必跑 `verify:parity` | 各端不一致，用户看到"同一姿势两种分数"、"做完了却说你没做" |
+| 1 | 改 `scorer.py` / `smoother.py` / `pose_detector.py` / `part_health.py` / `exercise_quality.py` / `daily_agg.py` / `export_format.py` / `retention.py` / `localPoseEngine.ts` / `partHealth.ts` / `exerciseQuality.ts` / `dailyAgg.ts` / `exportFormat.ts` / `localMaintenance.ts` 后必跑 `verify:parity` | 各端不一致，用户看到"同一姿势两种分数"、"做完了却说你没做"、"备份导入后数字对不上" |
 | 2 | 取整一律 `round(x*100)/100`（前端 `pyRound()`） | Python 银行家舍入与 JS 不一致，边界处差 1 分 |
 | 3 | 业务组件问能力（`supports()`），不写 `platform === 'electron'` | 新增平台要改一堆业务代码 |
 | 4 | `useWebSocket()` 的返回值不许整个进依赖数组 | effect 反复重建 → 摄像头"无限正在启动" |
@@ -651,6 +730,16 @@ Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 C
 | 14 | 加超时保护时，必须同时处理「超时之后资源才到」 | 迟到的 `MediaStream` 没人接手 → 摄像头常亮、下次取流 `NotReadableError`（见 [TROUBLESHOOTING.md §14](TROUBLESHOOTING.md)） |
 | 15 | 判定用的数字必须先取**展示口径**（`round_1`）再与阈值比较 | 出现「显示 60 分（正好达标）却说幅度不足」这类自相矛盾（S1、S2 各踩一次） |
 | 16 | 判定 / 文案只能覆盖**指标真能反映**的动作（动作库的 `measurable`） | 对"测不到"的动作说「没检测到动作」→ 冤枉正在认真做的用户 |
+| 17 | 改表结构只走 `migrations.py`（移动端走 `DB_VERSION` + `onupgradeneeded` 分支），**不写回** `CREATE TABLE IF NOT EXISTS` | `IF NOT EXISTS` 见表已存在就整条跳过 → 新列永远不出现，建表"成功"、日志无异常，读那列拿到 `None` |
+| 18 | 迁移必须**只增不改**且**幂等**（`executescript` 隐式 COMMIT，无法整体事务化） | 崩在中间留下"半升级"，重跑要么报错要么把库改坏 |
+| 19 | 先 `rollup_daily` 再 `prune_raw`，顺序不许换 | 被清那天的归档还没写，数据永久消失 |
+| 20 | 归档层只存**精确可加量**（`score_sum` / `*_bad_count`），派生量现算 | 跨天合并时取整误差累积，趋势与周报互相对不上 |
+| 21 | 按时间的过滤走**列的范围查询**，不写 `date(timestamp,'localtime')` 之类表达式 | 索引失效退化成全表扫描（原始表 ~1.9 万行/天） |
+| 22 | 时间戳字符串必须与前端 `toISOString()` **同格式**（毫秒 + `Z`） | 字符串比较不再等价于时间比较，`WHERE timestamp < ?` 结果错 |
+| 23 | 导出文件里**只有数据**，诊断信息（`skipped`）放返回值 | 「导出→导入→再导出」不是同一个文件，备份/恢复的直觉被破坏 |
+| 24 | 凭据（`deepseek_api_key`）不进导出文件，且**不计入 `skipped`** | 用户把备份丢网盘 → 泄露；或界面误报"1 行被跳过" |
+| 25 | 导入 = 覆盖数据表；设置表用 **upsert**，清除**只清数据表** | 恢复备份抹掉本机密钥；或"清除数据"把配置一起清了 |
+| 26 | 校验失败返回 **HTTP 200 + 错误码**；FastAPI 路由形参用 `Any` 不用 `dict` | 写 `dict` 会在进路由前抛 422，错误码分支不可达 → 两端分叉 |
 
 > 更细的排查手册见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)；
 > 本机（Windows + 沙箱 + 代理）特有的环境坑见技能 `windows-powershell-pitfalls`。
