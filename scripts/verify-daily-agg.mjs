@@ -16,7 +16,9 @@
  *   b) 映射：部位 → 采样字段名 + 该部位阈值
  *   c) 用例：21 条逐字段（6 个精确量 + 日均分 + 各问题占比）
  *   d) 合并：4 条 + 精确相加断言
- *   e) 本地日口径：日边界区间 + ±N 天
+ *   e) 本地日口径：日边界**不变式**（本地零点 / 区间连续）+ ±N 天
+ *      ⚠️ 只比对**不随时区变化**的量。日边界的"绝对瞬时"取决于机器时区，
+ *         冻结进期望文件就会变成"只在生成机那个时区上绿"的假守卫。
  *   f) 语义硬断言 + 可结合性不变量 + 取整灵敏度自检
  */
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -28,6 +30,30 @@ import { tmpdir } from 'node:os'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
 const require = createRequire(join(ROOT, 'package.json'))
+
+/**
+ * 某时区在某瞬时相对 UTC 的偏移（分钟，东为正）。
+ *
+ * 用 `Intl`（ICU 数据）算，**独立于 `process.env.TZ` 是否被 Date 采纳** ——
+ * 这样 §e 才能判断"运行时切时区到底生效了没有"，而不是自以为验了三个时区、
+ * 实际上三次跑的都是同一个。
+ */
+function zoneOffsetMinutes(tz, iso) {
+  const d = new Date(iso)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(d)
+  const g = (t) => Number(parts.find((p) => p.type === t).value)
+  const asUtc = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second'))
+  return Math.round((asUtc - d.getTime()) / 60000)
+}
 
 /** 把前端源码 bundle 出来，并额外导出内部符号（评分常量、本地日工具）供比对。 */
 async function loadFrontendSource() {
@@ -246,32 +272,94 @@ async function main() {
   console.log(sumFail ? `✗ 合并精确相加：${sumFail} 处失败` : '✓ 合并是精确相加（和相加、计数相加、min 取最小）')
 
   // ---- e) 本地日口径 ----
+  // 断言**不变式**，并且**在多个时区下各验一遍**。两个理由：
+  //  1) 日边界的"绝对瞬时"与机器时区绑定：UTC+8 下 2026-01-01 是 2025-12-31T16:00:00Z，
+  //     UTC 机器上是 2026-01-01T00:00:00Z。把前者冻进期望文件，守卫就**只在 UTC+8 上绿**
+  //     —— 真发生过：CI 首跑就红，而两端实现都是对的，错的是产物不可移植。
+  //  2) 只验"当前进程的时区"同样不够：CI runner 的 TZ 是 UTC，此时 local == UTC，
+  //     「实现改用 UTC 零点」与正确实现给出**同一个瞬时** —— 这类错误在 UTC 下天然不可见。
+  //     所以把 TZ 依次钉成 UTC+8 / UTC-8 / 欧洲再验：正确实现在 UTC+8 下给出本地零点（16:00Z），
+  //     UTC 零点实现给出 00:00Z 而它的 `getHours()` 是 8 —— 当场露馅。
+  //     ⚠️ 时区列表里必须**同时有南半球以外的两个不同夏令时规则**（美 / 欧），
+  //        否则「end 用固定 +24h」这类实现会躲过切换日用例。
+  const TZ_ORIGINAL = process.env.TZ
+  const ZONES = ['UTC', 'Asia/Shanghai', 'America/Los_Angeles', 'Europe/Berlin']
+  const PROBE_ISO = '2026-01-01T00:00:00.000Z'
+  const isLocalMidnight = (iso) => {
+    const d = new Date(iso)
+    return d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0
+  }
+  /** 一天的全部不变式（与时区无关的表述，任何时区下都该成立）。 */
+  const dayChecks = (day) => {
+    const got = api.localDay.dayBoundsIso(day)
+    const next = api.localDay.shiftDay(day, 1)
+    return [
+      ['start 落在该日', api.localDay.dayKeyFromTs(got[0]) === day],
+      ['start 是本地零点', isLocalMidnight(got[0])],
+      ['end 落在次日', api.localDay.dayKeyFromTs(got[1]) === next],
+      ['end 是本地零点', isLocalMidnight(got[1])],
+      ['区间非空', Date.parse(got[1]) > Date.parse(got[0])],
+      // 边界必须连续：end(day) === start(day+1)
+      ['区间连续 end(day)==start(day+1)', api.localDay.dayBoundsIso(next)[0] === got[1]],
+    ].map(([what, ok]) => ({ label: `${day} · ${what}`, ok, got }))
+  }
+
   let dayFail = 0
   let dayChecked = 0
-  for (const [day, bounds] of Object.entries(payload.day_bounds)) {
-    dayChecked++
-    const got = api.localDay.dayBoundsIso(day)
-    if (got[0] !== bounds[0] || got[1] !== bounds[1]) {
-      console.error(`✗ 日边界不一致 ${day}: ts=${JSON.stringify(got)} py=${JSON.stringify(bounds)}`)
-      dayFail++
+  let zonesApplied = 0
+  for (const tz of ZONES) {
+    process.env.TZ = tz
+    // 先确认"运行时切时区"在这个平台真的生效了 —— 否则三次跑的是同一个时区，等于没验。
+    // 用 Intl（ICU）作独立参照，而不是相信 Date 一定采纳了 process.env.TZ。
+    const want = zoneOffsetMinutes(tz, PROBE_ISO)
+    const gotOffset = -new Date(PROBE_ISO).getTimezoneOffset()
+    if (want !== gotOffset) {
+      console.warn(
+        `⚠ 运行时切时区未生效（TZ=${tz}：ICU 期望偏移 ${want} 分钟，Date 实得 ${gotOffset}）→ 跳过该时区`,
+      )
+      continue
     }
-    // 边界必须连续：end(day) === start(day+1)
-    const next = api.localDay.dayBoundsIso(api.localDay.shiftDay(day, 1))
-    if (next[0] !== got[1]) {
-      console.error(`✗ 日边界不连续 ${day}: end=${got[1]} 下一天 start=${next[0]}`)
-      dayFail++
+    zonesApplied++
+    let bad = 0
+    for (const day of payload.day_cases) {
+      for (const c of dayChecks(day)) {
+        dayChecked++
+        if (!c.ok) {
+          console.error(`✗ 日边界 TZ=${tz} ${c.label}：${JSON.stringify(c.got)}（当地偏移 ${gotOffset} 分钟）`)
+          bad++
+        }
+      }
+    }
+    dayFail += bad
+    if (!bad) {
+      console.log(
+        `✓ 本地日不变式 TZ=${tz}（偏移 ${gotOffset} 分钟）：${payload.day_cases.length} 天全部满足`,
+      )
     }
   }
+  if (TZ_ORIGINAL === undefined) delete process.env.TZ
+  else process.env.TZ = TZ_ORIGINAL
+  if (zonesApplied === 0) {
+    // 一个时区都没真正验到，却报"全绿"，比失败更糟 —— 明确判失败。
+    console.error('✗ 没有任何时区被真正验证（运行时切换 process.env.TZ 在本平台不生效）')
+    failed = true
+  }
+
+  // ±N 天：纯日期算术，与时区无关，逐位对拍
   for (const s of payload.shift_cases) {
-    dayChecked++
     const got = api.localDay.shiftDay(s.day, s.delta)
     if (got !== s.expected) {
       console.error(`✗ shiftDay 不一致 ${s.day} ${s.delta}: ts=${got} py=${s.expected}`)
       dayFail++
     }
+    dayChecked++
   }
   if (dayFail > 0) failed = true
-  console.log(`本地日口径（日边界区间 + ±N 天）：${dayChecked} 项${dayFail ? ` 有 ${dayFail} 项差异` : '全部一致'}`)
+  console.log(
+    `本地日口径（日边界不变式 ×${zonesApplied}/${ZONES.length} 个时区 + ±N 天）：${dayChecked} 项${
+      dayFail ? ` 有 ${dayFail} 项失败` : '全部一致'
+    }`,
+  )
 
   // ---- f1) 阈值语义硬断言：恰等于阈值不算问题、超一点点就算 ----
   const boundary = [

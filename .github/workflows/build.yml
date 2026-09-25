@@ -78,12 +78,35 @@ jobs:
       # 期望值是由 Python 生成、node 比对的。如果只改了其中一边，
       # 提交里的 json 就会和生成器脱节 —— 这时比对本身仍在"自洽地跑"，
       # 却已经与被测实现无关了。重新生成一次并比对，堵住这个盲区。
+      #
+      # 🔴 TZ 必须钉成**非 UTC**：日聚合的期望值里有「本地日」用例，而 UTC 下
+      #    "本地零点"就是 UTC 零点 —— 生成器自检与两端对拍都**无法区分**「按本地时区算」
+      #    与「按 UTC 算」，这类回归会整条溜过去（已实测漏网过一次）。
+      #    生成物本身**不随时区变化**（已验证跨 4 个时区逐字节相同），这里只是让自检有牙。
+      # ⚠️ 只能靠**环境变量**钉时区，别在生成器里 spawn 子进程换 TZ：Windows CRT 上父进程
+      #    TZ=UTC 时子进程拿到的是 +1:00 而不是 +8:00，嵌套传 TZ 不可靠。
       - name: 期望值是否与生成器同步
+        env:
+          TZ: Asia/Shanghai
         run: |
-          python scripts/gen-scoring-cases.py > /tmp/scoring.json
-          python scripts/gen-angle-cases.py   > /tmp/angle.json
-          diff -u scripts/scoring-expected.json /tmp/scoring.json
-          diff -u scripts/angle-expected.json   /tmp/angle.json
+          set -euo pipefail
+          # 🔴 这里只列**内容能逐字节复现**的几份：
+          #    - scoring / angle：原有覆盖；
+          #    - daily-agg：这次时区事故补上的 —— 它的期望值曾把**生成机的 UTC 偏移**
+          #      写死进去（本机 UTC+8 → 16:00Z），换到 UTC 的 runner 上两端实现都对、
+          #      产物却对不上。现在生成物已做到与时区无关，加进同步检查堵住复发。
+          # ⚠️ part-health / exercise-quality / export 暂不列入：前两者经 numpy 参与计算，
+          #    期望值带小数字面量，而 CI 的 numpy 是**不钉版本**装的 —— 换大版本可能给出
+          #    不同字面量，列入会制造假红（要纳入得先钉 numpy 版本再逐份验证）；
+          #    export 则因为本机（Windows）Python 输出 CRLF、仓库文件是 LF，
+          #    本地无法可靠验证，留待有 Linux 环境时再纳。
+          # ⚠️ 本机比对注意换行符：先 `tr -d '\r'` 再 diff，否则会"全篇不一致"。
+          for name in scoring angle daily-agg; do
+            echo "=== $name ==="
+            python "scripts/gen-${name}-cases.py" > "/tmp/${name}.json"
+            diff -u "scripts/${name}-expected.json" "/tmp/${name}.json"
+          done
+          echo "✓ 期望值与生成器同步"
 
       - name: 跨语言一致性（评分 / 平滑 / 角度）
         run: npm run verify:parity

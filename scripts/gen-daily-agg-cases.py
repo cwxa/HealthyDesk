@@ -11,13 +11,13 @@
 - 阈值边界（恰等于阈值**不算**问题、超一点点就算）
 - 取整平局点（能把 pyRound1 与 Math.round 区分开，见 verify 脚本的灵敏度自检）
 - merge_days 的合并（含空天跳过）
-- 本地日边界与 ±N 天（localDay.ts ↔ services/retention.py 的两端口径）
+- 本地日用例（**只存不随时区变化的**日期列表与 ±N 天；日边界本身改由 verify 脚本断言不变式）
 """
 
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
@@ -131,10 +131,79 @@ MERGE_SUMS = {
 }
 
 # ---------------- 本地日边界（两端口径） ----------------
-DAY_BOUNDS = {
-    d: list(local_day_bounds_utc(d))
-    for d in ("2026-01-01", "2026-02-28", "2026-03-01", "2026-06-15", "2026-12-31", "2024-02-29")
-}
+# 🔴 这里**绝不能**把「本地日 → UTC 瞬时区间」写进期望文件。
+#    那些瞬时值取决于**生成时那台机器的时区**：同一份代码在 UTC+8 上生成是
+#    `2025-12-31T16:00:00.000Z`，在 UTC 上是 `2025-12-31T00:00:00.000Z`。
+#    本项目就因此红过一次 CI：本机（UTC+8）存的期望值，跑到 UTC 的 runner 上，
+#    TS 侧算出 00:00Z、期望值写着 16:00Z —— 两端实现**都对**，是**产物不可移植**。
+#    所以只存不随时区变化的用例（日期 + ±N 天）；日边界本身由 verify 脚本断言
+#    「本地零点 / 区间连续」这类**不变式**，任何时区都成立，而且照样抓得住
+#    「改用 UTC 零点」这类真错（UTC+8 下那个瞬时的小时数是 8，不是 0）。
+DAY_CASES = [
+    "2026-01-01",  # 跨年
+    "2026-02-28",  # 平年 2 月末
+    "2026-03-01",  # 紧接 2 月末
+    # 🔴 夏令时切换日必须覆盖：当地这一天只有 23 小时（春季前拨）/ 25 小时（秋季回拨）。
+    #    没有这类用例时，「end 用固定 +24h 而不是次日本地零点」这种实现**不会被抓住**
+    #    —— 已实测漏网过一次，补上这四天才有牙。
+    "2026-03-08",  # 美国夏令时开始
+    "2026-03-29",  # 欧洲夏令时开始
+    "2026-10-25",  # 欧洲夏令时结束
+    "2026-11-01",  # 美国夏令时结束
+    "2026-06-15",  # 年中
+    "2026-12-31",  # 跨年
+    "2024-02-29",  # 闰日
+]
+
+
+def _assert_local_day_semantics(days):
+    """生成前自检 Python 侧：`local_day_bounds_utc` 必须真的是「本地零点 → 次日零点」。
+
+    把这条断言放在生成器里，是为了让「Python 侧被改成 UTC 零点 / 忘了转本地」在**生成阶段**
+    就炸掉 —— 而不是等到两端对拍时才暴露，那时还得先分辨是哪一端错了。
+    纯不变式，不依赖生成机的时区。
+    """
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
+    for d in days:
+        start, end = local_day_bounds_utc(d)
+        nxt = (datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        def as_local(iso):
+            return datetime.strptime(iso, fmt).replace(tzinfo=timezone.utc).astimezone()
+
+        assert as_local(start).strftime("%Y-%m-%d %H:%M:%S.%f") == f"{d} 00:00:00.000000", (d, start)
+        assert as_local(end).strftime("%Y-%m-%d %H:%M:%S.%f") == f"{nxt} 00:00:00.000000", (d, end)
+        # 区间必须连续：end(day) == start(day+1)
+        assert end == local_day_bounds_utc(nxt)[0], d
+
+
+def _selfcheck_local_day():
+    """自检 Python 侧「本地日」语义，并要求**生成时的进程真的在非 UTC 时区**。
+
+    🔴 为什么必须非 UTC：CI runner 的 TZ 是 UTC，此时"本地零点"就是 UTC 零点，一个把实现
+    改成 `replace(tzinfo=timezone.utc)` 的变异**完全看不出来**（实测漏网过）。只有在非 UTC
+    时区里，"本地零点"与"UTC 零点"才是两个不同的瞬时。
+    🔴 为什么用**进程环境变量**而不是自己 spawn 一个换时区的子进程：实测 Windows CRT 上，
+    父进程 TZ=UTC 时子进程被塞 `TZ=Asia/Shanghai` 会得到 +1:00（不是 +8:00）——
+    环境变量方式在嵌套进程里不可靠。所以这里的契约是：**调用方负责把 TZ 钉成非 UTC**，
+    本函数只负责发现"没钉"并大声提醒。
+    """
+    offset = datetime.now().astimezone().utcoffset()
+    if offset == timedelta(0):
+        print(
+            "⚠ 生成器跑在 UTC 下：本地日自检此时**无法区分**「本地零点」与「UTC 零点」，"
+            "等于没验。请用非 UTC 时区重新生成，例如：\n"
+            "    TZ=Asia/Shanghai python scripts/gen-daily-agg-cases.py > scripts/daily-agg-expected.json\n"
+            "（CI 的「期望值是否与生成器同步」步骤已设 TZ，所以 CI 上是真验。）",
+            file=sys.stderr,
+        )
+    else:
+        print(f"本地日自检：进程时区偏移 {offset}（非 UTC，可区分本地/UTC 零点）", file=sys.stderr)
+    _assert_local_day_semantics(DAY_CASES)
+
+
+_selfcheck_local_day()
+
 # shiftDay(day, delta) 的期望：用 datetime 直接算，避免与实现同源
 SHIFT_CASES = []
 for base in ("2026-03-01", "2026-01-01", "2024-02-29", "2026-12-31"):
@@ -153,7 +222,7 @@ payload = {
     "cases": CASES,
     "merge_cases": MERGE_CASES,
     "merge_sums": MERGE_SUMS,
-    "day_bounds": DAY_BOUNDS,
+    "day_cases": DAY_CASES,
     "shift_cases": SHIFT_CASES,
 }
 
