@@ -11,10 +11,11 @@
   "scripts": {
     "dev": "vite",
     "backend:build": "pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath build/pyi-work",
-    "verify:parity": "node scripts/verify-scoring.mjs && node scripts/verify-angles.mjs && node scripts/verify-part-health.mjs && node scripts/verify-exercise-quality.mjs && node scripts/verify-daily-agg.mjs && node scripts/verify-export-format.mjs",
+    "verify:parity": "node scripts/verify-scoring.mjs && node scripts/verify-angles.mjs && node scripts/verify-part-health.mjs && node scripts/verify-exercise-quality.mjs && node scripts/verify-daily-agg.mjs && node scripts/verify-export-format.mjs && node scripts/verify-timefmt.mjs",
     "verify:backend": "node scripts/verify-backend-binary.js",
     "verify:source": "node scripts/verify-same-source.mjs",
     "verify:ui": "node scripts/verify-ui-smoke.mjs",
+    "verify:timestamps": "node scripts/verify-timefmt.mjs",
     "verify:all": "npm run verify:parity && node scripts/set-version.js --check",
     "set-version": "node scripts/set-version.js",
 

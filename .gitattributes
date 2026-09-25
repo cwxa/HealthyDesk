@@ -49,3 +49,18 @@ Podfile   text eol=lf
 # 在只有行尾差异时也报改动，掩盖真正的修改）。
 *.md         text eol=lf
 .gitignore   text eol=lf
+
+# ---- 源码与结构化配置：统一 LF ----
+# 🔴 源码这条是**守卫正确性**的要求，不只是审美：
+#    本机 `core.autocrlf=true` 检出 CRLF、CI 检出 LF。任何「按行处理源码」的守卫
+#    （剥 `#` 注释、匹配行尾）都会因此两端行为不同 —— 因为 `.` **不匹配 `\r`**、
+#    非 multiline 的 `$` 只匹配串尾，`/\s*#.*$/` 在 CRLF 行上会**静默不匹配**
+#    → 注释里提到旧写法就被误判成违规，变成「本机红、CI 绿」这种最难查的分叉。
+#    （v1.6.1 实测踩到；同时守卫侧也做了 CRLF 归一，两头都堵。）
+*.py      text eol=lf
+*.mjs     text eol=lf
+*.js      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.json    text eol=lf
+.gitattributes text eol=lf

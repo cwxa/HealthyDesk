@@ -69,8 +69,13 @@ jobs:
 
       # 评分/角度模块只依赖 numpy（mediapipe 是惰性导入），
       # 所以重新生成期望值不需要装 opencv + mediapipe 那 400MB。
+      # ⚠️ 时间戳契约守卫（verify-timefmt）额外要 aiosqlite：它跑的是**真实**的
+      #    `services.retention.rollup_daily`（async）来验「迁移后归档与按天窗口同源」。
+      #    用同步 sqlite3 复刻一遍是最省事的做法，但那样验的是**副本**而不是实现
+      #    —— 副本会与源码各错各的，测试还全绿（本项目明令禁止）。aiosqlite 是纯
+      #    Python 小包，装它只多几秒。
       - name: 安装后端最小依赖
-        run: python -m pip install --quiet numpy
+        run: python -m pip install --quiet numpy aiosqlite
 
       - name: 类型检查
         run: npx tsc --noEmit
