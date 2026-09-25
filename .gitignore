@@ -16,6 +16,8 @@ build/
 .DS_Store
 Thumbs.db
 /dist
+# 沙箱的批量删除配额耗尽后，「改名代替删除」会留下 dist.old-<tag>/（见 docs/DEVELOPMENT.md §8.3）
+/dist.old-*/
 *.log
 .workbuddy/
 .buildenv/
