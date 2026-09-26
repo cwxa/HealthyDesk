@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import ScoreGauge from './ScoreGauge'
 import ExerciseGuide from './ExerciseGuide'
 import type { ExerciseGrade } from '../platform/exerciseQuality'
+import { EXERCISES as exercises, NOT_MEASURABLE_LABEL } from '../data/exercises'
 
 export interface ExerciseState {
   phase: 'active' | 'done'
@@ -42,36 +43,10 @@ export interface ExerciseState {
   verdict: { completed: number; moved: number; judged: number; notJudgeable: number } | null
 }
 
-/**
- * 动作库。
- *
- * `kind` / `min_cycles` 是完成度判定（`judgeExercise`）所需的元数据：
- * 保持类看「幅度 + 保持时长」，往复类看「幅度 + 有效次数」。
- *
- * 🔴 `measurable` —— **当前三个指标能否反映这个动作**。判据是本节目的度量本身：
- *    `exerciseActivity` 只看「头部侧倾角 / 肩部高度差 / 脊柱倾斜角」三个量，
- *    它们反映的是**不对称与倾斜**。于是：
- *      - 头侧屈、肩部环绕 → 会产生明显的单侧偏斜 / 高度差 → 可判定 ✅
- *      - 颈部左右转（绕垂直轴旋转，正对摄像头时耳线仍水平）、
- *        扩胸（双侧对称）、头部后缩（矢状面平移，三角度几乎不变）→ **测不到** ❌
- *    对不可判定的动作给"没检测到动作"的结论，就是**冤枉真的在做的用户** ——
- *    正是 S2 要消灭的那类缺陷（产品惩罚用户做它要求做的事）。
- *    所以这类动作**不参与完成度判定**，界面照常给静态要领、不给实时判定。
- *    ⚠️ 这张表是按指标定义推出来的，**尚未用真机数据校准**（本项目目前没有
- *    真机验证手段）。将来拿到真实帧序列后应重新核对，必要时改判。
- *
- * 这里仍然硬编码在组件里 —— 抽成独立数据模块是 ROADMAP-SCORING 的 S7，
- * 届时 `kind` / `min_cycles` / `measurable` 三个字段要一并搬过去。
- */
-export const exercises = [
-  { name: '颈部左侧屈', duration: 12, icon: '↩', hint: '头向左肩倾斜，感受右侧颈部拉伸', color: '#4CAF50', kind: 'hold' as const, min_cycles: 0, measurable: true },
-  { name: '颈部右侧屈', duration: 12, icon: '↪', hint: '头向右肩倾斜，感受左侧颈部拉伸', color: '#66BB6A', kind: 'hold' as const, min_cycles: 0, measurable: true },
-  { name: '颈部左转', duration: 12, icon: '⬅', hint: '缓慢向左转头，保持双肩放松', color: '#2196F3', kind: 'hold' as const, min_cycles: 0, measurable: false },
-  { name: '颈部右转', duration: 12, icon: '➡', hint: '缓慢向右转头，保持双肩放松', color: '#42A5F5', kind: 'hold' as const, min_cycles: 0, measurable: false },
-  { name: '肩部环绕', duration: 12, icon: '⭕', hint: '双肩向后画圈，幅度尽量大', color: '#FF9800', kind: 'cyclic' as const, min_cycles: 3, measurable: true },
-  { name: '扩胸运动', duration: 12, icon: '🤲', hint: '双手后伸，挺胸抬头', color: '#9C27B0', kind: 'cyclic' as const, min_cycles: 3, measurable: false },
-  { name: '头部后缩', duration: 10, icon: '⬇', hint: '收下巴向后平移，像做双下巴', color: '#00BCD4', kind: 'hold' as const, min_cycles: 0, measurable: false },
-]
+// 动作库已抽到 `src/data/exercises.ts`（ROADMAP-SCORING S7）：这里是**消费者**，
+// 不再定义动作。别名 `exercises` 只为让下面的读法保持不变。
+// 🔴 别把数组搬回来 —— `scripts/verify-exercises.mjs` 会断言「动作名只出现在数据文件里」，
+//    且引导组件已改为按数据里的图元作图（不再按下标 `switch`）。
 
 interface Props {
   state: ExerciseState
@@ -130,10 +105,12 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
             <p style={{ fontSize: 12, color: '#999' }}>活动时长</p>
           </div>
         </div>
-        {/* 说清"判定了几个" —— 只统计指标能反映的动作，剩下几个不装作判过 */}
+        {/* 说清"判定了几个" —— 只统计指标能反映的动作，剩下几个不装作判过。
+            名单由数据里 `measurable === false` 的动作**派生**（短名去重后拼接）：
+            写死动作名会与动作库脱钩，改一个动作就得回来改文案。 */}
         {verdict !== null && verdict.notJudgeable > 0 && (
           <p style={{ fontSize: 11, color: '#bbb', textAlign: 'center', lineHeight: 1.5, maxWidth: 260 }}>
-            另有 {verdict.notJudgeable} 个动作（转颈 / 扩胸 / 头部后缩）当前摄像头角度无法判定，未计入
+            另有 {verdict.notJudgeable} 个动作（{NOT_MEASURABLE_LABEL}）当前摄像头角度无法判定，未计入
           </p>
         )}
         <button
@@ -190,7 +167,7 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
 
       {/* Exercise animation guide */}
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
-        <ExerciseGuide exerciseIndex={current} color={ex.color} size={160} />
+        <ExerciseGuide exercise={ex} size={160} />
       </div>
 
       {/* Countdown timer */}

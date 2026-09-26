@@ -1,13 +1,27 @@
 import { motion } from 'framer-motion'
+import type { Exercise, GuideArrow, GuideMotion } from '../data/exercises'
 
 interface Props {
-  exerciseIndex: number
-  color: string
+  /** 要演示的动作。引导完全由它的 `guide` 参数决定 —— 组件里不再认识任何具体动作。 */
+  exercise: Exercise
   size?: number
 }
 
-// 肩颈活动动画引导组件 - 使用SVG+Framer Motion直观展示每个动作
-export default function ExerciseGuide({ exerciseIndex, color, size = 160 }: Props) {
+/**
+ * 肩颈活动动画引导（SVG + Framer Motion）。
+ *
+ * 🔴 **这个组件不认识任何具体动作**：头部运动由 `exercise.guide.motion` 的关键帧算出，
+ * 方向箭头由 `exercise.guide.arrow` 选图元。此前这里是两个按**下标** `switch` 的函数
+ * （`getHeadMotion` / `DirectionArrow`），加一个动作必须回来加 `case` ——
+ * S7 把它们改成了「数据选参数、组件会画图」。
+ *
+ * ⚠️ 搬家时**逐参数保真**：`StraightArrow` 里的坐标含少量绝对像素（如 `-6` / `+8`），
+ * 与尺寸不成比例，是改造前就有的写法。这里刻意**原样保留**，因为 S7 的硬约束是
+ * 「重构不改行为」；要调视觉应在 S8 里单独做并重新核对。等价性由
+ * `scripts/verify-exercises.mjs` 的参数快照断言（`cycleSec` / 关键帧 / 图元分配）。
+ */
+export default function ExerciseGuide({ exercise, size = 160 }: Props) {
+  const color = exercise.color
   const c = size / 2
   const headR = size * 0.16
   const bodyW = size * 0.22
@@ -16,14 +30,6 @@ export default function ExerciseGuide({ exerciseIndex, color, size = 160 }: Prop
   // 头部基础位置（颈部上方）
   const headBaseX = c
   const headBaseY = c - size * 0.18
-
-  // 将hex颜色转为rgba
-  const hexToRgba = (hex: string, alpha: number) => {
-    const r = parseInt(hex.slice(1, 3), 16)
-    const g = parseInt(hex.slice(3, 5), 16)
-    const b = parseInt(hex.slice(5, 7), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
-  }
 
   const fillColor = hexToRgba(color, 0.15)
   const strokeColor = hexToRgba(color, 1.0)
@@ -61,36 +67,67 @@ export default function ExerciseGuide({ exerciseIndex, color, size = 160 }: Prop
           />
         </g>
 
-        {/* 动态头部 - 使用motion.g实现平滑动画 */}
+        {/* 动态头部 - 使用motion.g实现平滑动画
+            key 用 id 而不是下标：换动作时强制重挂载，让动画从头开始（与改造前同义）。 */}
         <AnimatedHead
-          key={`head-${exerciseIndex}`}
-          index={exerciseIndex}
+          key={`head-${exercise.id}`}
+          motionSpec={exercise.guide.motion}
           baseX={headBaseX}
           baseY={headBaseY}
           headR={headR}
-          color={color}
           fillColor={fillColor}
           strokeColor={strokeColor}
         />
 
         {/* 方向指示箭头 */}
-        <DirectionArrow key={`arrow-${exerciseIndex}`} index={exerciseIndex} c={c} size={size} color={color} />
+        <DirectionArrow key={`arrow-${exercise.id}`} arrow={exercise.guide.arrow} c={c} size={size} color={color} />
       </svg>
     </div>
   )
 }
 
+type HeadMotionProps = {
+  initial: { x: number; y: number; rotate?: number }
+  animate: { x: number | number[]; y: number | number[]; rotate?: number[] }
+  transition: { duration: number; repeat: number; ease: 'easeInOut' }
+}
+
+/**
+ * 把数据的**无量纲关键帧**换算成画布坐标。
+ *
+ * 关键帧单位是 `offset = headR * 0.6`：`0` = 基准位、`±k` = 偏移 k 个 offset。
+ * 长度为 1 的关键帧输出**标量**（而不是单元素数组）—— 与改造前逐条手写的写法一致，
+ * `animate` 里「标量 = 不动」和「数组 = 来回动」是两种不同的动画语义。
+ */
+function buildHeadMotion(spec: GuideMotion, baseX: number, baseY: number, headR: number): HeadMotionProps {
+  const offset = headR * 0.6
+  const axis = (frames: readonly number[], base: number) =>
+    frames.length === 1 ? base + frames[0] * offset : frames.map((k) => base + k * offset)
+
+  const initial: HeadMotionProps['initial'] = { x: baseX, y: baseY }
+  if (spec.rotate) initial.rotate = 0
+
+  const animate: HeadMotionProps['animate'] = {
+    x: axis(spec.x, baseX),
+    y: axis(spec.y, baseY),
+  }
+  if (spec.rotate) animate.rotate = [...spec.rotate]
+
+  return { initial, animate, transition: { duration: spec.cycleSec, repeat: Infinity, ease: 'easeInOut' } }
+}
+
 // 动画头部组件
-function AnimatedHead({ index, baseX, baseY, headR, color, fillColor, strokeColor }: {
-  index: number
+// ⚠️ prop 名**不能**叫 `motion`：那会遮蔽 framer-motion 的 `motion`，
+//   于是 `<motion.g>` 会被当成"读取 prop 上的 g 属性"而报 TS2339（实测踩到）。
+function AnimatedHead({ motionSpec, baseX, baseY, headR, fillColor, strokeColor }: {
+  motionSpec: GuideMotion
   baseX: number
   baseY: number
   headR: number
-  color: string
   fillColor: string
   strokeColor: string
 }) {
-  const motionProps = getHeadMotion(index, baseX, baseY, headR)
+  const motionProps = buildHeadMotion(motionSpec, baseX, baseY, headR)
 
   return (
     <motion.g
@@ -123,112 +160,29 @@ function AnimatedHead({ index, baseX, baseY, headR, color, fillColor, strokeColo
   )
 }
 
-// 根据动作类型返回对应的运动参数
-function getHeadMotion(index: number, baseX: number, baseY: number, headR: number) {
-  const offset = headR * 0.6
-
-  switch (index) {
-    case 0: // 颈部左侧屈
-      return {
-        initial: { x: baseX, y: baseY },
-        animate: { x: [baseX, baseX - offset, baseX], y: baseY },
-        transition: { duration: 2, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 1: // 颈部右侧屈
-      return {
-        initial: { x: baseX, y: baseY },
-        animate: { x: [baseX, baseX + offset, baseX], y: baseY },
-        transition: { duration: 2, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 2: // 颈部左转
-      return {
-        initial: { x: baseX, y: baseY, rotate: 0 },
-        animate: { x: baseX, y: baseY, rotate: [-18, 18, -18] },
-        transition: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 3: // 颈部右转
-      return {
-        initial: { x: baseX, y: baseY, rotate: 0 },
-        animate: { x: baseX, y: baseY, rotate: [18, -18, 18] },
-        transition: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 4: // 肩部环绕
-      return {
-        initial: { x: baseX, y: baseY },
-        animate: {
-          x: [baseX, baseX + offset * 0.5, baseX - offset * 0.5, baseX],
-          y: [baseY, baseY - offset * 0.3, baseY - offset * 0.3, baseY],
-        },
-        transition: { duration: 2.5, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 5: // 扩胸运动
-      return {
-        initial: { x: baseX, y: baseY, rotate: 0 },
-        animate: {
-          x: baseX,
-          y: [baseY, baseY - offset * 0.5, baseY],
-          rotate: [0, -8, 0],
-        },
-        transition: { duration: 2.4, repeat: Infinity, ease: 'easeInOut' },
-      }
-    case 6: // 头部后缩
-      return {
-        initial: { x: baseX, y: baseY },
-        animate: { x: baseX, y: [baseY, baseY + offset * 0.4, baseY] },
-        transition: { duration: 1.8, repeat: Infinity, ease: 'easeInOut' },
-      }
-    default:
-      return {
-        initial: { x: baseX, y: baseY },
-        animate: { x: baseX, y: baseY },
-        transition: { duration: 1 },
-      }
-  }
-}
-
-// 方向指示箭头
-function DirectionArrow({ index, c, size, color }: {
-  index: number
+// 方向指示箭头：按数据选中的**图元**分发（不再是按动作下标）
+function DirectionArrow({ arrow, c, size, color }: {
+  arrow: GuideArrow
   c: number
   size: number
   color: string
 }) {
   const r = size * 0.38
-
-  // 将hex颜色转为rgba
-  const hexToRgba = (hex: string, alpha: number) => {
-    const r = parseInt(hex.slice(1, 3), 16)
-    const g = parseInt(hex.slice(3, 5), 16)
-    const b = parseInt(hex.slice(5, 7), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
-  }
-
   const arrowColor = hexToRgba(color, 0.6)
 
-  // 根据动作生成对应的箭头或弧线
   const renderArrow = () => {
-    switch (index) {
-      case 0: // 左屈 - 左箭头
+    switch (arrow.kind) {
+      case 'straight':
+        return <StraightArrow dir={arrow.dir} c={c} r={r} color={arrowColor} />
+      case 'arc':
         return (
-          <g>
-            <line x1={c - r - 6} y1={c - r * 0.2} x2={c - r + 8} y2={c - r * 0.2} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c - r - 6} y1={c - r * 0.2} x2={c - r + 2} y2={c - r * 0.2 - 5} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c - r - 6} y1={c - r * 0.2} x2={c - r + 2} y2={c - r * 0.2 + 5} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-          </g>
+          <ArcArrow
+            c={c} r={r * 0.7}
+            startAngle={arrow.from} endAngle={arrow.to}
+            color={arrowColor} direction={arrow.dir}
+          />
         )
-      case 1: // 右屈 - 右箭头
-        return (
-          <g>
-            <line x1={c + r + 6} y1={c - r * 0.2} x2={c + r - 8} y2={c - r * 0.2} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c + r + 6} y1={c - r * 0.2} x2={c + r - 2} y2={c - r * 0.2 - 5} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c + r + 6} y1={c - r * 0.2} x2={c + r - 2} y2={c - r * 0.2 + 5} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-          </g>
-        )
-      case 2: // 左转 - 逆时针弧线箭头
-        return <ArcArrow c={c} r={r * 0.7} startAngle={30} endAngle={150} color={arrowColor} direction="ccw" />
-      case 3: // 右转 - 顺时针弧线箭头
-        return <ArcArrow c={c} r={r * 0.7} startAngle={150} endAngle={30} color={arrowColor} direction="cw" />
-      case 4: // 环绕 - 圆形虚线
+      case 'ring':
         return (
           <circle
             cx={c} cy={c - r * 0.1} r={r * 0.5}
@@ -236,24 +190,6 @@ function DirectionArrow({ index, c, size, color }: {
             strokeDasharray="4 3"
           />
         )
-      case 5: // 扩胸 - 向上箭头
-        return (
-          <g>
-            <line x1={c} y1={c - r - 4} x2={c} y2={c - r + 10} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c} y1={c - r - 4} x2={c - 5} y2={c - r + 4} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c} y1={c - r - 4} x2={c + 5} y2={c - r + 4} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-          </g>
-        )
-      case 6: // 后缩 - 向下箭头
-        return (
-          <g>
-            <line x1={c} y1={c + r * 0.3 + 8} x2={c} y2={c + r * 0.3 - 6} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c} y1={c + r * 0.3 + 8} x2={c - 5} y2={c + r * 0.3 + 2} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-            <line x1={c} y1={c + r * 0.3 + 8} x2={c + 5} y2={c + r * 0.3 + 2} stroke={arrowColor} strokeWidth={2} strokeLinecap="round" />
-          </g>
-        )
-      default:
-        return null
     }
   }
 
@@ -266,6 +202,66 @@ function DirectionArrow({ index, c, size, color }: {
       {renderArrow()}
     </motion.g>
   )
+}
+
+/**
+ * 直线箭头（左 / 右 / 上 / 下）。
+ *
+ * 🔴 坐标**原样**取自改造前 `DirectionArrow` 的 4 个 `case`，含绝对像素常量：
+ * 左右箭头在 `c ± r ± 6`、上下箭头在 `c ∓ r ∓ 4`，横向基准分别取 `c - r*0.2`（左右）
+ * 与 `c`（上下），向下箭头的半径是 `r * 0.3`。这些不一致是历史写法，
+ * 搬家时**保真优先**（S7 不改行为），要统一到 S8 再说。
+ */
+function StraightArrow({ dir, c, r, color }: {
+  dir: 'left' | 'right' | 'up' | 'down'
+  c: number
+  r: number
+  color: string
+}) {
+  const head = 5 // 箭头两撇的张口半径（像素）
+
+  switch (dir) {
+    case 'left': {
+      const y = c - r * 0.2
+      return (
+        <g>
+          <line x1={c - r - 6} y1={y} x2={c - r + 8} y2={y} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c - r - 6} y1={y} x2={c - r + 2} y2={y - head} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c - r - 6} y1={y} x2={c - r + 2} y2={y + head} stroke={color} strokeWidth={2} strokeLinecap="round" />
+        </g>
+      )
+    }
+    case 'right': {
+      const y = c - r * 0.2
+      return (
+        <g>
+          <line x1={c + r + 6} y1={y} x2={c + r - 8} y2={y} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c + r + 6} y1={y} x2={c + r - 2} y2={y - head} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c + r + 6} y1={y} x2={c + r - 2} y2={y + head} stroke={color} strokeWidth={2} strokeLinecap="round" />
+        </g>
+      )
+    }
+    case 'up': {
+      const tip = c - r - 4
+      return (
+        <g>
+          <line x1={c} y1={tip} x2={c} y2={c - r + 10} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c} y1={tip} x2={c - head} y2={c - r + 4} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c} y1={tip} x2={c + head} y2={c - r + 4} stroke={color} strokeWidth={2} strokeLinecap="round" />
+        </g>
+      )
+    }
+    case 'down': {
+      const tip = c + r * 0.3 + 8
+      return (
+        <g>
+          <line x1={c} y1={tip} x2={c} y2={c + r * 0.3 - 6} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c} y1={tip} x2={c - head} y2={c + r * 0.3 + 2} stroke={color} strokeWidth={2} strokeLinecap="round" />
+          <line x1={c} y1={tip} x2={c + head} y2={c + r * 0.3 + 2} stroke={color} strokeWidth={2} strokeLinecap="round" />
+        </g>
+      )
+    }
+  }
 }
 
 // 弧线箭头组件
@@ -303,4 +299,12 @@ function ArcArrow({ c, r, startAngle, endAngle, color, direction }: {
 function polarToCartesian(cx: number, cy: number, r: number, angle: number) {
   const rad = (angle * Math.PI) / 180
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
+}
+
+/** 将hex颜色转为rgba（原先在组件里定义了两份，这里合一）。 */
+function hexToRgba(hex: string, alpha: number) {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }

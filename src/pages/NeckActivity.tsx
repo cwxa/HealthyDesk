@@ -7,8 +7,9 @@ import { isMobile, platformLabel } from '../platform/runtime'
 import { localReminder } from '../platform/localReminder'
 import PostureSkeleton from '../components/PostureSkeleton'
 import ScoreGauge from '../components/ScoreGauge'
-import ExercisePanel, { exercises, type ExerciseState } from '../components/ExercisePanel'
+import ExercisePanel, { type ExerciseState } from '../components/ExercisePanel'
 import ExerciseGuide from '../components/ExerciseGuide'
+import { EXERCISES as exercises, TOTAL_DURATION_SEC } from '../data/exercises'
 import { speakPostureIssue, speak } from '../utils/speech'
 import { judgeExercise, type ExerciseFrame, type ExerciseGrade } from '../platform/exerciseQuality'
 import { nativeDiagAsync, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
@@ -441,7 +442,7 @@ export default function NeckActivity() {
     setMode('done')
     const ss = exScoresRef.current
     const avg = ss.length > 0 ? Math.round(ss.reduce((a, b) => a + b, 0) / ss.length) : 0
-    const dur = exercises.reduce((s, e) => s + e.duration, 0)
+    const dur = TOTAL_DURATION_SEC
     const verdict = judgeSession()
     setExVerdict(verdict)
     // 语音与收尾文案同源分三种：完成 / 动了但幅度不够 / 一次都没动。
@@ -519,7 +520,9 @@ export default function NeckActivity() {
   const scoreLabel = score > 0 ? (score >= 80 ? '姿态良好' : score >= 60 ? '需要注意' : '姿态异常') : '等待数据'
   const mobile = isMobile()
 
-  const totalDur = exercises.reduce((s, e) => s + e.duration, 0)
+  // 总时长**单点定义**在数据模块里 —— 这里只读，不再自己 reduce 一遍
+  // （此前两处各算一遍，值相同所以看不出问题；S8 让时长可配后必然漂移）。
+  const totalDur = TOTAL_DURATION_SEC
   const elapsed = totalDur - exercises.slice(exCurrent).reduce((s, e, i) => s + (i === 0 ? exTimeLeft : e.duration), 0)
   const progress = (elapsed / totalDur) * 100
 
@@ -879,7 +882,7 @@ export default function NeckActivity() {
                   background: 'rgba(255,255,255,0.92)', borderRadius: 12, padding: 4,
                   boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
                 }}>
-                  <ExerciseGuide exerciseIndex={exCurrent} color={exercises[exCurrent].color} size={72} />
+                  <ExerciseGuide exercise={exercises[exCurrent]} size={72} />
                 </div>
               )}
             </div>

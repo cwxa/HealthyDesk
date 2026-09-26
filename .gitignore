@@ -6,7 +6,11 @@ release2/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/data/
-data/
+# 🔴 必须写成根锚定的 `/data/`：裸 `data/` 会在**任意深度**匹配，把 `src/data/` 一起忽略掉。
+#    本轮实测踩到 —— 新建的 `src/data/exercises.ts`（动作库，S7）在 `git status` 里**完全不出现**，
+#    本机跑守卫全绿（文件在磁盘上），CI 却因为仓库里没有这个文件而红。
+#    运行时数据库在仓库根的 `data/`（见 backend/config.py:DB_PATH），按根锚定才是本意。
+/data/
 build/
 *.pyc
 *.pyo
