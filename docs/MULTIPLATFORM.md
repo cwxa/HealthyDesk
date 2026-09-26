@@ -317,7 +317,16 @@ gh release edit v1.3.8 --draft=false --latest
    CD 会自动剔除 → 需本机 `npm run cap:build:release` 出包后
    `gh release upload <tag> <apk> --clobber` 补传，并**验证书指纹与上一版一致**（§9.3）。
 3. **正文里的下载链接、文件大小、版本号是否都对**（README 的表格同理）。
-4. 公开后**匿名 `curl` 验 Content-Type**（§9.4，这一步不能省）。
+   🔴 顺带查**资产名本身** —— 它随版本变过：v1.3.7 是 `NeckGuardian-Android-1.3.7.apk`，
+   现在是 `NeckGuardian-<v>-android-release.apk`；**照抄上一版的命名会 404**。
+   正文里的 `<版本>` 占位也必须人工替换 —— **CI 只把模板贴上去，不会替换**，
+   替换方式就是本节那条 `gh release edit --notes-file <版本专属说明>`。
+4. 公开后**匿名 `curl` 验 Content-Type**（§9.4，这一步不能省）；README 里那几条下载链接
+   也要匿名验一遍状态码（200 才算通）。
+5. **真机门未满足却仍要放行？可以，但两件事必须做**：① Release 正文与 README 逐端写明
+   「验到哪一步」，全篇不出现"可用"（`device-matrix.md §二.1`）；② 在
+   `device-matrix.md §4.3` 留一行放行记录（决定 / 范围 / 措辞）。
+   **「已发布」不能被读成「已验证」** —— 这条门的射程是「怎么说」，不是「能不能发」。
 
 > **`.github/release-notes.md` 是 Release 正文模板**：CI 用 `--notes-file` 取它，
 > `--generate-notes` 再把 PR 列表追加在后面。**它面向下载者** ——
