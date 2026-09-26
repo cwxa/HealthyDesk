@@ -106,7 +106,10 @@ jobs:
           #    export 则因为本机（Windows）Python 输出 CRLF、仓库文件是 LF，
           #    本地无法可靠验证，留待有 Linux 环境时再纳。
           # ⚠️ 本机比对注意换行符：先 `tr -d '\r'` 再 diff，否则会"全篇不一致"。
-          for name in scoring angle daily-agg; do
+          # 名单必须与 scripts/ 下"生成器 + 同名 -expected.json"的配对保持一致 ——
+          # 漏掉一个，那个期望值就能在"改了生成器忘了重生成"的状态下一直绿下去
+          #（本轮补上 exercise-quality / export 两组，它们此前不在这个循环里）。
+          for name in scoring angle daily-agg exercise-quality export; do
             echo "=== $name ==="
             python "scripts/gen-${name}-cases.py" > "/tmp/${name}.json"
             diff -u "scripts/${name}-expected.json" "/tmp/${name}.json"
@@ -115,6 +118,12 @@ jobs:
 
       - name: 跨语言一致性（评分 / 平滑 / 角度）
         run: npm run verify:parity
+
+      # 表结构层：迁移编号连续、**加列幂等**（SQLite 没有 ADD COLUMN IF NOT EXISTS）、
+      # 老数据不丢、以及"同一个字段在 桌面列 / 移动端行接口 / 导出规格 三处"必须同构。
+      # 它跑真实 SQLite + 真实 apply_migrations，需要 aiosqlite（同上一步的说明）。
+      - name: 表结构与迁移守卫
+        run: npm run verify:schema
 
       # 动作库数据化（ROADMAP-SCORING S7）：动作名只能存在于 src/data/exercises.ts，
       # 引导动画必须由数据驱动（不再按下标 switch），总时长单点定义。
