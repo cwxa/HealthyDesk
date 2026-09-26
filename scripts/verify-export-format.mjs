@@ -356,6 +356,72 @@ async function main() {
     console.log('✓ 凭据排除：API Key 不进入导出文件，且不计入 skipped')
   }
 
+  // ---- e5) 老备份兼容：新增的可空列不许让老文件整表丢行 ----
+  // 这是 `str?` 这个字段类型存在的全部理由，所以必须有一条**直接打它**的断言，
+  // 而不是靠"某个用例的 skipped 恰好是 1"间接推断。
+  //
+  // 形态：老版本导出的 `activity_log` 里**根本没有** `action_scores` 这个键。若把新列
+  // 按必填处理，导入时它会逐行变成脏行 → `skipped.activity_log == 行数`、`tables.activity_log`
+  // 为空 —— 用户"恢复备份"之后这一年的活动记录静默消失，界面上只剩一个跳过计数。
+  //
+  // 期望值来自**输入**（进 4 行必须出 4 行），不是函数自身的常量，所以这条没有自证问题。
+  const oldRows = [15, 14, 13, 12].map((h) => ({
+    timestamp: tsOf(h),
+    activity_type: 'exercise',
+    exercise_count: 7,
+    duration_sec: 82,
+    avg_score: 70,
+  }))
+  const oldBackup = mod.validateExport({
+    format: payload.constants.EXPORT_FORMAT,
+    format_version: payload.constants.EXPORT_FORMAT_VERSION,
+    tables: { ...emptyTables, activity_log: oldRows },
+  })
+  const oldKept = oldBackup.bundle?.tables?.activity_log ?? []
+  const oldProblem =
+    oldBackup.ok !== true
+      ? '老文件被拒绝'
+      : (oldBackup.skipped.activity_log ?? 0) !== 0
+        ? `居然跳过了 ${oldBackup.skipped.activity_log} 行`
+        : oldKept.length !== oldRows.length
+          ? `行数不对：进 ${oldRows.length} 出 ${oldKept.length}`
+          : oldKept.some((r) => r.action_scores !== null)
+            ? '缺失的明细没有被落成 null'
+            : oldKept.some((r) => r.timestamp === undefined || r.avg_score === undefined)
+              ? '原有字段被弄丢了'
+              : null
+  if (oldProblem) {
+    console.error(`✗ 老备份兼容性被破坏：${oldProblem}`)
+    console.error(`    skipped=${JSON.stringify(oldBackup.skipped)} 行=${JSON.stringify(oldKept)}`)
+    failed = true
+  } else {
+    console.log(`✓ 老备份兼容：没有 action_scores 键的 ${oldRows.length} 行全部保留（落成 null），一行都没被跳过`)
+  }
+
+  // 反向也要钉住：**可空 ≠ 放宽类型检查**。类型不对的行仍然是脏行。
+  const wrongType = mod.validateExport({
+    format: payload.constants.EXPORT_FORMAT,
+    format_version: payload.constants.EXPORT_FORMAT_VERSION,
+    tables: {
+      ...emptyTables,
+      activity_log: [
+        { ...oldRows[0], action_scores: 123 },
+        { ...oldRows[1], action_scores: '{"v":1,"items":[]}' },
+      ],
+    },
+  })
+  const wrongOk =
+    (wrongType.skipped.activity_log ?? 0) === 1 &&
+    wrongType.bundle.tables.activity_log.length === 1 &&
+    wrongType.bundle.tables.activity_log[0].action_scores === '{"v":1,"items":[]}'
+  if (!wrongOk) {
+    console.error('✗ 可空字段放宽了类型检查（数字被当成合法明细）')
+    console.error(`    skipped=${JSON.stringify(wrongType.skipped)}`)
+    failed = true
+  } else {
+    console.log('✓ 可空列的类型仍然严格：数字被跳过，字符串（含空明细）保留')
+  }
+
   if (failed) process.exit(1)
   console.log('✓ 前端 TS 与 Python 后端的导出/导入格式完全一致')
 }

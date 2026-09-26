@@ -106,7 +106,36 @@ BASE_TABLES = {
             "exercise_count": 7,
             "duration_sec": 82,
             "avg_score": 78,
-        }
+            # 有明细（规范 JSON 文本，**不透明**：导出/导入都不解析它）
+            "action_scores": '{"v":1,"items":[{"id":"neck-flex-left","score":84,"grade":"completed"}]}',
+        },
+        {
+            # 🔴 老备份的行**没有** `action_scores` 这个键。这一行必须在导出后仍然存在
+            # （若把新列按必填处理，它会被当成脏行丢掉 —— 也就是"恢复备份丢数据"）。
+            "timestamp": ts(14),
+            "activity_type": "exercise",
+            "exercise_count": 7,
+            "duration_sec": 82,
+            "avg_score": 70,
+        },
+        {
+            # 显式 null 同样合法（= 没有这份数据）
+            "timestamp": ts(13),
+            "activity_type": "exercise",
+            "exercise_count": 7,
+            "duration_sec": 82,
+            "avg_score": 60,
+            "action_scores": None,
+        },
+        {
+            # 类型不对 → 仍然是脏行。可空 ≠ 放宽类型检查。
+            "timestamp": ts(12),
+            "activity_type": "exercise",
+            "exercise_count": 7,
+            "duration_sec": 82,
+            "avg_score": 55,
+            "action_scores": 123,
+        },
     ],
     # 表外的键必须被忽略
     "unknown_table": [{"whatever": 1}],

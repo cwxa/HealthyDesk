@@ -43,7 +43,16 @@ CSV_BOM = "\ufeff"
 # 导出文件里的表顺序（固定，便于人读与 diff）
 TABLE_ORDER = ("settings", "posture_score", "posture_daily", "usage_record", "activity_log")
 
-# 每张表的字段与类型：num = 数值，str = 字符串。字段顺序也是导出的键顺序。
+# 每张表的字段与类型：num = 数值，str = 字符串，`str?` = **可空字符串**。字段顺序也是导出的键顺序。
+#
+# 🔴 `str?` 存在的唯一理由：**新增的列在老文件里没有这个键**。若按必填处理，
+# 新版本导入老备份会把整张表的行**全部当作脏行跳过** —— 用户攒了一年的活动记录
+# 在"恢复备份"时静默消失，而界面上只会看到一个 skipped 计数。三态的区别是：
+#   缺失 / null  → 合法，落库为 NULL（"这个版本还没有这项数据"）
+#   字符串       → 原样保留
+#   其他类型     → 该行仍然是脏行（不因为"可空"就放宽类型检查）
+# 它也是**加列的通用做法**：以后再加可空列直接用这个类型，不必再动格式版本
+#（动 `format_version` 会让老版本**拒绝**新文件，与"旧版本能导入新版本"的目标冲突）。
 TABLE_FIELDS = {
     "settings": (("key", "str"), ("value", "str")),
     "posture_score": (
@@ -70,6 +79,9 @@ TABLE_FIELDS = {
         ("exercise_count", "num"),
         ("duration_sec", "num"),
         ("avg_score", "num"),
+        # 逐动作明细：规范 JSON 文本，**不透明搬运**（导入不重新序列化，见 exercise_quality）。
+        # 可空：老备份里没有这个键。
+        ("action_scores", "str?"),
     ),
 }
 
@@ -122,10 +134,27 @@ def _str(v):
     return v if isinstance(v, str) else None
 
 
+#: 「类型不对」的哨兵。**必须与 `None` 分开**：在可空字段（`str?`）里 `None` 是
+#: **合法值**（= 缺失），而"类型不对"要让整行变脏。用同一个 `None` 表示两种含义
+#: 会让可空字段静默变成"什么都能塞"。
+_INVALID = object()
+
+
+def _str_or_null(v):
+    """可空字符串：缺失 / `None` → `None`（合法）；字符串 → 原样；其他类型 → 脏行。"""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    return _INVALID
+
+
 def normalize_rows(table: str, rows) -> tuple[list[dict], int]:
     """规范化一张表的行，返回 (规范行, 被跳过的行数)。
 
     缺失/类型不对的字段 → 跳过该行（不修补、不填默认值：填默认值会静默改数据）。
+    ⚠️ 例外是 `str?` 字段：**缺失是合法的**（落库为 `None`），类型不对才跳过 ——
+    否则新版本导入老备份会把整张表的行全丢掉（见 `TABLE_FIELDS` 的说明）。
     """
     fields = TABLE_FIELDS[table]
     out: list[dict] = []
@@ -137,8 +166,14 @@ def normalize_rows(table: str, rows) -> tuple[list[dict], int]:
         row = {}
         ok = True
         for name, kind in fields:
-            value = _num(raw.get(name)) if kind == "num" else _str(raw.get(name))
-            if value is None:
+            value = raw.get(name)
+            if kind == "num":
+                value = _num(value)
+            elif kind == "str?":
+                value = _str_or_null(value)
+            else:
+                value = _str(value)
+            if value is _INVALID or (value is None and kind != "str?"):
                 ok = False
                 break
             row[name] = value

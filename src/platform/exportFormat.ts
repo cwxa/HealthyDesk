@@ -30,7 +30,23 @@ export const TABLE_ORDER = [
 
 export type TableName = (typeof TABLE_ORDER)[number]
 
-export type FieldKind = 'num' | 'str'
+/**
+ * 字段类型：`num` = 数值，`str` = 字符串，`str?` = **可空字符串**。
+ *
+ * 🔴 `str?` 存在的唯一理由：**新增的列在老文件里没有这个键**。若按必填处理，
+ * 新版本导入老备份会把整张表的行**全部当作脏行跳过** —— 用户攒了一年的活动记录在
+ * "恢复备份"时静默消失，界面上只剩一个 skipped 计数。三态的区别是：
+ *   缺失 / null  → 合法，落库为 `null`（"这个版本还没有这项数据"）
+ *   字符串       → 原样保留
+ *   其他类型     → 该行仍然是脏行（不因为"可空"就放宽类型检查）
+ *
+ * 它同时也是**加列的通用做法**：以后再加可空列直接用这个类型即可，不必动
+ * `format_version` —— 动版本会让老版本**拒绝**新文件，与"旧版本能导入新版本"冲突。
+ */
+export type FieldKind = 'num' | 'str' | 'str?'
+
+/** 一行里的字段值。`null` 只可能出现在 `str?` 字段上。 */
+export type FieldValue = string | number | null
 
 /** 每张表的字段与类型（顺序即导出时的键顺序）。 */
 export const TABLE_FIELDS: Record<TableName, ReadonlyArray<readonly [string, FieldKind]>> = {
@@ -66,6 +82,9 @@ export const TABLE_FIELDS: Record<TableName, ReadonlyArray<readonly [string, Fie
     ['exercise_count', 'num'],
     ['duration_sec', 'num'],
     ['avg_score', 'num'],
+    // 逐动作明细：规范 JSON 文本，**不透明搬运**（导入不重新序列化，见 exerciseQuality）。
+    // 可空：老备份里没有这个键。
+    ['action_scores', 'str?'],
   ],
 }
 
@@ -104,7 +123,7 @@ export interface ExportBundle {
   app_version: string
   schema_version: number
   exported_at: string
-  tables: Record<TableName, Record<string, string | number>[]>
+  tables: Record<TableName, Record<string, FieldValue>[]>
 }
 
 /**
@@ -145,13 +164,27 @@ function str(v: unknown): string | null {
   return typeof v === 'string' ? v : null
 }
 
+/**
+ * 「类型不对」的哨兵。**必须与 `null` 分开**：在可空字段（`str?`）里 `null` 是
+ * **合法值**（= 缺失），而"类型不对"要让整行变脏。用同一个 `null` 表示两种含义，
+ * 会让可空字段静默变成"什么都能塞"。
+ */
+const INVALID = Symbol('invalid')
+
+/** 可空字符串：缺失 / `null` → `null`（合法）；字符串 → 原样；其他类型 → `INVALID`。 */
+function strOrNull(v: unknown): string | null | typeof INVALID {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'string') return v
+  return INVALID
+}
+
 /** 规范化一张表的行，返回 (规范行, 被跳过的行数)。 */
 export function normalizeRows(
   table: TableName,
   rows: unknown[],
-): [Record<string, string | number>[], number] {
+): [Record<string, FieldValue>[], number] {
   const fields = TABLE_FIELDS[table]
-  const out: Record<string, string | number>[] = []
+  const out: Record<string, FieldValue>[] = []
   let skipped = 0
   for (const raw of rows) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -159,11 +192,16 @@ export function normalizeRows(
       continue
     }
     const src = raw as Record<string, unknown>
-    const row: Record<string, string | number> = {}
+    const row: Record<string, FieldValue> = {}
     let ok = true
     for (const [name, kind] of fields) {
-      const value = kind === 'num' ? num(src[name]) : str(src[name])
-      if (value === null) {
+      const src_v = src[name]
+      let value: string | number | null | typeof INVALID
+      if (kind === 'num') value = num(src_v)
+      else if (kind === 'str?') value = strOrNull(src_v)
+      else value = str(src_v)
+      // `str?` 的 null 是合法值，其余类型（含 num / str）的 null 都是"脏"。
+      if (value === INVALID || (value === null && kind !== 'str?')) {
         ok = false
         break
       }
@@ -185,7 +223,7 @@ export function normalizeRows(
 
 /** 要写进文件的部分 —— **只有数据**，不含任何诊断信息（见 `Skipped` 的说明）。 */
 function bundleOf(
-  tables: Record<TableName, Record<string, string | number>[]>,
+  tables: Record<TableName, Record<string, FieldValue>[]>,
   appVersion: string,
   schemaVersion: number,
   exportedAt: string,
@@ -216,7 +254,7 @@ export function buildExport(
   schemaVersion = 0,
   exportedAt = '',
 ): BuildResult {
-  const out = {} as Record<TableName, Record<string, string | number>[]>
+  const out = {} as Record<TableName, Record<string, FieldValue>[]>
   const skipped: Skipped = {}
   for (const table of TABLE_ORDER) {
     const [rows, sk] = normalizeRows(table, (tables ?? {})[table] ?? [])
@@ -254,7 +292,7 @@ export function validateExport(raw: unknown): ValidationResult {
   }
   const tableMap = tables as Record<string, unknown>
 
-  const out = {} as Record<TableName, Record<string, string | number>[]>
+  const out = {} as Record<TableName, Record<string, FieldValue>[]>
   const skipped: Skipped = {}
   for (const table of TABLE_ORDER) {
     if (!Array.isArray(tableMap[table])) {
