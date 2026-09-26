@@ -116,6 +116,12 @@ jobs:
       - name: 跨语言一致性（评分 / 平滑 / 角度）
         run: npm run verify:parity
 
+      # 动作库数据化（ROADMAP-SCORING S7）：动作名只能存在于 src/data/exercises.ts，
+      # 引导动画必须由数据驱动（不再按下标 switch），总时长单点定义。
+      # 纯源码 + 数据守卫，不需要构建，所以放在 build:web 之前 —— 早期失败更便宜。
+      - name: 动作库守卫（唯一数据源 / 逐项对拍 / 引导数据化）
+        run: npm run verify:exercises
+
       # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
       # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
       # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，

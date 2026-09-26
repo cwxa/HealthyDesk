@@ -16,7 +16,8 @@
     "verify:source": "node scripts/verify-same-source.mjs",
     "verify:ui": "node scripts/verify-ui-smoke.mjs",
     "verify:timestamps": "node scripts/verify-timefmt.mjs",
-    "verify:all": "npm run verify:parity && node scripts/set-version.js --check",
+    "verify:exercises": "node scripts/verify-exercises.mjs",
+    "verify:all": "npm run verify:parity && npm run verify:exercises && node scripts/set-version.js --check",
     "set-version": "node scripts/set-version.js",
 
     "build": "npm run build:desktop",
