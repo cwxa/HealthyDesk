@@ -13,7 +13,7 @@
 
 | 防线 | 能证明 | 在哪里 |
 |---|---|---|
-| 数值层 | 同一套评分逻辑，Python 与 TS **逐位等价** | `npm run verify:parity`（6 段） |
+| 数值层 | 同一套评分逻辑，Python 与 TS **逐位等价** | `npm run verify:parity`（7 段） |
 | 产物层 | 包里的前端**就是**本次构建的 dist；后端 exe 能起服务、`/api/health` 通 | `verify:source` / `verify:backend` / CI 冒烟 |
 | 界面层 | 五端运行时 × 三页能**渲染出应有的界面**、路由与平台判定正确 | `npm run verify:ui`（2026-09 新增） |
 

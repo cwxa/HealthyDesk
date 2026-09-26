@@ -232,7 +232,9 @@ pyinstaller neckguardian-backend.spec --noconfirm --distpath build --workpath bu
    让**原始表覆盖范围内**的归档整体重算，**范围之外的必须保留**（那些天的原始采样已被清理，
    归档是唯一副本）。
 3. **守卫**：`npm run verify:timestamps`（挂进 `verify:parity`），
-   并用变异测试证明它有牙（5/5 全部被抓住）。
+   并用变异测试证明它有牙（6/6 全部被抓住）—— 第 6 条专门守"守卫自身要先归一 CRLF"
+   （见 [DEVELOPMENT.md](DEVELOPMENT.md) 铁律 #40：本机检出 CRLF、CI 检出 LF，
+   会让"按行处理源码"的守卫**本机红、CI 绿**）。
 
 **迁移不变式**：转换前后**本地日不变** ——
 `date(strftime('%Y-%m-%dT%H:%M:%fZ', ts, 'utc'), 'localtime') == substr(ts, 1, 10)`。
