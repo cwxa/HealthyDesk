@@ -11,13 +11,13 @@
 
 | 你的系统 | 下载 | 大小 | 说明 |
 |---|---|---|---|
-| 🖥️ **Windows 10/11** | [NeckGuardian Setup 1.3.7.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian.Setup.1.3.7.exe) | 188 MB | 安装包，已内置后端，**不需要另装 Python** |
-| 🍎 **macOS（M1/M2/M3/M4）** | [NeckGuardian-1.3.7-mac-arm64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-1.3.7-mac-arm64.dmg) | 208 MB | 未签名，首次打开要**右键 →「打开」**（见下） |
-| 🍎 **macOS（Intel 芯片）** | [NeckGuardian-1.3.7-mac-x64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-1.3.7-mac-x64.dmg) | 241 MB | 同上 |
-| 📱 **Android 8.0+** | [NeckGuardian-Android-1.3.7.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.3.7/NeckGuardian-Android-1.3.7.apk) | 16.9 MB | 需允许「安装未知来源应用」 |
+| 🖥️ **Windows 10/11** | [NeckGuardian Setup 1.6.2.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian.Setup.1.6.2.exe) | 188 MB | 安装包，已内置后端，**不需要另装 Python** |
+| 🍎 **macOS（M1/M2/M3/M4）** | [NeckGuardian-1.6.2-mac-arm64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-mac-arm64.dmg) | 208 MB | 未签名，首次打开要**右键 →「打开」**（见下） |
+| 🍎 **macOS（Intel 芯片）** | [NeckGuardian-1.6.2-mac-x64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-mac-x64.dmg) | 241 MB | 同上 |
+| 📱 **Android 8.0+** | [NeckGuardian-1.6.2-android-release.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-android-release.apk) | 16.9 MB | 需允许「安装未知来源应用」 |
 | 📱 **iPhone / iPad** | — | — | 暂无可用安装包，见下方说明 |
 
-最新版本 **v1.3.7**（四端同版本）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+最新版本 **v1.6.2**（四端同版本）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
 
 <details>
 <summary>📱 为什么 iPhone 装不了？</summary>
@@ -34,7 +34,7 @@ iOS 应用必须由 Apple 开发者证书签名才能装到设备上，这个项
 
 ```bash
 sha256sum -c SHA256SUMS.txt          # macOS / Linux
-Get-FileHash .\NeckGuardian.Setup.1.3.7.exe -Algorithm SHA256   # Windows PowerShell
+Get-FileHash .\NeckGuardian.Setup.1.6.2.exe -Algorithm SHA256   # Windows PowerShell
 ```
 
 ---
@@ -203,13 +203,16 @@ v1.3.6 调整过评分公式，旧版本记录的分数是按旧公式算的，�
 | v1.3.1 | 修「一直显示正在连接后端...」的问题 |
 | v1.3.0 | 接入 DeepSeek AI 分析 |
 
-> ⚠️ **真机验证情况**：macOS 和 iOS 的包由 CI 自动构建，已通过"能构建 + 包内容完整 +
-> 内置后端能在 Mac 上跑起来"的自动检查，但**窗口界面和摄像头效果还没有人在真机上实际跑过**。
+> ⚠️ **真机验证情况**：**四端产物都还没有在真机上走完 7 条验证清单。**
+> macOS 与 iOS 的包由 CI 自动构建，已通过"能构建 + 包内容完整 + 内置后端能在 Mac 上跑起来"的自动检查，
+> 但**窗口界面和摄像头效果还没有人在真机上实际跑过**；Windows 安装包做过包级核验
+> （包内前端与本次构建逐文件一致、内置后端能起服务），**界面与摄像头同样没在真机走完整清单**；
 > Android 最后一次真机验证是 v1.3.4，此后权限相关代码有改动，旧结论已过期。
 >
 > 为避免"没验过"被"构建成功"掩盖，v1.6.0 起建立了
 > **[docs/device-matrix.md](docs/device-matrix.md) 真机验证台账**（四端各自的通过记录，
 > 目前**均为待验证**）—— 在某一端出现通过记录之前，文档里不会把它描述为"可用"。
+> 正式发布 ≠ 已验证：每次"真机门未满足却仍放行"都记录在台账 §4.3。
 >
 > macOS 包未做 Apple 签名公证（首次需右键打开）；iOS 目前没有可分发的安装包。
 
@@ -225,7 +228,7 @@ v1.3.6 调整过评分公式，旧版本记录的分数是按旧公式算的，�
 提交前本地自检：
 
 ```bash
-npm run verify:all    # 数值对拍（双端逐位等价）+ 版本号一致性
+npm run verify:all    # 数值对拍（双端逐位等价）+ 动作库 + 版本号一致性
 npm run build:web     # UI 冒烟跑的是 dist
 npm run verify:ui     # 界面渲染 / 路由 / 平台判定（无头 Chrome，零额外依赖）
 ```
