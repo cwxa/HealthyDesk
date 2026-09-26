@@ -15,22 +15,40 @@
 
 - 🔴 **迁移只增不改。** 已发布的迁移编号与内容**不得修改** —— 用户的库里已经跑过了，
   改它对老库无效、对新库生效，两端结构会分叉。新增改动一律**追加新编号**。
-- 🔴 **每个迁移必须是幂等的 SQL**（`IF NOT EXISTS` / `INSERT OR IGNORE`）。
-  原因：`executescript` 会先隐式 COMMIT，无法把整个迁移包进一个事务；若中途崩溃，
-  会留下"半升级"状态。此时**重跑必须安全**，所以幂等是硬要求。版本号在脚本
-  全部执行成功后才记录，因此重跑会重新执行同一编号的迁移。
-- **迁移只在桌面端。** 移动端的等价物是 `src/platform/localDb.ts` 的
-  `DB_VERSION` + `onupgradeneeded` 分支，两端要保持结构同构（字段名一致），
-  否则导出的数据互相导入不了（见 ROADMAP 需求 4）。
+- 🔴 **每个迁移必须是幂等的**（SQL 用 `IF NOT EXISTS` / `INSERT OR IGNORE`；
+  可调用迁移自己 `PRAGMA table_info` 判一遍再动手）。原因：`executescript` 会先隐式
+  COMMIT，无法把整个迁移包进一个事务；若中途崩溃，会留下"半升级"状态。此时**重跑必须
+  安全**，所以幂等是硬要求。版本号在脚本全部执行成功后才记录，因此重跑会重新执行同一
+  编号的迁移。⚠️ 这个窗口不只是理论：**进程在"迁移成功"与"记录版本号"之间被杀掉**就
+  会永久卡在"重跑即报错"上，而那意味着应用起不来。
+
+## 两种迁移：SQL 与可调用
+
+- `str` = 一段幂等 SQL（绝大多数情况用这个）。
+- `callable(db)` = 一个异步函数。**存在的唯一理由**：SQLite 的 DDL 无法条件化 ——
+  它**没有** `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，而"加一列"恰恰是迁移最常见
+  的形态。用 `PRAGMA table_info(<表>)` 先查再改，幂等性就由代码而不是 SQL 保证。
+  ⚠️ 可调用迁移**必须自己 commit**（`executescript` 那条路径由它隐式提交，这里不会）。
+
+**迁移只在桌面端。** 移动端的等价物是 `src/platform/localDb.ts` 的
+`DB_VERSION` + `onupgradeneeded` 分支，两端要保持结构同构（字段名一致），
+否则导出的数据互相导入不了（见 ROADMAP 需求 4）。
+⚠️ 但**加字段在移动端不需要动 `DB_VERSION`**：IndexedDB 的 object store 是无模式的，
+给已有 store 多写一个属性不需要 upgrade 事务（`DB_VERSION` 只在**加 store / 加索引**时
+才必须递增）。别为了对称而空抬版本号。
 """
 
 import logging
+from typing import Awaitable, Callable, Union
 
 import aiosqlite
 # 时间戳格式单点定义（见 services/timefmt.py）。本文件此前也自己拼了一遍。
 from services.timefmt import now_iso_ms
 
 logger = logging.getLogger("neckguardian.db.migrations")
+
+#: 一个迁移要么是幂等 SQL，要么是一个自己保证幂等的异步函数（见模块顶部说明）。
+MigrationScript = Union[str, Callable[[aiosqlite.Connection], Awaitable[None]]]
 
 
 # ---------------------------------------------------------------------------
@@ -164,12 +182,51 @@ TIMESTAMP_UTC_SQL = """
 """
 
 
-# (版本号, SQL)。顺序即执行顺序；编号必须连续递增。
-MIGRATIONS: list[tuple[int, str]] = [
+# ---------------------------------------------------------------------------
+# 迁移 5：`activity_log` 加一列 `action_scores`，存**逐动作明细**。
+#
+# 背景：在此之前一条活动记录只有一个 `avg_score`（整场一次的平均）。用户看不到
+# "哪个动作做得好、哪个没做到位" —— 而那正是他下次该练什么的信息。
+#
+# 形态：TEXT，内容是**规范 JSON 文本**（`{"v":1,"items":[{"id":…,"score":…,"grade":…}]}`），
+# 由 `services/exercise_quality.serialize_action_scores()` 单点定义。
+# 🔴 **不是独立的一张表**：导出/导入**不带 `id`**（导入是删表重建、id 重排），
+# 所以任何按 `activity_log.id` 外键关联的从表都会在导入后**关联全断**。
+# 明细必须跟着活动行一起走，因此只能是同一行上的一列。
+#
+# 老行为 NULL（这个版本之前没有这项数据）—— 与"本次一个动作都没判出来"
+# （`{"v":1,"items":[]}`）是两件事，界面文案必须分开，别把 NULL 读成 0 分。
+#
+# ⚠️ 为什么这条是**可调用迁移**而不是 SQL：SQLite 没有
+# `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，裸 `ALTER` 第二次执行会抛
+# "duplicate column name"。而迁移**必须幂等**（见模块顶部：版本号是在脚本成功之后
+# 才记的，所以"成功但没记上"之后一定会重跑）。这里先查 `PRAGMA table_info` 再决定。
+# ---------------------------------------------------------------------------
+ACTION_SCORES_COLUMN = "action_scores"
+
+
+async def _add_action_scores_column(db: aiosqlite.Connection) -> None:
+    """迁移 5 的实现（幂等：列已在就什么都不做）。"""
+    cursor = await db.execute(f"PRAGMA table_info(activity_log)")
+    rows = await cursor.fetchall()
+    # row_factory 在不同调用点可能是 Row 也可能是 tuple（与 current_version 同一处理）。
+    names = {(r["name"] if hasattr(r, "keys") else r[1]) for r in rows}
+    if ACTION_SCORES_COLUMN not in names:
+        await db.execute(f"ALTER TABLE activity_log ADD COLUMN {ACTION_SCORES_COLUMN} TEXT")
+        # executescript 会隐式提交，这条路径不会 —— 必须自己提交，
+        # 否则"列已加、版本未记"的组合会被放大（进程退出即回滚，看似无害，
+        # 但同一连接后续的读取会看到一个事务未结束的库）。
+        await db.commit()
+        logger.info("迁移 5：activity_log 新增列 %s", ACTION_SCORES_COLUMN)
+
+
+# (版本号, SQL 或可调用迁移)。顺序即执行顺序；编号必须连续递增。
+MIGRATIONS: list[tuple[int, MigrationScript]] = [
     (1, BASELINE_SQL),
     (2, DAILY_AGG_SQL),
     (3, RETENTION_SETTING_SQL),
     (4, TIMESTAMP_UTC_SQL),
+    (5, _add_action_scores_column),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -203,7 +260,11 @@ async def apply_migrations(db: aiosqlite.Connection) -> int:
     for version, script in MIGRATIONS:
         if version <= start:
             continue
-        await db.executescript(script)
+        if callable(script):
+            # 可调用迁移自己保证幂等、自己 commit（见模块顶部"两种迁移"）。
+            await script(db)
+        else:
+            await db.executescript(script)
         # 版本号在脚本**成功执行之后**才记录：中途崩溃 → 下次重跑（幂等，安全）
         await db.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",

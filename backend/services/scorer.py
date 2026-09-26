@@ -116,9 +116,13 @@ def exercise_activity(head_angle: float, shoulder_diff: float, spine_angle: floa
     )
 
 
-def _exercise_score(head_angle: float, shoulder_diff: float, spine_angle: float) -> dict:
-    activity = exercise_activity(head_angle, shoulder_diff, spine_angle)
+def exercise_score_from_activity(activity: float) -> int:
+    """由**归一化活动量**直接算运动态分数（0–100）。
 
+    抽成独立函数是为了让这条映射**只有一处**：``_exercise_score``（实时那一帧的活动量）
+    与 ``services/exercise_quality.py :: score_exercise``（单个动作的**成绩**，取该动作的
+    峰值活动量）共用它。等价于前端 ``scoringModel.ts :: scoreFromActivity``。
+    """
     if activity >= EXERCISE_ACTIVITY_FULL:
         raw = float(SCORE_MAX)
     elif activity >= EXERCISE_ACTIVITY_START:
@@ -130,7 +134,12 @@ def _exercise_score(head_angle: float, shoulder_diff: float, spine_angle: float)
 
     # 用 round_int（统一口径）而不是内置 round()：本通道是新加的，
     # 没有历史数值包袱，直接落在两端可精确复刻的口径上。
-    score = max(0, min(SCORE_MAX, round_int(max(0.0, raw))))
+    return max(0, min(SCORE_MAX, round_int(max(0.0, raw))))
+
+
+def _exercise_score(head_angle: float, shoulder_diff: float, spine_angle: float) -> dict:
+    activity = exercise_activity(head_angle, shoulder_diff, spine_angle)
+    score = exercise_score_from_activity(activity)
 
     # ⚠️ 「达标与否」以**取整后的 score** 为准，而不是原始 activity：
     # activity = 0.999 时 raw = 59.94 → 取整成 60（正好落在达标线上），

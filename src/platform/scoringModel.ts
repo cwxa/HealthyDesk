@@ -104,10 +104,17 @@ export function exerciseActivity(head: number, shoulder: number, spine: number):
   )
 }
 
-/** 运动态评分：活动量达成度。 */
-export function exerciseScore(head: number, shoulder: number, spine: number) {
-  const activity = exerciseActivity(head, shoulder, spine)
-
+/**
+ * 由**归一化活动量**直接算运动态分数（0–100）。
+ *
+ * 抽成独立函数是为了让这条映射**只有一处**：`exerciseScore`（实时那一帧的活动量）与
+ * `exerciseQuality.scoreExercise`（单个动作的**成绩**，取该动作的峰值活动量）共用它。
+ * 两处各写一遍必然漂移，而「实时显示 87 分、收尾却说幅度不足」正是本项目反复
+ * 吃过亏的那类矛盾（见上面「运动态通道」的说明）。
+ *
+ * 等价于后端 `services/scorer.py :: exercise_score_from_activity`。
+ */
+export function scoreFromActivity(activity: number): number {
   let raw: number
   if (activity >= EXERCISE_ACTIVITY_FULL) {
     raw = SCORE_MAX
@@ -119,8 +126,13 @@ export function exerciseScore(head: number, shoulder: number, spine: number) {
   } else {
     raw = EXERCISE_SCORE_BASE * (activity / EXERCISE_ACTIVITY_START)
   }
+  return Math.max(0, Math.min(SCORE_MAX, pyRound(Math.max(0, raw))))
+}
 
-  const score = Math.max(0, Math.min(SCORE_MAX, pyRound(Math.max(0, raw))))
+/** 运动态评分：活动量达成度。 */
+export function exerciseScore(head: number, shoulder: number, spine: number) {
+  const activity = exerciseActivity(head, shoulder, spine)
+  const score = scoreFromActivity(activity)
 
   // ⚠️ 「达标与否」以**取整后的 score** 为准（与后端同一口径）：
   // activity = 0.999 时 raw = 59.94 → 取整成 60（正好落在达标线上），

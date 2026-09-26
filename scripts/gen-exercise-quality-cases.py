@@ -23,10 +23,12 @@ BACKEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backen
 sys.path.insert(0, BACKEND)
 
 from services.exercise_quality import (  # noqa: E402
+    ACTION_SCORES_VERSION,
     ACTIVITY_IDLE_MAX,
     ACTIVITY_ONSET,
     CYCLE_TROUGH_RATIO,
     DEFAULT_MIN_CYCLES,
+    EXERCISE_PASS_SCORE,
     GRADE_COMPLETED,
     GRADE_IDLE,
     GRADE_INSUFFICIENT,
@@ -36,10 +38,16 @@ from services.exercise_quality import (  # noqa: E402
     HINT_HOLD,
     HINT_IDLE,
     HOLD_TARGET_RATIO,
+    IDLE_SCORE,
     KIND_CYCLIC,
     KIND_HOLD,
     MAX_FRAME_GAP_MS,
+    SCORE_WEIGHT_AMPLITUDE,
+    SCORE_WEIGHT_EFFORT,
+    UNMET_MAX_SCORE,
     judge_exercise,
+    score_exercise,
+    serialize_action_scores,
 )
 from services.scorer import EXERCISE_ACTIVITY_START  # noqa: E402
 
@@ -69,12 +77,17 @@ def build_cases():
     cases = []
 
     def add(name, frames, spec, note=""):
+        verdict = judge_exercise(frames, spec)
         cases.append({
             "name": name,
             "note": note,
             "frames": frames,
             "spec": spec,
-            "expected": judge_exercise(frames, spec),
+            "expected": verdict,
+            # 动作分与判定**同源**：同一份 verdict、同一个 spec 算出来。
+            # 每条用例因此同时覆盖「判定」与「成绩」两层 —— 只覆盖判定会漏掉
+            # 那种"结论对、分数算错"的改动。
+            "expected_score": score_exercise(verdict, spec),
         })
 
     hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0}
@@ -161,6 +174,148 @@ def build_cases():
     return cases
 
 
+def build_score_cases():
+    """动作分（单动作成绩）的边界用例。
+
+    为什么**直接构造 verdict** 而不是铺帧序列：这一层测的是"给定判定结果，分数是多少"，
+    而"幅度恰好等于达标线 1.0""保持比例恰好 0.6"这类点，在帧序列上要靠数区间长度
+    凑出来（见上面 build_cases 里那些注释），既脆又难读。上游判定本身已由帧序列用例覆盖，
+    这里补的是分数层自己的边界。
+
+    守卫会把每条 ``expected_score`` 与前端 `scoreExercise()` 的结果逐条比对，
+    并额外断言那条核心不变量（见 `verify-exercise-quality.mjs` 的 h 段）。
+    """
+    hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0}
+    cyclic3 = {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 3}
+
+    def verdict(grade, peak, hold_ratio=0.0, cycles=0):
+        return {
+            "grade": grade,
+            "hint": "",
+            "peak_activity": peak,
+            "held_ms": 0,
+            "hold_ratio": hold_ratio,
+            "cycles": cycles,
+        }
+
+    cases = []
+
+    def add(name, grade, peak, spec, hold_ratio=0.0, cycles=0, note=""):
+        v = verdict(grade, peak, hold_ratio, cycles)
+        cases.append({
+            "name": name,
+            "note": note,
+            "verdict": v,
+            "spec": spec,
+            "expected_score": score_exercise(v, spec),
+        })
+
+    # ---- 达标线两侧：分数与判定必须同向（这条不变量是本函数的全部意义）----
+    add(
+        "压线·幅度恰好达标 + 保持恰好达标 → 恰好是达标分",
+        GRADE_COMPLETED, EXERCISE_ACTIVITY_START, hold,
+        hold_ratio=HOLD_TARGET_RATIO,
+        note="0.5×60 + 0.5×100 = 80，恰好压在线上而不是 79 或 81",
+    )
+    add("线上·幅度 1.5 倍阈值", GRADE_COMPLETED, 1.5, hold, hold_ratio=HOLD_TARGET_RATIO)
+    add("线上·幅度满分 + 保持满分 → 100", GRADE_COMPLETED, 4.0, hold, hold_ratio=1.0)
+
+    # ---- 未达标必须低于达标分，哪怕幅度满分 ----
+    # 幅度满分但一点没保持：按公式 50 分，本来就在线下，钳位不介入。
+    add("线下·幅度满分但保持 0", GRADE_INSUFFICIENT, 4.0, hold, hold_ratio=0.0)
+    # 幅度满分、保持 0.59（只差一点点）：按公式约 99 分 → **必须**被钳到线下，
+    # 否则界面会一边说「保持住，别急着放下」一边给 99 分。
+    add(
+        "线下·幅度满分 + 保持 0.59（只差一步）→ 钳位生效",
+        GRADE_INSUFFICIENT, 4.0, hold, hold_ratio=round(HOLD_TARGET_RATIO - 0.01, 2),
+        note="这条专门证明「未达标 ⇒ 不到达标分」是靠钳位保证的",
+    )
+    add("线下·保持 0.5", GRADE_INSUFFICIENT, 4.0, hold, hold_ratio=0.5)
+    add("线下·幅度不足（未达起点）", GRADE_INSUFFICIENT, 0.5, hold)
+    add("线下·幅度只有 idle 线附近但不判 idle", GRADE_INSUFFICIENT, ACTIVITY_IDLE_MAX, hold)
+
+    # ---- 没动就是 0 ----
+    add("没动·idle → 0 分", GRADE_IDLE, ACTIVITY_IDLE_MAX, hold)
+    add("没动·idle 但峰值很高（判定与分数必须同源，不看峰值）", GRADE_IDLE, 4.0, hold)
+
+    # ---- 往复类：次数替代保持比例 ----
+    add(
+        "往复·压线幅度 + 次数恰好达标 → 恰好是达标分",
+        GRADE_COMPLETED, EXERCISE_ACTIVITY_START, cyclic3, hold_ratio=0.9, cycles=3,
+        note="往复类不看保持比例：hold_ratio 给 0.9 也不影响",
+    )
+    add("往复·次数 2/3 → 钳位生效", GRADE_INSUFFICIENT, 4.0, cyclic3, hold_ratio=0.9, cycles=2)
+    add("往复·次数超额", GRADE_COMPLETED, 4.0, cyclic3, hold_ratio=0.9, cycles=9)
+
+    # ---- 防御性分支：不要求计次的往复配置 ----
+    # 动作库里往复类都是 3，这条配置实际不可达；但"不可达"不是不测的理由：
+    # 若退回 `cycles / max(1, min_cycles)`，判定为完成（cycles >= 0 恒真）却只有 50 分，
+    # 核心不变量当场被打破 —— 这条用例就是钉住它的。
+    add(
+        "往复·min_cycles=0（不要求计次）→ 完成即达标，不因次数扣分",
+        GRADE_COMPLETED, 4.0, {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 0}, cycles=0,
+    )
+
+    return cases
+
+
+def build_action_scores_cases():
+    """逐动作明细的**规范文本**用例：两端必须给出逐字节相同的字符串。
+
+    为什么值得单独立一组用例：这一列在导出/导入里是**不透明文本**，导入端**不重新
+    序列化**（那样"导出→导入→再导出是同一个文件"就不再由构造保证）。于是"两端写出来
+    的字节一样"就成了一条**只在这里**能被证明的硬约束 —— 一旦漂开，两端导出的文件
+    互换后不再相等，而这个差异在界面上完全看不出来。
+
+    挑的用例都是"两种语言真会给出不同答案"的地方，不是随便凑数：
+
+    - **非 ASCII 的 id**：Python 的 `json.dumps` **默认** `ensure_ascii=True`，
+      会把中文转成 `\\u9888\\u90e8…`，而 JS 的 `JSON.stringify` **不转义**非 ASCII。
+      生产里的 id 都是 ASCII slug，所以这个坑只有在"有人给动作库加了个中文 id /
+      有人把 id 改成显示名"时才会炸 —— 那时它会先在这里红，而不是在用户互换文件时。
+    - **引号与反斜杠**：转义规则两端不同就抓得到。
+    - **空列 / 边界分（0 与 100）**：`{"v":1,"items":[]}` 与 0 分是两件事，形态必须钉住。
+    - **一串完整明细**：钉住项**顺序**不被重排（Python 的 dict 与 JS 的对象都保证插入序，
+      但"保证"是要有证据的）。
+
+    返回列表里每项是 `{"name", "items", "expected", "note"}`。
+    """
+    cases = []
+
+    def add(name, items, note=""):
+        cases.append({
+            "name": name,
+            "items": items,
+            "expected": serialize_action_scores(items),
+            "note": note,
+        })
+
+    add("空明细（本次一个动作都没判出来）", [],
+        "与「老记录该列为 NULL」不同 —— 这是「判过了，但一个都没判出来」")
+    add("单动作·完成", [{"id": "neck-flex-left", "score": 84, "grade": GRADE_COMPLETED}])
+    add("单动作·没动（0 分）", [{"id": "sit-still", "score": IDLE_SCORE, "grade": GRADE_IDLE}],
+        "0 分是一个**真结论**，不是缺失")
+    add("单动作·满分", [{"id": "neck-flex-right", "score": 100, "grade": GRADE_COMPLETED}])
+    add("混合·完成与未到位", [
+        {"id": "neck-flex-left", "score": 84, "grade": GRADE_COMPLETED},
+        {"id": "shoulder-circles", "score": UNMET_MAX_SCORE, "grade": GRADE_INSUFFICIENT},
+    ], "未达标的分数上限 79 与达标线 80 相邻 —— 形态里必须看得出两者不同")
+    add("非 ASCII 的 id（钉住 ensure_ascii=False）", [
+        {"id": "颈部左侧屈", "score": 84, "grade": GRADE_COMPLETED},
+    ], "Python 默认 ensure_ascii=True 会转义成 \\u9888…，JS 不转义 —— 两端会写出不同的字节")
+    add("含引号与反斜杠的 id（钉住转义规则）", [
+        {"id": 'a"b\\c', "score": 90, "grade": GRADE_COMPLETED},
+    ])
+    add("一串完整明细（钉住项顺序）", [
+        {"id": "neck-flex-left", "score": 92, "grade": GRADE_COMPLETED},
+        {"id": "neck-flex-right", "score": 79, "grade": GRADE_INSUFFICIENT},
+        {"id": "shoulder-circles", "score": 80, "grade": GRADE_COMPLETED},
+        {"id": "chin-tuck", "score": 0, "grade": GRADE_IDLE},
+    ], "顺序即动作在库里的顺序，不许被重排（重排会让两端的 diff 无意义）")
+
+    return cases
+
+
 def load_samples():
     """读取样本文件 —— 与守卫脚本读的是同一批文件（防载荷与文件漂移）。"""
     out = []
@@ -183,6 +338,7 @@ def load_samples():
             "frames": raw["frames"],
             "spec": raw["spec"],
             "expected": verdict,
+            "expected_score": score_exercise(verdict, raw["spec"]),
         })
     return out
 
@@ -212,11 +368,23 @@ def main():
             "HINT_COMPLETED": HINT_COMPLETED,
             # 与运动态评分共用的那个量：守卫要断言它与 S1 的起点是同一个值
             "EXERCISE_ACTIVITY_START": EXERCISE_ACTIVITY_START,
+            # 动作分（单动作成绩）—— 分数与判定的绑定关系全靠这几个值
+            "SCORE_WEIGHT_AMPLITUDE": SCORE_WEIGHT_AMPLITUDE,
+            "SCORE_WEIGHT_EFFORT": SCORE_WEIGHT_EFFORT,
+            "EXERCISE_PASS_SCORE": EXERCISE_PASS_SCORE,
+            "UNMET_MAX_SCORE": UNMET_MAX_SCORE,
+            "IDLE_SCORE": IDLE_SCORE,
+            # 逐动作明细文本的格式版本
+            "ACTION_SCORES_VERSION": ACTION_SCORES_VERSION,
         },
         # 样本文件清单（守卫据此按同一顺序回放）
         "sample_files": SAMPLE_FILES,
         "samples": samples,
         "cases": build_cases(),
+        # 动作分（单动作成绩）边界：直接构造 verdict，打"恰好压线"这类点
+        "score_cases": build_score_cases(),
+        # 逐动作明细的**规范文本**：两端必须逐字节相同（导出/导入只搬运不重算）
+        "action_scores_cases": build_action_scores_cases(),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 

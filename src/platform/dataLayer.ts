@@ -72,6 +72,11 @@ export const data = {
     exercise_count: number
     duration_sec: number
     avg_score: number
+    /**
+     * 逐动作明细（规范 JSON 文本）。可选：不带 = 这条记录没有明细
+     * （与桌面端 `action_scores` 列的 NULL 同义），历史记录里显示为「无明细」。
+     */
+    action_scores?: string | null
   }): Promise<void> {
     if (hasLocalBackend()) {
       await http('/api/activity/record', { method: 'POST', body: JSON.stringify(rec) })

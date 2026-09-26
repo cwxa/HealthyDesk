@@ -52,6 +52,13 @@ export interface ActivityRecord {
   exercise_count: number
   duration_sec: number
   avg_score: number
+  /**
+   * 逐动作明细：**规范 JSON 文本**（由 `exerciseQuality.serializeActionScores()` 产生）。
+   *
+   * `null` / `undefined` = 没有这份数据（老记录，或老客户端写入的行）；`"{"v":1,"items":[]}"`
+   * = 这次一个动作都没判出来。两者**不是一回事**，显示层要用 `parseActionScores()` 区分。
+   */
+  action_scores?: string | null
 }
 
 export interface Settings {

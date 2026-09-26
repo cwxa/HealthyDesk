@@ -8,7 +8,8 @@
  *   settings        -> 键值对（reminder_interval / voice_enabled / ...）
  *   posture_score   -> 姿态采样记录 { timestamp, head_angle, shoulder_diff, spine_angle, score }
  *   usage_record    -> 每日使用/休息统计 { date, usage_minutes, break_count }
- *   activity_log    -> 活动记录 { timestamp, activity_type, exercise_count, duration_sec, avg_score }
+ *   activity_log    -> 活动记录 { timestamp, activity_type, exercise_count, duration_sec,
+ *                                avg_score, action_scores }
  *   posture_daily   -> 每日归档聚合（精确量，见 dailyAgg.ts；v2 新增）
  *
  * 对外暴露的方法签名刻意与后端 REST 接口一一对应，
@@ -56,6 +57,15 @@ export interface ActivityLogRecord {
   exercise_count: number
   duration_sec: number
   avg_score: number
+  /**
+   * 逐动作明细（规范 JSON 文本，见 `exerciseQuality.serializeActionScores`）。
+   *
+   * ⚠️ 加这个字段**不需要**动 `DB_VERSION`：IndexedDB 的 object store 是无模式的，
+   * 给已有 store 多写一个属性不涉及 schema。`DB_VERSION` 只在**加 store / 加索引**时
+   * 才必须递增 —— 空抬版本号只会白白多跑一次 upgrade 事务。
+   * 与桌面端「只改 `db/migrations.py`」是同一件事的两种形态，字段名必须一致。
+   */
+  action_scores?: string | null
 }
 
 /** 每日归档行。`DayAggregate` 的字段与 `posture_daily` 的列一一对应（只存精确量）。 */

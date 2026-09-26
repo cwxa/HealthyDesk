@@ -11,14 +11,35 @@
  * 与移动端（`src/platform/exerciseQuality.ts`）。**两端给出不同结论**是这一层最贵的 bug ——
  * 手机上说你完成了、电脑上说你没做，用户不知道该信谁；而 S10 还要拿这个结论当活动成绩。
  *
- * 校验五层：
- *   a) 常量：阈值 / 结论 / 引导文案两端逐项相等（改一端不改另一端会红）
+ * 校验九层：
+ *   a) 常量：阈值 / 结论 / 引导文案 / **动作分权重** / **明细文本格式版本** 两端逐项相等
+ *      （改一端不改另一端会红）
  *   b) 样本文件一致性：载荷里的 frames/spec 必须与 scripts/samples/*.json 逐字段相同
  *      （防止"改了文件忘了重新生成"这种静默漂移）
- *   c) 用例：30 条（含边界、数据中断、滞回计数、取整平局点）六个字段逐条相等
+ *   c) 判定用例（29 条，含边界、数据中断、滞回计数、取整平局点）六个字段逐条相等
  *   d) 语义硬断言：三段样本三种结论、负样本必须失败、中断不计入、滞回不重复计数、
  *      hint 与 grade 一一对应、onset 与 S1 同源
  *   e) 取整灵敏度自检（守卫的守卫）
+ *   f) **动作分**：同一批用例（29）+ 3 段样本 + 14 条边界合成用例，两端逐条相等。
+ *      动作分与判定**同源**（同一份 verdict、同一个 spec），所以两条链上的任何一处漂移都红。
+ *   g) **动作分的核心不变量**：`分数 >= 达标分` ⟺ `判定为「完成」`，在**真实判定**铺出的
+ *      网格（幅度 × 保持帧数、幅度 × 循环数）上成立 —— 证的是"端到端同向"，
+ *      不是"公式自洽"；另断言分数对幅度单调不减、恒为 0–100 的整数。
+ *   h) **逐动作明细的规范文本**：8 条用例上 `serializeActionScores()` 与 Python 写出的
+ *      字符串**逐字节**相等。这一列在导出/导入里是不透明文本（不作重新序列化），
+ *      所以"两端字节一样"是导出文件可互换的唯一保证 —— 解析后比较会放过键序、空白、
+ *      Unicode 转义这三类真实差异（而它们正是两门语言最容易各错各的地方）。
+ *   i) **明细解析端**：Python 写出的文本必须能被 TS 的 `parseActionScores()` 还原（跨语言往返），
+ *      且 13 类坏值（老记录的 NULL、手改过的文件、将来版本的文本）一律返回 `null`
+ *      —— 不许丢掉坏项留下半份，那会被读成"本次只判了这几个动作"。
+ *
+ * ⚠️ **已知未覆盖（写清楚，免得被当成测过了）**：动作分那一层的「取整平局」在当前常量下
+ * **不可达**，因此"把 `pyRound` 换成 `Math.round`"这类改动在动作分层抓不到
+ * （判定那一层抓得到，见 §e）。推导：峰值活动量经 `pyRound1` 后必是 0.1 的整数倍
+ * ⇒ 幅度分是 6 的整数倍 ⇒ `0.5 × 幅度分` 必为整数；到位分量 `0.5 × 100 × ratio` 的取值是
+ * {0, 8.333, 16.667, 25, 33.333, 41.667, 50}，永不为 x.5。两者之和不可能落在平局点上。
+ * 这不是"暂时没测到"，是这一层**没有**平局点。若将来改权重 / 改达标线使平局可达，
+ * 必须回来补一条能区分两种取整的用例，否则 §e 那条自检也保不住这一层。
  */
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -242,6 +263,65 @@ async function main() {
   console.log(`\n完成度判定等价性：${pass} 通过 / ${mismatch} 失败（共 ${payload.cases.length} 条）`)
   if (mismatch > 0) failed = true
 
+  // ---- c2) 动作分逐条比对 ----
+  // 与 c) 用**同一批**用例、**同一个** verdict：动作分是判定的下游，
+  // 两层一起对拍才能同时抓住"判定漂移"与"判定没漂但分数算错了"。
+  let scorePass = 0
+  let scoreMismatch = 0
+  for (const c of payload.cases) {
+    const gotVerdict = eq.judgeExercise(c.frames, c.spec)
+    const gotScore = eq.scoreExercise(gotVerdict, c.spec)
+    if (gotScore === c.expected_score) {
+      scorePass++
+    } else {
+      scoreMismatch++
+      if (scoreMismatch <= 8) {
+        console.error(`✗ 动作分不一致「${c.name}」`)
+        console.error(`    Python: ${c.expected_score}`)
+        console.error(`    TS:     ${gotScore}    verdict=${JSON.stringify(gotVerdict)}`)
+      }
+    }
+  }
+  for (const s of payload.samples) {
+    const gotScore = eq.scoreExercise(eq.judgeExercise(s.frames, s.spec), s.spec)
+    if (gotScore !== s.expected_score) {
+      scoreMismatch++
+      console.error(`✗ 样本动作分不一致「${s.name}」Python=${s.expected_score} TS=${gotScore}`)
+    } else {
+      scorePass++
+    }
+  }
+  const scoreTotal = payload.cases.length + payload.samples.length
+  console.log(`动作分等价性（帧用例 + 样本）：${scorePass} 通过 / ${scoreMismatch} 失败（共 ${scoreTotal} 条）`)
+  if (scoreMismatch > 0) failed = true
+
+  // ---- c3) 逐动作明细的**规范文本**：逐字节一致 ----
+  // 为什么必须逐**字节**而不是"解析后相等"：这一列在导出/导入里是**不透明文本**
+  // （字段类型 str，导入端不重新序列化），所以"两端写出来的字节一样"是导出文件
+  // 可互换的**唯一**保证。解析后比较会放过键序、空白、Unicode 转义这三类真实差异 ——
+  // 而它们恰好是两门语言最容易各错各的地方（Python 的 json.dumps 默认
+  // `ensure_ascii=True`，JS 的 JSON.stringify 不转义非 ASCII）。
+  // 期望值取自**载荷里 Python 生成的那串**，不是拿 TS 自己的输出比（那是自证）。
+  let textPass = 0
+  let textMismatch = 0
+  for (const c of payload.action_scores_cases) {
+    const got = eq.serializeActionScores(c.items)
+    if (got === c.expected) {
+      textPass++
+    } else {
+      textMismatch++
+      if (textMismatch <= 5) {
+        console.error(`✗ 明细规范文本不一致「${c.name}」`)
+        console.error(`    Python: ${c.expected}`)
+        console.error(`    TS:     ${got}`)
+      }
+    }
+  }
+  console.log(
+    `逐动作明细规范文本：${textPass} 通过 / ${textMismatch} 失败（共 ${payload.action_scores_cases.length} 条，逐字节比对）`,
+  )
+  if (textMismatch > 0) failed = true
+
   const byName = (n) => payload.cases.find((x) => x.name === n)
   const gotOf = (n) => {
     const c = byName(n)
@@ -361,6 +441,171 @@ async function main() {
     console.log(`✓ 有效活动起点与 S1 同源（ACTIVITY_ONSET = EXERCISE_ACTIVITY_START = ${eq.ACTIVITY_ONSET}）`)
   }
 
+  // d9) 动作分边界用例：**直接构造 verdict**（帧序列上摆不出"幅度恰好压线 / 保持恰好 0.6"），
+  //     两端逐条相等。与 c2) 的分工：c2 证"真实链路上两端一致"，d9 证"边界点上一致"。
+  const edgeCases = payload.score_cases ?? []
+  let edgeFail = 0
+  for (const c of edgeCases) {
+    const gotScore = eq.scoreExercise(c.verdict, c.spec)
+    if (gotScore !== c.expected_score) {
+      console.error(`✗ 动作分边界不一致「${c.name}」Python=${c.expected_score} TS=${gotScore}`)
+      edgeFail++
+    }
+  }
+  if (edgeCases.length === 0) {
+    console.error('✗ 载荷里没有 score_cases —— 动作分的边界点一个都没被覆盖')
+    hardFail++
+  } else if (edgeFail > 0) {
+    hardFail++
+  } else {
+    console.log(`✓ 动作分边界用例两端一致（${edgeCases.length} 条，含"恰好压线"与"钳位生效"）`)
+  }
+
+  // d10) 🔴 核心不变量：`分数 >= 达标分` ⟺ `判定为「完成」`
+  //      这是动作分这个功能的**全部意义** —— 分数与判定必须同向。
+  //      反例长什么样：幅度满分但没保持住，用户看到 99 分，界面却说「保持住，别急着放下」。
+  //      用**真实判定**铺网格（不是构造 verdict）：要证的是"端到端成立"，
+  //      而不是"公式自己跟自己自洽"。
+  const holdSpec = { kind: eq.KIND_HOLD, duration_ms: 10000, min_cycles: 0 }
+  const cycSpec = { kind: eq.KIND_CYCLIC, duration_ms: 3000, min_cycles: 3 }
+  const holdFrames = (peakHead, heldFrames) => {
+    const out = []
+    for (let i = 0; i < 21; i++) {
+      out.push({ t: i * 500, head_angle: i < heldFrames ? peakHead : 0, shoulder_diff: 0, spine_angle: 0 })
+    }
+    return out
+  }
+  const cycFrames = (peakHead, cycles) => {
+    const out = []
+    let t = 0
+    for (let i = 0; i < cycles; i++) {
+      out.push({ t, head_angle: peakHead, shoulder_diff: 0, spine_angle: 0 })
+      t += 500
+      out.push({ t, head_angle: 0, shoulder_diff: 0, spine_angle: 0 })
+      t += 500
+    }
+    return out
+  }
+  const invBad = []
+  let invPoints = 0
+  const checkInvariant = (label, frames, spec) => {
+    const v = eq.judgeExercise(frames, spec)
+    const sc = eq.scoreExercise(v, spec)
+    invPoints++
+    if ((sc >= eq.EXERCISE_PASS_SCORE) !== (v.grade === eq.GRADE_COMPLETED)) {
+      invBad.push(`${label}: grade=${v.grade} score=${sc}（达标分 ${eq.EXERCISE_PASS_SCORE}）`)
+    }
+    if (!Number.isInteger(sc) || sc < 0 || sc > 100) {
+      invBad.push(`${label}: 分数越界或非整数 score=${sc}`)
+    }
+  }
+  for (const peak of [1.0, 2.5, 5.0, 7.5, 10.0, 20.0]) {
+    for (let held = 0; held <= 21; held++) {
+      checkInvariant(`保持·幅度${peak}·保持${held}帧`, holdFrames(peak, held), holdSpec)
+    }
+  }
+  for (const peak of [5.0, 10.0, 20.0]) {
+    for (let cys = 0; cys <= 5; cys++) {
+      checkInvariant(`往复·幅度${peak}·${cys}次`, cycFrames(peak, cys), cycSpec)
+    }
+  }
+  if (invBad.length > 0) {
+    console.error(`✗ 核心不变量「分数 >= ${eq.EXERCISE_PASS_SCORE} ⟺ 判「完成」」被打破 ${invBad.length} 处（共 ${invPoints} 个网格点）：`)
+    for (const x of invBad.slice(0, 6)) console.error(`    ${x}`)
+    hardFail++
+  } else {
+    console.log(`✓ 核心不变量成立：${invPoints} 个网格点上，分数 >= ${eq.EXERCISE_PASS_SCORE} ⟺ 判定为「完成」`)
+  }
+
+  // d11) 单调性：同一个动作，幅度越大分数不得下降（钳位只压未达标者，不反转方向）
+  const monoBad = []
+  for (const held of [0, 3, 6, 12, 21]) {
+    let prev = -1
+    for (const peak of [0.2, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0]) {
+      const sc = eq.scoreExercise(eq.judgeExercise(holdFrames(peak, held), holdSpec), holdSpec)
+      if (sc < prev) monoBad.push(`保持 ${held} 帧：幅度升到 ${peak} 时分数 ${prev} → ${sc}`)
+      prev = sc
+    }
+  }
+  if (monoBad.length > 0) {
+    console.error(`✗ 分数对幅度单调性被打破 ${monoBad.length} 处：`)
+    for (const x of monoBad.slice(0, 5)) console.error(`    ${x}`)
+    hardFail++
+  } else {
+    console.log('✓ 分数对幅度单调不减（5 组保持帧数 × 7 档幅度）')
+  }
+
+  // d12) 没动就是 `IDLE_SCORE`：判 idle 时不许给出个位数的"你动了但很少"。
+  // 🔴 期望值取**载荷里 Python 的那个值**，不能取 `eq.IDLE_SCORE` ——
+  //    后者是"函数拿它算、断言又拿它比"，恒真，等于没有断言。
+  //    这条写法上的坑是变异测试 M3（`IDLE_SCORE 0 → 5`）抓出来的：原写法照样绿。
+  const idleOf = (peak) =>
+    eq.scoreExercise(
+      { grade: eq.GRADE_IDLE, hint: '', peak_activity: peak, held_ms: 0, hold_ratio: 0, cycles: 0 },
+      holdSpec,
+    )
+  const idleLow = idleOf(eq.ACTIVITY_IDLE_MAX)
+  const idleHigh = idleOf(20.0)
+  const idleWant = payload.constants.IDLE_SCORE
+  if (idleLow !== idleWant || idleHigh !== idleWant) {
+    console.error(
+      `✗ 判 idle（没动）时应给 ${idleWant} 分，实际 峰值${eq.ACTIVITY_IDLE_MAX}→${idleLow}、峰值 20→${idleHigh} —— 峰值不该影响它`,
+    )
+    hardFail++
+  } else {
+    console.log(`✓ 没动就是 ${idleWant} 分（不看峰值，不编造"动了但很少"）`)
+  }
+
+  // d13) 解析端必须**认得**写入端写出的东西，且对坏值一律返回 `null`（不猜、不折中）。
+  //      两件事都只能在这里验：
+  //        - 往返：`parseActionScores(Python 生成的文本)` 必须还原出同一份明细。
+  //          注意这是**跨语言**往返（Python 写、TS 读），比"自己写自己读"强得多。
+  //        - 拒坏值：显示端拿到的可能是老记录（NULL）、手改过的文件、将来版本的文本。
+  //          返回 `null` = "读不出来"，界面显示 `--`；**不许**丢掉坏项留下半份，
+  //          那会被读成"本次只判了这几个动作" —— 又是"展示了不能证明的数字"。
+  const rtBad = []
+  for (const c of payload.action_scores_cases) {
+    const parsed = eq.parseActionScores(c.expected)
+    if (parsed === null || parsed.length !== c.items.length) {
+      rtBad.push(`「${c.name}」往返条数不符：期望 ${c.items.length}，得 ${parsed === null ? 'null' : parsed.length}`)
+      continue
+    }
+    for (let i = 0; i < parsed.length; i++) {
+      const a = parsed[i]
+      const b = c.items[i]
+      if (a.id !== b.id || a.score !== b.score || a.grade !== b.grade) {
+        rtBad.push(`「${c.name}」第 ${i} 项不符：${JSON.stringify(a)} ≠ ${JSON.stringify(b)}`)
+      }
+    }
+  }
+  const badInputs = [
+    ['老记录（NULL）', null],
+    ['老记录（undefined）', undefined],
+    ['空串', ''],
+    ['不是 JSON', 'neckguardian'],
+    ['是数组不是对象', '[1,2,3]'],
+    ['版本不认识', '{"v":2,"items":[]}'],
+    ['版本缺失', '{"items":[]}'],
+    ['items 不是数组', '{"v":1,"items":{}}'],
+    ['条目不是对象', '{"v":1,"items":[42]}'],
+    ['条目缺 grade', '{"v":1,"items":[{"id":"a","score":80}]}'],
+    ['grade 不是已知结论', '{"v":1,"items":[{"id":"a","score":80,"grade":"great"}]}'],
+    ['score 是字符串（不做隐式转换）', '{"v":1,"items":[{"id":"a","score":"80","grade":"completed"}]}'],
+    ['id 为空串', '{"v":1,"items":[{"id":"","score":80,"grade":"completed"}]}'],
+  ]
+  for (const [label, input] of badInputs) {
+    if (eq.parseActionScores(input) !== null) {
+      rtBad.push(`坏值未被拒绝：${label} → 应返回 null`)
+    }
+  }
+  if (rtBad.length > 0) {
+    console.error(`✗ 明细解析端不合格 ${rtBad.length} 处：`)
+    for (const x of rtBad.slice(0, 6)) console.error(`    ${x}`)
+    hardFail++
+  } else {
+    console.log(`✓ 明细解析：跨语言往返 ${payload.action_scores_cases.length} 条全部还原、${badInputs.length} 类坏值全部拒绝`)
+  }
+
   if (hardFail > 0) failed = true
 
   // ---- e) 取整灵敏度自检（守卫的守卫）----
@@ -387,7 +632,7 @@ async function main() {
   }
 
   if (failed) process.exit(1)
-  console.log('✓ 前端 TS 与 Python 后端的动作完成度判定完全一致')
+  console.log('✓ 前端 TS 与 Python 后端的动作完成度判定、动作分与逐动作明细完全一致')
 }
 
 main()
