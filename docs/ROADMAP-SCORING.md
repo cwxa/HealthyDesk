@@ -108,7 +108,7 @@
 | 4 | 动作与问题**无关联**：不管你是头偏还是肩不平，都是同一套固定顺序 | `ExercisePanel.tsx:18-26` 无维度标签 |
 | 5 | `posture_score` 无 `issues` / `mode` 字段 → 事后无法区分"静息坐姿"与"活动中的姿态" | `database.py:29-36`、`localDb.ts:57-60` |
 | 6 | 两条链路**都没有 schema 迁移机制** → 加字段必须先建迁移能力 | `database.py:21` 仅 `CREATE TABLE IF NOT EXISTS`；`localDb.ts:18` `DB_VERSION=1` 且 `onupgradeneeded` 只有建表分支 |
-| 7 | 动作总时长在**三处各算一遍**（`NeckActivity.tsx:357`、`:425`、`ExercisePanel`）→ 易漂移 | 固定值尚可，改自适应时长后必错 |
+| 7 | ~~动作总时长在**三处各算一遍**~~ ✅ 已解决（S7）：此前 `NeckActivity.tsx` 两处 + 组件各算一遍 → 易漂移 | 已收敛为 `src/data/exercises.ts` 的 `TOTAL_DURATION_SEC` **单点定义**；守卫断言「数据文件之外不得再出现 `s + e.duration`」 |
 
 ### 0.5 顺带修正一个既有表述
 
@@ -372,24 +372,71 @@ Dashboard 的「今日平均评分」是采样平均，**它掩盖了分布** �
 
 ## 四、批次 C：动作库数据化与自适应（P1）
 
-### S7 · 动作库数据化 + 与问题维度映射
+> 进度：**S7 ✅ 已完成**（动作库收口到单点数据源 + 引导数据化，行为零变化）→ 下一步 **S8**（扩库／时长编排／补脊柱维度缺口，见 §六）。
+> 批次标题不变：S8 / S10 仍属"数据化与自适应"。
+
+### S7 · 动作库数据化 + 与问题维度映射 ✅ 已完成
 
 **【现状证据】** `ExercisePanel.tsx:18-26`：7 个动作硬编码在组件里，
 字段是 `{name, duration, icon, hint, color}` —— **没有"针对什么问题"这个维度**。
 与 `scorer` 产出的 issues（头部/肩部/脊柱三档）完全脱节。
 
+> **实施记录**（做的过程中暴露的问题，比原设计多）
+>
+> 1. **动作库搬到 `src/data/exercises.ts`**：字段从 5 个扩到 15 个 ——
+>    `{id, name, shortName, target, intensity, duration, durationRange,
+>    contraindications, hint, keyPoints, icon, color, kind, min_cycles, measurable, guide}`。
+>    🔴 文档点名"容易漏"的 S2 三字段（`kind` / `min_cycles` / `measurable`）已一并搬过去，
+>    并进了逐项快照。
+> 2. **引导动画数据化**：`ExerciseGuide.tsx` 里两个 `switch(index)`（7 个 `case` 的头部运动 +
+>    7 个 `case` 的方向箭头）改成「**数据选参数、组件会画图**」——
+>    头部运动用无量纲关键帧（单位 `headR * 0.6`），方向指示用 3 个命名图元
+>    （`straight` / `arc` / `ring`）。加动作不再需要改组件。
+> 3. 🔴 **`target` 维度覆盖真的不够（不是映射偷懒）**：按物理含义映射后是
+>    **head 4 / shoulder 2 / spine 1**，达不到本节写的「每维度 ≥ 2」。
+>    把「扩胸运动」挪去脊柱只会把缺口从脊柱搬到肩带 —— 现有 7 个动作本来就缺脊柱维度。
+>    所以**不为凑数改映射**（那是"编造可验证性"），改由守卫对不足 2 个的维度
+>    **显式告警**、并把「≥ 2」交给 S8（扩动作库本来就在 S8 范围内）。
+> 4. 🔴 **`.gitignore` 的裸 `data/` 把 `src/data/` 一起忽略了**：新数据模块在
+>    `git status` 里**完全不出现**，本机跑守卫全绿（文件在磁盘上）、CI 却会因为仓库里
+>    没有这个文件而红 —— 又一处"本机绿 / CI 红"分叉。已改成根锚定 `/data/`
+>    （运行时数据库在仓库根，见 `backend/config.py:DB_PATH`）。
+> 5. 🔴 **变异测试 12/12 抓住，并顺手抓住守卫自己的一个 bug**：`requireStripper()` 里
+>    调了 `fail()` 之后**直接 `return`**，把末尾的 `exit(1)` 整个绕过去了 ——
+>    守卫打印了一行 ✗ 却退出码 0（**假绿**，CI 会报通过）。已改成唯一的收尾出口
+>    `finish()`，所有提前返回都走它；这条也进了铁律。
+>
+> 6. 🔴 **顺带修掉守卫的一处"假红"**：`scripts/verify-timefmt.mjs` 原先用 `spawnSync` 起 Python 探针，
+>    而本机（Windows + Node 22）`spawnSync` 对**任何**可执行文件都返回 `EBUSY`
+>    （libuv 同步路径，异步 `spawn` 正常）→ `verify:all` 在本机**每次都红**，红的却是"起不了探针"。
+>    已改为异步 `spawn`（语义对齐），并**重跑变异测试确认仍有牙（6/6 仍被抓住）**。
+>    见 `DEVELOPMENT.md` 铁律 #42 与 `TROUBLESHOOTING.md §7.6`。
+>
+> 交付物：`src/data/exercises.ts`（新增）、`src/components/ExerciseGuide.tsx`（数据驱动）、
+> `src/components/ExercisePanel.tsx`（消费方 + 文案由 `shortName` 派生，不再写死动作名）、
+> `src/pages/NeckActivity.tsx`（改取数来源 + 总时长单点）、
+> `scripts/verify-exercises.mjs`（已挂进 `verify:all` 与 CI 守门 job）、
+> `scripts/verify-timefmt.mjs`（假红修复）、`.gitignore`（根锚定）。
+
 **【要做什么】**
-1. 动作定义抽到独立数据模块，每条声明：`{id, name, target: 'head'|'shoulder'|'spine',
-   强度, 时长区间, 禁忌, 要领, 引导参数}`。
-2. 引导动画（`ExerciseGuide` 的 7 个 `case`，`ExerciseGuide.tsx:130-186`）改为
-   由数据驱动，而非硬编码 `switch(index)`。
+1. 动作定义抽到独立数据模块，每条声明：`{id, name, target, 强度, 时长区间, 禁忌, 要领, 引导参数}`。
+2. 引导动画（`ExerciseGuide` 的 7 个 `case`）改为由数据驱动，而非硬编码 `switch(index)`。
 3. 加**校验脚本**：断言三个维度各被足够多的动作覆盖。
 
 **【验收标准】（可证伪）**
 - ✅ **新增一个动作不需要改任何组件代码**：断言方式是
-  "除数据文件外，代码中不再出现动作名称字面量"。
-- ✅ 校验脚本断言 `head` / `shoulder` / `spine` **每维度 ≥ 2 个动作**覆盖。
-- ✅ 现有 7 个动作映射后，**总时长仍为 82 秒、顺序不变**（重构不改行为，可逐项对拍）。
+  "除数据文件外，代码中不再出现动作名称字面量" ——
+  `verify-exercises.mjs` 的 E 段扫 **76 个源文件**（7 个显示名 + 5 个短名，共 12 个字面量），
+  且用 **TypeScript 真解析器**剥注释（不用正则：`/\s*#.*$/` 那类写法在 CRLF 上会
+  静默失效，本项目为此栽过一次），并带「剥注释必须真的生效」的灵敏度自检。
+- ⚠️ **校验脚本断言维度覆盖** —— 实测是 head 4 / shoulder 2 / **spine 1**，
+  **脊柱维度不达标**（原因见实施记录 3）。断言改为「≥ 1 为硬下限 + 不足 2 个**显式告警**」，
+  文档里「≥ 2」的目标连同"为什么没做到"一起留给 S8。
+- ✅ 现有 7 个动作映射后，**总时长仍为 82 秒、顺序不变**：B / C 两段快照逐项对拍 ——
+  名称 / 要领 / 时长 / 图标 / 配色 / 判定类型 / 可判定性 / 顺序 / **id 与位置的绑定**，
+  以及动画的**周期 / x·y 关键帧 / 旋转 / 图元分配 / 标量语义**（旧代码里 `x: baseX` 标量
+  表示"不动"、数组表示"来回动"，这条语义必须有断言，否则"不动"会变成"原地抖"）。
+- ➕ 顺带：总时长**单点定义**（§0.4 #7 一并解决），守卫断言数据文件之外不得再算一遍。
 
 **【风险 / 依赖】**
 - 是 S8 / S9 的**共同前置**。
@@ -519,8 +566,8 @@ S3 去伪（独立，无依赖）
 | 1 | ~~**S3 去伪**~~ ✅ 已完成 | 改动小、收益确定、能立刻建立本批次的信心 |
 | 2 | ~~**S1 双通道**~~ ✅ 已完成 | 最高价值 + 最高风险，已独占一次提交与一次 CI |
 | 3 | ~~**S2 完成度**~~ ✅ 已完成 | S1 的天然延续，且是 S10 的前置 |
-| 4 | **S7 数据化** | 纯重构、行为零变化，适合作为 C 批次的起点。🔴 必须把动作库里的 `kind` / `min_cycles` / `measurable` 三个字段一起搬过去（S2 新加的，容易漏） |
-| 5 | S5 → S6 / S8 / S9 / S4 / S10 | 按依赖推进。**S4 与 S1 的串行约束已解除**（S1 已落地） |
+| 4 | ~~**S7 数据化**~~ ✅ 已完成 | 纯重构、行为零变化，作为 C 批次起点。🔴 已按提醒把 `kind` / `min_cycles` / `measurable` 一起搬过去，并由逐项快照钉住 |
+| 5 | S8 → S5 → S6 / S9 / S4 / S10 | 按依赖推进。**S4 与 S1 的串行约束已解除**（S1 已落地）；S8 顺带补上脊柱维度的动作缺口（见 S7 实施记录 3） |
 
 ---
 
@@ -550,8 +597,8 @@ S3 去伪（独立，无依赖）
 | `src/pages/NeckActivity.tsx:274-277` | 语音批评无 mode 判断（S1 要改） |
 | `src/pages/NeckActivity.tsx:279-281` | 静息分被收进 `sessionScores`（S1 要改） |
 | `src/pages/NeckActivity.tsx:352-372` | `finishExercise` —— 成绩写入点（S10 要改） |
-| `src/components/ExercisePanel.tsx:18-26` | 7 个动作硬编码（S7 要改） |
-| `src/components/ExerciseGuide.tsx:130-186` | 引导动画的 7 个 `case`（S7 要改） |
+| `src/data/exercises.ts` | 动作库唯一数据源（S7 已建成；S8 要在此扩库） |
+| `src/components/ExerciseGuide.tsx` | 引导动画 —— 已改为按 `guide.motion` / `guide.arrow` 作图（S7 ✅，不再按下标 `case`） |
 | `src/pages/Dashboard.tsx:94-96` | 编造的部位健康度（S3 要改） |
 | `src/platform/localStats.ts:78` | 活动成绩冒充最新评分（S10 要改） |
 | `scripts/verify-scoring.mjs` | 四层对拍守卫 —— 所有评分改动的验收入口 |

@@ -323,6 +323,7 @@ void pending.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() 
 | Git Bash `mv`/`rm` 权限拒绝 | E 盘大目录 `Permission denied` | 改用 PowerShell `Rename-Item` / `Move-Item` |
 | 直连 GitHub 超时 | git 443 超时 | 走本机代理 `127.0.0.1:7897` |
 | gh 凭据助手 | `git: 'credential-gh' is not a git command` | `git -c credential.helper= -c credential.helper='!gh auth git-credential'` |
+| 🔴 `spawnSync` 恒返回 `EBUSY` | `verify-timefmt.mjs`（唯一会起子进程的守卫）**每次都红**：`✗ 找不到可用的 Python`；用 `node -e` 试 `spawnSync('cmd.exe'/'python.exe'/process.execPath, …)` **全都** `error.code === 'EBUSY'`，而**异步 `spawn` 正常**（esbuild、`verify-ui-smoke.mjs` 的 Chrome 都用异步，所以它们不报错） | libuv 同步路径经 `ERROR_SHARING_VIOLATION` → `UV_EBUSY`（与沙箱无关：`dangerouslyDisableSandbox` 下同样失败；bash 直接调 `python.exe` 正常）。**改成异步 `spawn`**（`scripts/verify-timefmt.mjs` 的 `run()`；语义对齐 `spawnSync`：起不来 → `status: null` + `error`）。判据是"守卫泛红"≠"被测代码坏了"，别去改被测代码 |
 
 ---
 
@@ -506,3 +507,40 @@ void pending.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() 
 
 仓库里的 `.json` 是 LF，而 Windows 上 Python 的 stdout 会把 `\n` 写成 `\r\n` → 直接 `diff` 会报
 "全篇不一致"（3620 行全差），看着像内容错了，其实只差换行符。先 `tr -d '\r'` 再比。
+
+### 7.5 守卫打印了 ✗ 却退出码 0 —— "假绿"
+
+**现象**：写动作库守卫（S7）时，`requireStripper()` 里 `fail('剥注释没生效…')` 之后**直接 `return`**，
+而 `process.exit(1)` 只在文件末尾统一执行一次。于是那条早退**绕过了收尾**：终端上明明白白打了一行 ✗，
+**退出码却是 0** —— CI 会报"通过"，`npm run verify:all` 也会报绿。
+
+**这个洞是变异测试抓出来的**：把 `stripComments()` 变成恒等函数（M7），预期守卫变红；
+结果 `退出码=0`，于是"变异测试"当场变成了"守卫体检"。修法是抽出**唯一收尾出口**：
+
+```js
+function finish(count) {            // 所有 return 路径都走它
+  if (failed) { console.error('✗ …未通过'); process.exit(1) }
+  console.log('✓ …')
+}
+```
+
+**教训**：`process.exit(1)` 出现的地方多于一处（或少于"所有失败路径"）时，就是在给未来埋假绿。
+判据永远是**退出码**（铁律 #39、#41）。
+
+### 7.6 守卫"假红"同样有害：`spawnSync` 在本机恒 `EBUSY`
+
+**现象**：`npm run verify:all` 在本机**每次都红**，且红的是
+`✗ 找不到可用的 Python（需要能 import aiosqlite）`，而 `.buildenv/Scripts/python.exe` 明明装了它。
+逐层压下去发现：`node -e` 里 `spawnSync` 对 **任何** 可执行文件都返回 `error.code === 'EBUSY'`
+（`cmd.exe` / `where` / `node.exe` / `python.exe` 全军覆没），但**异步 `spawn` 同一个进程里正常**
+（esbuild、`verify-ui-smoke.mjs` 起 Chrome 都走异步，所以它们从没暴露这个问题）。
+
+**根因**：libuv 的**同步** spawn 路径经 `ERROR_SHARING_VIOLATION` → `UV_EBUSY`。
+与沙箱**无关**：`dangerouslyDisableSandbox` 下同样失败，而 bash 直接调 `python.exe` 正常。
+
+**改法**：`verify-timefmt.mjs` 里的 `spawnSync` 换成异步 `spawn`（`run()` 辅助函数），
+语义对齐（起不来 → `status: null` + `error`，`findPython()` 靠它逐个淘汰候选）。
+改完重跑**变异测试**确认守卫仍有牙（6/6 仍被抓住）—— 动了"取证据的路径"就必须重新证明一次。
+
+**教训**：**假红和被静默跳过的守卫一样有害**。它不产生错误结论，但它训练人忽略这个守卫
+（"那个脚本本来就在本机红"）。看到守卫红先分清是"被测代码坏了"还是"守卫跑不动"（铁律 #42）。

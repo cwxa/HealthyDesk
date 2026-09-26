@@ -68,14 +68,16 @@ node scripts/ios-build.js --export   # 导出 IPA（需签名配置）
 
 # ---- 校验（改数值逻辑后必跑）----
 npm run verify:parity      # 双端数值等价对拍（见 §4.2）
+npm run verify:exercises   # 动作库守卫：唯一数据源 / 逐项对拍 / 引导数据化（S7）
 npm run verify:backend     # 后端产物 magic bytes 与目标平台是否匹配
-npm run verify:all         # verify:parity + 版本号五处一致性
+npm run verify:all         # verify:parity + verify:exercises + 版本号五处一致性
 npm run set-version -- --check   # 只检查版本号一致性
 ```
 
 ### 1.4 改代码前必须知道的三件事
 
 1. **改评分/角度/平滑逻辑 → 必须跑 `npm run verify:parity`**，两处实现（Python 与 TS）要逐位等价。
+   **改动作库（`src/data/exercises.ts`）或引导动画 → 跑 `npm run verify:exercises`**。
 2. **业务组件里不许写 `platform === 'electron'`**，一律问能力：`supports('systemTray')`。
 3. **往包里加资源前先想清楚它属于哪一端**：桌面端和移动端共用 `dist/`，放错位置会让另一端凭空增重。
 
@@ -481,6 +483,18 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
   ⚠️ **唯一合法的"自己拼格式"是 `db/migrations.py`**：迁移 SQL 里必须写
   `strftime('%Y-%m-%dT%H:%M:%fZ', timestamp, 'utc')` 把**存量数据**搬运成新格式，逐行转换在 Python 里做不到。
   `verify-timefmt.mjs` 的 E 段（源码守卫）显式把这个例外列出来，其余文件一旦出现自己的格式化实现就报错。
+- 🔴 **动作库走单点定义**：`src/data/exercises.ts` 是**唯一**的动作数据源（S7），
+  动作名（含短名）**不许**出现在别的文件里；`ExerciseGuide.tsx` 必须**按数据作图**
+  （不许再有 `case <下标>`）。引导参数的对拍里最容易被搬漏的是**关键帧长度语义**：
+  `x: [baseX]`（长度 1，标量）表示"这个轴不动"，`x: [baseX, …]`（多帧）才表示"来回动" ——
+  守位断的是 `(frames.length === 1) === 期望是标量`，否则"不动"会退化成"原地抖"。
+  改动作库后跑 `npm run verify:exercises`（12 条变异自证有牙）。
+- 🔴 **守卫不许"假红"**：`spawnSync` 在本机（Windows + Node 22）对**任何**可执行文件都
+  返回 `EBUSY`（libuv 同步路径经 `ERROR_SHARING_VIOLATION` → `UV_EBUSY`），
+  同一个进程里异步 `spawn` 却正常。`verify-timefmt.mjs` 原先用 `spawnSync` 起 Python 探针，
+  于是在本机**总是红**，而红的是"起不了进程"不是"口径坏了"。
+  假红与被静默跳过的守卫同样有害 —— 它教人忽略这个守卫。现在统一用异步 `spawn`
+  （语义对齐 `spawnSync`：命令起不来 → `status: null` + `error`）。见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。
 - 🔴 **不许展示不能证明的数字**。Dashboard 的「部位健康度」曾经是编造的
   （头部写死 85、肩部 = 今日总分 + 5），已改为按分项真实聚合
   （见 `ROADMAP-SCORING.md` S3）。新增任何面向用户的数值，都要能追溯到库内数据。
@@ -810,6 +824,11 @@ Permission denied"指的是删除与跨目录搬运，同目录改名不受影�
 | 38 | 迁移要"让某段归档重算"时，只删**原始表覆盖范围之内**的行；范围之外的行必须**保留** | 那些天的原始采样早被保留策略清理，归档是**唯一**副本，删了就永久消失（`DELETE … WHERE date >= MIN(ts)` 的 `>=` 不是随便选的） |
 | 39 | 判绿看**退出码**（`${PIPESTATUS[0]}`），不看管道最后一行的文字 | `cmd \| tail` 会把子命令退出码换成 `tail` 的（恒为 0）：守卫已经 exit 1，却以为全绿。反过来 `grep` 也会掩盖；本项目已两次栽在"输出像绿的"上 |
 | 40 | 守卫里**按行处理源码**时（剥注释、匹配行尾），必须先把 CRLF 归一成 LF | `.` **不匹配 `\r`**，非 multiline 的 `$` 又只匹配串尾 → `/\s*#.*$/` 在 CRLF 行上**静默不匹配**。本机 `autocrlf=true` 检出 CRLF、CI 检出 LF，于是同一条守卫**本机红、CI 绿**（实测踩到：注释里提到旧写法被当成违规）。同时源码类文件要在 [`.gitattributes`](../.gitattributes) 钉 `eol=lf`，从源头去掉分叉 |
+| 41 | 守卫必须有**唯一收尾出口**（如 `finish()`），所有提前 `return` 都走它 | `fail()` 之后直接 `return` 会绕过末尾的 `exit(1)`：守卫打印了一行 ✗ 却**退出码 0** —— CI 报"通过"。这是**假绿**，比不写守卫更误导（S7 写动作库守卫时被 M7 变异当场抓出）。同理，`process.exit` 只散落在末尾一处的脚本，新增任意一个提前返回都得重新数一遍出口 |
+| 42 | 起子进程一律用**异步 `spawn`**，不在守卫里用 `spawnSync` | 本机（Windows + Node 22）实测 `spawnSync` 对**任何**可执行文件都返回 `EBUSY`（libuv 同步路径经 `ERROR_SHARING_VIOLATION` → `UV_EBUSY`；连 `spawnSync(process.execPath, ['-e', …])` 也失败），而同一进程里异步 `spawn` 完全正常 —— `verify-timefmt.mjs` 因此**每次都假红**，红的是"起不了探针"而不是"口径坏了"。**假红与被静默跳过的守卫一样有害**，它教人忽略守卫。异步改写后语义对齐：起不来 → `status: null` + `error` |
+| 43 | 数据化重构（硬编码数组搬进单点数据模块）必须配**逐项对拍 + 源码守卫**：旧值逐字快照、且这些字面量只许出现在数据文件里 | "搬家"型重构最容易悄悄改掉一个时长/文案/顺序，而类型检查与构建**全绿看不出来**。引导类参数还要额外盯**标量 vs 多帧**的语义（长度为 1 = 该轴不动，多帧 = 来回动），否则"不动"会退化成"原地抖"（S7 实测：x/y 是两个独立轴，不能要求等长） |
+| 44 | `.gitignore` 里写目录必须**根锚定**（`/data/`），不用裸目录名（`data/`） | 裸 `data/` 在**任意深度**匹配，会把 `src/data/` 一起忽略：新建的数据模块在 `git status` 里**完全不出现**，本机守卫全绿（文件在磁盘上）而 **CI 因仓库里根本没有这个文件而红**。判据用 `git check-ignore -v <路径>`（S7 实测踩到） |
+| 45 | 变异测试的判据是「**退出码非 0** 且失败原因里出现**预期关键词**」；变异体不许因缺 import 而崩，也不许按文本模式读写文件 | 只验"红了"不够 —— 红在别处（语法错、缺依赖、文件没改到）等于没抓到。脚本读写一律按字节（`rb`/`wb`，文本模式会把 CRLF 读成 LF、写回时改掉整份文件行尾），`b"…"` **只能放 ASCII**（含中文的锚点要写 `s.encode('utf-8')`）；变异要保持到守卫跑完才还原，且**不删任何文件**（沙箱删除配额） |
 
 > 🔴 **维护本表的规矩**：编号必须**唯一且递增**。向表尾追加新条目之前，**先扫一眼表尾**有没有
 > 因历史上"追加在末尾"而错位的条目 —— v1.6.0 实测踩到：追加 UI 六条（当时编号 #30–35）时，
