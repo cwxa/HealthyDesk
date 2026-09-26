@@ -31,7 +31,7 @@
  * `legacy_misplaced: null`，本脚本会把该项记为**未覆盖**并单独打印 —— 不算失败，
  * 但也不假装验过（守卫的射程必须诚实，否则「全绿」会骗人）。
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -51,12 +51,51 @@ const fail = (msg) => {
 const ok = (msg) => console.log(`✓ ${msg}`)
 
 /**
+ * 跑一个子进程并拿到它的输出。
+ *
+ * 🔴 这里**刻意用异步 `spawn` 而不是 `spawnSync`**：本机（Windows + Node 22）实测
+ * `spawnSync` 对**任何**可执行文件都返回 `EBUSY`（libuv 同步路径的 CreateProcess 走了
+ * `ERROR_SHARING_VIOLATION` → `UV_EBUSY`），连 `spawnSync(process.execPath, ['-e', …])`
+ * 也一样；而同一个进程里异步 `spawn` 完全正常。后果是：守卫会**红**，但红的是
+ * 「起不了探针」，不是「时间戳口径坏了」—— 一条**假红**和一条被静默跳过的守卫一样有害，
+ * 它教人忽略这个守卫。所以判据与证据都保留，只把「怎么起进程」换成能用的那条路。
+ *
+ * 语义与 `spawnSync` 对齐：命令不存在/起不来时返回 `status: null` + `error`
+ * （`findPython` 靠这个把候选逐个淘汰）；否则返回退出码与聚合后的 stdout/stderr。
+ * 探针输出是几 KB 量级，无需 `maxBuffer` 级别的保护。
+ */
+function run(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      resolve({ status: null, stdout: '', stderr: '', error: e })
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const done = (r) => {
+      if (!settled) {
+        settled = true
+        resolve(r)
+      }
+    }
+    child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stderr += d))
+    child.on('error', (e) => done({ status: null, stdout, stderr, error: e }))
+    child.on('close', (code) => done({ status: code, stdout, stderr }))
+  })
+}
+
+/**
  * 找一个能 `import aiosqlite` 的 Python。
  *
  * 🔴 找不到就**显式失败**，绝不降级成「跳过」—— 一条被静默跳过的守卫比没有守卫更糟，
  * 它会让 CI 报绿而实际什么都没验（本项目的铁律 #33）。
  */
-function findPython() {
+async function findPython() {
   const candidates = [
     process.env.NG_PYTHON,
     join(ROOT, '.buildenv', 'Scripts', 'python.exe'), // Windows 干净 venv
@@ -67,7 +106,7 @@ function findPython() {
 
   for (const exe of candidates) {
     if ((exe.includes('/') || exe.includes('\\')) && !existsSync(exe)) continue
-    const probe = spawnSync(exe, ['-c', 'import aiosqlite, sqlite3, sys; print(sys.version.split()[0])'], {
+    const probe = await run(exe, ['-c', 'import aiosqlite, sqlite3, sys; print(sys.version.split()[0])'], {
       encoding: 'utf8',
       cwd: ROOT,
     })
@@ -106,8 +145,14 @@ function backendSources() {
   return out
 }
 
-function main() {
-  const py = findPython()
+/**
+ * 取证据：跑 `scripts/timefmt-probe.py`，把它的 stdout 当 JSON 解析。
+ *
+ * 证据必须**真的由探针产出** —— 不接受外部喂进来的 JSON，也不在跑不动时降级为跳过
+ * （否则「全绿」就不再意味着「验过」）。起不了进程就显式失败，并附上可执行的排查提示。
+ */
+async function readProbe() {
+  const py = await findPython()
   if (!py) {
     console.error('✗ 找不到可用的 Python（需要能 `import aiosqlite`）')
     console.error('  试过：$NG_PYTHON、.buildenv/Scripts/python.exe、.buildenv/bin/python、python、python3')
@@ -116,25 +161,25 @@ function main() {
   }
   console.log(`Python：${py.exe}（${py.version}）`)
 
-  const probe = spawnSync(py.exe, ['-u', 'scripts/timefmt-probe.py'], {
-    encoding: 'utf8',
-    cwd: ROOT,
-    maxBuffer: 32 * 1024 * 1024,
-  })
+  const probe = await run(py.exe, ['-u', 'scripts/timefmt-probe.py'], { encoding: 'utf8', cwd: ROOT })
   if (probe.status !== 0) {
     console.error('✗ 证据收集脚本失败（scripts/timefmt-probe.py）：')
     console.error((probe.stderr || probe.stdout || '').split('\n').slice(-25).join('\n'))
+    if (probe.error) console.error(`  （进程层错误：${probe.error.code || ''} ${probe.error.message}）`)
     process.exit(1)
   }
 
-  let p
   try {
-    p = JSON.parse(probe.stdout)
+    return JSON.parse(probe.stdout)
   } catch (e) {
     console.error(`✗ 探针输出不是合法 JSON：${e.message}`)
     console.error(probe.stdout.slice(0, 500))
     process.exit(1)
   }
+}
+
+async function main() {
+  const p = await readProbe()
 
   // ---- A. 契约格式 ----
   if (!p.contract.now_matches_contract) fail(`now_iso_ms() 产出不符合契约格式：${p.contract.now}`)
@@ -296,4 +341,7 @@ function main() {
   )
 }
 
-main()
+main().catch((e) => {
+  console.error(`✗ 守卫自身异常：${e && e.stack ? e.stack : e}`)
+  process.exit(1)
+})
