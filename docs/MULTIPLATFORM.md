@@ -316,13 +316,34 @@ gh release edit v1.3.8 --draft=false --latest
 2. **Android 正式包是不是签名包？** 缺 `ANDROID_*` secrets 时 CI 只出 debug 包、
    CD 会自动剔除 → 需本机 `npm run cap:build:release` 出包后
    `gh release upload <tag> <apk> --clobber` 补传，并**验证书指纹与上一版一致**（§9.3）。
-3. **正文里的下载链接、文件大小、版本号是否都对**（README 的表格同理）。
+3. **Release 正文里的下载链接、文件大小、版本号是否都对**。
    🔴 顺带查**资产名本身** —— 它随版本变过：v1.3.7 是 `NeckGuardian-Android-1.3.7.apk`，
    现在是 `NeckGuardian-<v>-android-release.apk`；**照抄上一版的命名会 404**。
    正文里的 `<版本>` 占位也必须人工替换 —— **CI 只把模板贴上去，不会替换**，
    替换方式就是本节那条 `gh release edit --notes-file <版本专属说明>`。
-4. 公开后**匿名 `curl` 验 Content-Type**（§9.4，这一步不能省）；README 里那几条下载链接
-   也要匿名验一遍状态码（200 才算通）。
+   （**README 已经不在这条里**：它的下载区 2026-09-27 起改为只指向 Releases 页，见下面的框。）
+4. 公开后**匿名 `curl` 验 Content-Type**（§9.4，这一步不能省）；README 的下载入口
+   （Releases 页）与**四个资产文件本身**都要匿名验一遍状态码（200 才算通 ——
+   资产 404 说明文件名与 README 里写的对不上，403 说明放行没生效）。
+   同一条也要覆盖 **README 版本历史表新增的那一行**是否已上线
+   （`raw.githubusercontent.com/.../main/README.md`）。
+
+> **README 的下载区（2026-09-27 起，约定由 `npm run verify:readme` 盯着）**
+>
+> 以前下载表是**逐版本写死**的：`releases/download/v1.6.2/NeckGuardian.Setup.1.6.2.exe` + `188 MB`。
+> 产物名与 URL 都带版本号，于是**每发一版都要人工改 README**，漏了就是 404 ——
+> 实测漂过（2026-09-15 那版下载表里安卓指 v1.3.4、Windows 指 v1.3.1）。
+>
+> 现在只放**一个指向 `releases/latest` 的入口** + 「在 Assets 里找这个文件名」，
+> **不写版本号、不写体积**（体积在 Release 页每个资产旁就有）。
+> 好处：零维护、draft 期间自动指向"上一已发布版"（正是想要的语义）、放行那一刻无需改任何东西。
+>
+> 🔴 **为什么不走 `releases/latest/download/<稳定文件名>`**（看起来更"永久"）：那条路要求
+> 产物名**去掉版本号**（必须逐字符匹配），实测拿稳定名取当前 latest 返回 **404**（旧资产名带版本号）。
+> 代价是用户下载到的文件看不出是哪个版本、要重打四端全部产物、且在"第一个稳定名版本被放行"之前
+> README 会有一段时间 404。**将来若改走它，`scripts/verify-readme.mjs` 的规则 a/b/c 必须跟着改 —— 别直接删守卫。**
+>
+> 发版时 README 唯一还要动的地方：**版本历史表加一行**（那是内容，不是会失效的链接）。
 5. **真机门未满足却仍要放行？可以，但两件事必须做**：① Release 正文与 README 逐端写明
    「验到哪一步」，全篇不出现"可用"（`device-matrix.md §二.1`）；② 在
    `device-matrix.md §4.3` 留一行放行记录（决定 / 范围 / 措辞）。

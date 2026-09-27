@@ -69,8 +69,12 @@ node scripts/ios-build.js --export   # 导出 IPA（需签名配置）
 # ---- 校验（改数值逻辑后必跑）----
 npm run verify:parity      # 双端数值等价对拍（见 §4.2）
 npm run verify:exercises   # 动作库守卫：唯一数据源 / 逐项对拍 / 引导数据化（S7）
+npm run verify:schema      # 表结构与迁移守卫：编号连续 / 空库列 / 老库升级 / 幂等与重放 / 三处字段同构
+npm run verify:readme      # README 下载区守卫：不写版本号 / 体积 / 逐版本下载链接
 npm run verify:backend     # 后端产物 magic bytes 与目标平台是否匹配
-npm run verify:all         # verify:parity + verify:exercises + 版本号五处一致性
+npm run verify:ui          # 界面层冒烟（5 平台 × 3 路由 + 活动收尾屏，见 MULTIPLATFORM §9.8）
+npm run verify:source      # 包内前端 = 本次 dist（逐文件 sha256）
+npm run verify:all         # parity + exercises + schema + readme + 版本号五处一致性
 npm run set-version -- --check   # 只检查版本号一致性
 ```
 
@@ -870,6 +874,7 @@ Permission denied"指的是删除与跨目录搬运，同目录改名不受影�
 | 51 | "没有数据 / 真的 0 分"在**界面、接口、落库**三处都必须能分开，不许让一个数值兼作两种意思 | 活动成绩有**三态**：老记录（该列 `NULL`，"这个版本还没有这项数据"）、判过了但一个动作都没判出来（`{"v":1,"items":[]}`）、真有明细（可能含 0 分项）。而 `0` 是**可达的真分数**（全程没动 ⇒ `IDLE_SCORE`）。拿 0 兼作"无数据"哨兵，界面就会把"摄像头没拍到你"说成"你得了 0 分"。显示端一律 `--`（见 `ExercisePanel` / `ActivityRow`） |
 | 52 | 界面层的断言要一路验到**落库与回读**，不能只验"渲染得出来"；且**同一次成绩的多个表示必须同源构造** | 收尾屏把 `avg_score` 与 `action_scores` **分开算**就会有一天"总分与明细对不上"，而那种不一致在导出文件里**查不出来**（明细是不透明文本）。现在由同一次 `judgeSession()` 的 `items` 派生，并在 UI 冒烟里断言"落库的 `action_scores` 逐字节等于规范文本、`avg_score` 与明细同源"，再回仪表盘读一遍（写→读→解析→渲染整条链） |
 | 53 | 需要**重新构建**的变异测试：构建目标必须是**全新目录**（`npx vite build --outDir …`，守卫用 `--dist=` 指过去），**不要**复用/清空既有产物目录 | `vite build` 会先 `emptyDir(dist)`；本机 safe-delete 的"按轮累计配额"会拦下删除，而拦截发生在**已经删掉 `dist/assets` 之后** → 构建"失败"却留下一份"没 index 也没 assets"的残破产物。拿它继续验证 → **假结论**（实测 6 条变异里 5 条被误判成"未抓住"，真因只是上一步构建失败）。同理，**变异脚本自己的基准必须取运行前的字节快照**，不能每次现读文件 —— 现读会把"上一轮没还原干净"的状态当成原文件接受下来 |
+| 54 | 对外文档（README 等）里**只放不随发布漂的东西**：下载入口指向 Releases 页，**不写版本号、不写体积、不写逐版本下载链接**；"每版都会变的值"要交给页面/接口承载，并由守卫盯着 | 下载表逐版本写死（`releases/download/v1.6.2/NeckGuardian.Setup.1.6.2.exe` + `188 MB`）意味着**每发一版都要人工改 README**，漏了就是 404 —— 实测漂过（2026-09-15 那版下载表里安卓指 v1.3.4、Windows 指 v1.3.1）。现由 `npm run verify:readme` 盯着（13 条断言，5 条变异 + 1 条负向对照自证有牙）。同一处也解释了为什么**没走**看起来更"永久"的 `releases/latest/download/<稳定文件名>`：它要求产物名去掉版本号，实测稳定名取当前 latest 返回 **404**，而且要重打四端产物 + 存在"第一个稳定名版本放行前"的破窗期 |
 
 > 🔴 **维护本表的规矩**：编号必须**唯一且递增**。向表尾追加新条目之前，**先扫一眼表尾**有没有
 > 因历史上"追加在末尾"而错位的条目 —— v1.6.0 实测踩到：追加 UI 六条（当时编号 #30–35）时，
