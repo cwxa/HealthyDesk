@@ -47,8 +47,14 @@ import { ensureDailyFresh } from './localMaintenance'
 
 export interface StatsSummary {
   today_activities: number
+  /** 今日**静息姿态**均分（归档层，与桌面端 `stats.py` 同源）。 */
   today_avg: number
-  latest_score: number
+  /**
+   * 最近一次**活动**的成绩（动作完成度）—— 与 `today_avg` **不是一回事**。
+   * 🔴 原名 `latest_score`，被当作"最新姿态评分"用过（见 ROADMAP-SCORING S10）。
+   * 键名必须与桌面端 `/api/stats/summary` 逐字相同。
+   */
+  latest_activity_score: number
   /** 三个部位各自的真实聚合（0–100，一位小数）；今日无采样时三者为 null。 */
   part_health: PartHealth
 }
@@ -72,12 +78,14 @@ export async function computeSummary(): Promise<StatsSummary> {
   const todayPostures = await readPostureRange(startIso, endIso)
   const partHealth = computePartHealth(todayPostures)
 
+  // 最近一次**活动**（不是姿态采样）的成绩。`activity_log` 里只有活动行，
+  // 姿态采样在 `posture_score` —— 所以这里取到的必然是活动成绩，别再叫它"评分"。
   const latest = activities.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))[0]
 
   return {
     today_activities: todayActivities,
     today_avg: todayAvg,
-    latest_score: latest?.avg_score ?? 0,
+    latest_activity_score: latest?.avg_score ?? 0,
     part_health: partHealth,
   }
 }

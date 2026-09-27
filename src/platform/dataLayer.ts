@@ -30,8 +30,16 @@ async function http<T>(path: string, options?: RequestInit): Promise<T> {
 
 export interface StatsSummary {
   today_activities: number
+  /** 今日**静息姿态**均分（日归档层）。 */
   today_avg: number
-  latest_score: number
+  /**
+   * 最近一次**活动**的成绩（动作完成度）—— 与 `today_avg` **不是一回事**。
+   *
+   * 🔴 原名 `latest_score`，被读成"最新姿态评分"过（见 Dashboard 的 AI 载荷）。
+   * 改名让名字不再说谎。目前没有消费者，保留只为与后端 `/api/stats/summary` 的键一致
+   * （两端字段名必须逐字相同，否则 `dataLayer` 的"无感切换"就漏一个字段）。
+   */
+  latest_activity_score: number
 }
 
 export const data = {

@@ -166,17 +166,23 @@ async def get_summary():
         )
         part_health = compute_part_health(await cursor.fetchall())
 
-        # Latest activity score
+        # 最近一次**活动**的成绩（动作完成度，见 services/exercise_quality.py）。
+        #
+        # 🔴 别把它当"最新姿态评分"用 —— 姿态分走 `today_avg` / 日归档那条链路。
+        #    原名 `latest_score` 就是这么被误读的（前端 `Dashboard.buildAIPayload` 一度
+        #    拿它去填提示词里的「当前姿态评分」，见 ROADMAP-SCORING S10）。改名是为了
+        #    让名字不再说谎：**两个分不是一回事**。
+        #    目前**没有消费者**，保留只为不让接口字段凭空消失。
         cursor = await db.execute(
             "SELECT avg_score FROM activity_log ORDER BY timestamp DESC LIMIT 1"
         )
         row = await cursor.fetchone()
-        latest_score = row["avg_score"] if row else 0
+        latest_activity_score = row["avg_score"] if row else 0
 
         return {
             "today_activities": today_activities,
             "today_avg": today_avg,
-            "latest_score": latest_score,
+            "latest_activity_score": latest_activity_score,
             "part_health": part_health,
         }
     finally:

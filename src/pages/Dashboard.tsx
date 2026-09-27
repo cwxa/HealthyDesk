@@ -7,6 +7,7 @@ import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
 import AIAnalysisPanel from '../components/AIAnalysisPanel'
 import type { ActivityRecord, WeeklyReport as WeeklyReportType } from '../types'
+import { parseActionScores } from '../platform/exerciseQuality'
 import { TrendingUpIcon, ActivityIcon, BarChart2Icon, CheckIcon, MonitorIcon, ClockIcon, NeckIcon, FlameIcon } from '../components/icons'
 
 interface Summary {
@@ -28,15 +29,26 @@ export default function Dashboard() {
     get<WeeklyReportType>('/api/stats/weekly').then(setWeekly).catch(e => console.error('Weekly report failed:', e))
   }, [get])
 
-  // 组装 AI 分析请求体：优先取最近一次姿态记录，其次用今日/本周统计兜底。
+  /**
+   * 组装 AI 分析请求体。
+   *
+   * 🔴 `score` 在提示词里是**「当前姿态评分」**（`backend/services/ai_advisor.py`），
+   * 所以它只能来自**静息姿态通道**。这里原先是
+   * `activities[0].avg_score`（局部变量还叫 `hasPose`）—— 那是**活动成绩**
+   * （"动作做到位没有"），与坐姿无关：用户刚做完一组拉伸时运动态通道刻意把分数压住，
+   * AI 于是拿一个活动分去回答"我坐姿怎么样"。
+   *
+   * 两个字段名都像"分数"、取值又都是 0–100，所以这个混用长期没人发现 ——
+   * 正是本项目反复修的那类「文案与数字互相打脸」。现在活动成绩另有
+   * `action_scores` 逐动作明细，更不该再冒充姿态分：
+   * **姿态分一律走 `today_avg` / `weekly_avg`，活动分一律走 `avg_score`。**
+   */
   const buildAIPayload = useCallback(() => {
-    const latest = activities[0]
-    const hasPose = latest?.avg_score !== undefined && latest?.avg_score !== null
-    const hasStats = weekly !== null || summary !== null
-    if (!hasPose && !hasStats) return null
+    const postureScore = summary?.today_avg ?? weekly?.posture_avg
+    if (weekly === null && summary === null) return null
 
     return {
-      score: hasPose ? Math.round(latest.avg_score) : (summary?.today_avg ?? undefined),
+      score: postureScore,
       today_avg: summary?.today_avg ?? undefined,
       weekly_avg: weekly?.posture_avg ?? undefined,
       today_activities: summary?.today_activities ?? undefined,
@@ -44,7 +56,7 @@ export default function Dashboard() {
       daily_minutes: weekly ? Math.round(weekly.total_minutes / 7) : undefined,
       issues: [],
     }
-  }, [activities, summary, weekly])
+  }, [summary, weekly])
 
   const tips = [
     { icon: MonitorIcon, text: '显示器顶部与眼睛齐平' },
@@ -191,7 +203,28 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   const isToday = new Date().toDateString() === time.toDateString()
   const timeDisplay = isToday ? `今天 ${time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : timeStr
 
-  const scoreColor = activity.avg_score >= 80 ? '#4CAF50' : activity.avg_score >= 60 ? '#FF9800' : '#EF5350'
+  // 🔴 活动分有**三态**，显示必须分开（判据见 `exerciseQuality.parseActionScores`）：
+  //   `null`           → 老记录：写它的时候还没有逐动作明细，数字来自**改动前的旧口径**
+  //                      （静息分 / 逐帧达成度），与现在的成绩**不可比** → 标出来，别假装能比
+  //   `[]`             → 判过了但一个动作都没判出来（摄像头没拍到人）→ 显示 `--`
+  //                      （写 0 会被读成"得了 0 分"，而 0 分是可达的：全程没动）
+  //   `items.length>0` → 本次动作成绩，与收尾页的「逐动作得分」同源
+  const items = parseActionScores(activity.action_scores)
+  const legacy = items === null
+  const noVerdict = items !== null && items.length === 0
+  const shown = noVerdict ? '--' : `${activity.avg_score}分`
+  let explain: string
+  if (items === null) {
+    explain = '旧记录：当时这个分数用的是改动前的算法，与现在的「本次动作成绩」不可比'
+  } else if (items.length === 0) {
+    explain = '本次活动没有可判定的动作（摄像头没拍到人？），因此没有成绩'
+  } else {
+    explain = `本次动作成绩：${items.length} 个动作，分别 ${items.map((it) => it.score).join(' / ')}`
+  }
+
+  const scoreColor = noVerdict
+    ? '#999'
+    : activity.avg_score >= 80 ? '#4CAF50' : activity.avg_score >= 60 ? '#FF9800' : '#EF5350'
 
   return (
     <div style={{
@@ -214,13 +247,23 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
           {timeDisplay} · {activity.exercise_count} 个动作 · {activity.duration_sec}秒
         </p>
       </div>
-      <div style={{
-        padding: '4px 12px', borderRadius: 20,
-        background: activity.avg_score >= 80 ? '#E8F5E9' : activity.avg_score >= 60 ? '#FFF3E0' : '#FFEBEE',
-        fontWeight: 700, fontSize: 15,
-        color: scoreColor,
-      }}>
-        {activity.avg_score}分
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        {legacy && (
+          <span
+            title="该记录写入时还没有逐动作明细，分数来自旧算法"
+            style={{ fontSize: 10, color: '#999', border: '1px solid #e0e0e0', borderRadius: 4, padding: '1px 4px' }}
+          >
+            旧口径
+          </span>
+        )}
+        <div title={explain} style={{
+          padding: '4px 12px', borderRadius: 20,
+          background: noVerdict ? '#f5f5f5' : activity.avg_score >= 80 ? '#E8F5E9' : activity.avg_score >= 60 ? '#FFF3E0' : '#FFEBEE',
+          fontWeight: 700, fontSize: 15,
+          color: scoreColor,
+        }}>
+          {shown}
+        </div>
       </div>
     </div>
   )
