@@ -9,15 +9,19 @@
 
 ## 📥 下载
 
-| 你的系统 | 下载 | 大小 | 说明 |
-|---|---|---|---|
-| 🖥️ **Windows 10/11** | [NeckGuardian Setup 1.6.2.exe](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian.Setup.1.6.2.exe) | 188 MB | 安装包，已内置后端，**不需要另装 Python** |
-| 🍎 **macOS（M1/M2/M3/M4）** | [NeckGuardian-1.6.2-mac-arm64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-mac-arm64.dmg) | 208 MB | 未签名，首次打开要**右键 →「打开」**（见下） |
-| 🍎 **macOS（Intel 芯片）** | [NeckGuardian-1.6.2-mac-x64.dmg](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-mac-x64.dmg) | 241 MB | 同上 |
-| 📱 **Android 8.0+** | [NeckGuardian-1.6.2-android-release.apk](https://github.com/cwxa/HealthyDesk/releases/download/v1.6.2/NeckGuardian-1.6.2-android-release.apk) | 16.9 MB | 需允许「安装未知来源应用」 |
-| 📱 **iPhone / iPad** | — | — | 暂无可用安装包，见下方说明 |
+全部安装包都在 **Releases 页**。点下面的入口进最新版，在 **Assets** 列表里找你这台机器对应的文件：
 
-最新版本 **v1.6.2**（四端同版本）｜ 全部版本：[Releases](https://github.com/cwxa/HealthyDesk/releases)
+| 你的系统 | 在 Assets 里找这个文件 | 说明 |
+|---|---|---|
+| 🖥️ **Windows 10/11** | `NeckGuardian.Setup.<版本>.exe` | 安装包，已内置后端，**不需要另装 Python** |
+| 🍎 **macOS（M1/M2/M3/M4）** | `NeckGuardian-<版本>-mac-arm64.dmg` | 未签名，首次打开要**右键 →「打开」**（见下） |
+| 🍎 **macOS（Intel 芯片）** | `NeckGuardian-<版本>-mac-x64.dmg` | 同上 |
+| 📱 **Android 8.0+** | `NeckGuardian-<版本>-android-release.apk` | 需允许「安装未知来源应用」 |
+| 📱 **iPhone / iPad** | — | 暂无可用安装包，见下方说明 |
+
+### 👉 [打开最新版下载页](https://github.com/cwxa/HealthyDesk/releases/latest)
+
+四个平台**同一次发布、版本号一致**；各平台的验证到哪一步、历次改动：[全部版本](https://github.com/cwxa/HealthyDesk/releases)
 
 <details>
 <summary>📱 为什么 iPhone 装不了？</summary>
@@ -33,8 +37,8 @@ iOS 应用必须由 Apple 开发者证书签名才能装到设备上，这个项
 同一 Release 下有 `SHA256SUMS.txt`：
 
 ```bash
-sha256sum -c SHA256SUMS.txt          # macOS / Linux
-Get-FileHash .\NeckGuardian.Setup.1.6.2.exe -Algorithm SHA256   # Windows PowerShell
+sha256sum -c SHA256SUMS.txt                       # macOS / Linux（在本文件所在目录执行）
+Get-FileHash "<你下载的文件名>" -Algorithm SHA256   # Windows PowerShell
 ```
 
 ---

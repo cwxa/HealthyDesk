@@ -131,6 +131,12 @@ jobs:
       - name: 动作库守卫（唯一数据源 / 逐项对拍 / 引导数据化）
         run: npm run verify:exercises
 
+      # README 下载区：只允许「指向 Releases 页」的入口，不许写死版本号 / 体积 /
+      # 逐版本下载链接（那三者每发一版都会漂，历史上真的漂过、也漏过）。
+      # 纯文本守卫，不需要构建。
+      - name: README 下载区守卫
+        run: npm run verify:readme
+
       # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
       # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
       # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，
