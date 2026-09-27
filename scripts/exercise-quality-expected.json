@@ -4020,5 +4020,118 @@
       "expected": "{\"v\":1,\"items\":[{\"id\":\"neck-flex-left\",\"score\":92,\"grade\":\"completed\"},{\"id\":\"neck-flex-right\",\"score\":79,\"grade\":\"insufficient\"},{\"id\":\"shoulder-circles\",\"score\":80,\"grade\":\"completed\"},{\"id\":\"chin-tuck\",\"score\":0,\"grade\":\"idle\"}]}",
       "note": "顺序即动作在库里的顺序，不许被重排（重排会让两端的 diff 无意义）"
     }
+  ],
+  "session_score_cases": [
+    {
+      "name": "空明细 → 0（「没有成绩」，不是「得 0 分」）",
+      "items": [],
+      "expected": 0,
+      "note": "与老记录的 NULL 是第三件事"
+    },
+    {
+      "name": "单动作",
+      "items": [
+        {
+          "id": "a",
+          "score": 84,
+          "grade": "completed"
+        }
+      ],
+      "expected": 84,
+      "note": ""
+    },
+    {
+      "name": "3 项·均值 79.33 → 79",
+      "items": [
+        {
+          "id": "a",
+          "score": 84,
+          "grade": "completed"
+        },
+        {
+          "id": "b",
+          "score": 79,
+          "grade": "insufficient"
+        },
+        {
+          "id": "c",
+          "score": 75,
+          "grade": "insufficient"
+        }
+      ],
+      "expected": 79,
+      "note": ""
+    },
+    {
+      "name": "4 项·均值恰为 79.5（平局取偶：进）",
+      "items": [
+        {
+          "id": "a",
+          "score": 80,
+          "grade": "completed"
+        },
+        {
+          "id": "b",
+          "score": 79,
+          "grade": "insufficient"
+        },
+        {
+          "id": "c",
+          "score": 79,
+          "grade": "insufficient"
+        },
+        {
+          "id": "d",
+          "score": 80,
+          "grade": "completed"
+        }
+      ],
+      "expected": 80,
+      "note": "floor=79 为奇数 → 进到 80"
+    },
+    {
+      "name": "4 项·均值恰为 80.5（平局取偶：不进）",
+      "items": [
+        {
+          "id": "a",
+          "score": 81,
+          "grade": "completed"
+        },
+        {
+          "id": "b",
+          "score": 80,
+          "grade": "completed"
+        },
+        {
+          "id": "c",
+          "score": 80,
+          "grade": "completed"
+        },
+        {
+          "id": "d",
+          "score": 81,
+          "grade": "completed"
+        }
+      ],
+      "expected": 80,
+      "note": "floor=80 为偶数 → 不进，仍 80；换成 Math.round 会变成 81"
+    },
+    {
+      "name": "含 0 分（0 是结论，不是缺项）",
+      "items": [
+        {
+          "id": "a",
+          "score": 0,
+          "grade": "idle"
+        },
+        {
+          "id": "b",
+          "score": 100,
+          "grade": "completed"
+        }
+      ],
+      "expected": 50,
+      "note": "均值 50 —— 若把 0 当缺项跳过就会变成 100"
+    }
   ]
 }

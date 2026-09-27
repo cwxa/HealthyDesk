@@ -248,9 +248,33 @@ def score_exercise(verdict, spec=None) -> int:
     return score
 
 
+def session_score_of(items) -> int:
+    """整场活动的成绩（0–100）：对**判定过的**动作的动作分取平均，四舍五入到整数。
+
+    ## 为什么不是"逐帧达成度的平均"
+
+    那个数没有"做到位没有"的含义：用户幅度很小地晃满 82 秒，逐帧平均也能拿到中等
+    分数，而每个动作的判定都在说「幅度还不够」。用动作分的均值，界面上的「本次动作
+    成绩」才与逐动作明细、与「到位动作 X / Y」对得上，
+    ``score >= EXERCISE_PASS_SCORE`` ⟺ 判为完成 那条不变量也才在外层继续成立。
+
+    ## 0 不是"得了 0 分"
+
+    ``items`` 为空（一个动作都没判出来）→ 返回 0。⚠️ 显示端必须靠**明细是否为空**
+    区分"没有成绩"与"真的得 0 分"（后者可达：全程没动，见 ``IDLE_SCORE``）。
+    这与"老记录该列为 NULL"是第三件事 —— 三态别混。
+
+    与前端 ``exerciseQuality.sessionScoreOf()`` 逐位等价（由守卫对拍）。
+    """
+    items = list(items)
+    if not items:
+        return 0
+    total = sum(int(it["score"]) for it in items)
+    return max(0, min(SCORE_MAX, round_int(total / len(items))))
+
+
 # ---------------------------------------------------------------------------
-# 逐动作明细（`activity_log.action_scores` 这一列的**规范文本形态**）
-#
+# 逐动作明细（`activity_log.action_scores` 这一列的**规范文本形态**）#
 # ## 为什么要有"规范文本形态"这一说
 #
 # 这一列存的是「本次每个动作各自得了多少分」。它是一个 JSON 文本，但**不是随便一段

@@ -32,10 +32,14 @@
  *   i) **明细解析端**：Python 写出的文本必须能被 TS 的 `parseActionScores()` 还原（跨语言往返），
  *      且 13 类坏值（老记录的 NULL、手改过的文件、将来版本的文本）一律返回 `null`
  *      —— 不许丢掉坏项留下半份，那会被读成"本次只判了这几个动作"。
+ *   j) **整场成绩**（`sessionScoreOf`，会被写进 `activity_log.avg_score` 并进导出文件）：
+ *      6 条用例两端相等，其中两条的均值**恰好落在平局点**（79.5 / 80.5）。
+ *      🔴 这一层**有**平局点，所以"取整实现被偷偷换掉"在**这里**抓得到（见下面的"已知未覆盖"）。
  *
- * ⚠️ **已知未覆盖（写清楚，免得被当成测过了）**：动作分那一层的「取整平局」在当前常量下
- * **不可达**，因此"把 `pyRound` 换成 `Math.round`"这类改动在动作分层抓不到
- * （判定那一层抓得到，见 §e）。推导：峰值活动量经 `pyRound1` 后必是 0.1 的整数倍
+ * ⚠️ **已知未覆盖（写清楚，免得被当成测过了）**：**动作分**那一层的「取整平局」在当前常量下
+ * **不可达**，因此"把 `pyRound` 换成 `Math.round`"在**动作分**这一层抓不到
+ * （判定那一层抓得到，见 §e；**整场成绩**那一层也抓得到，见 §j —— 它的均值会落在平局点上）。
+ * 推导：峰值活动量经 `pyRound1` 后必是 0.1 的整数倍
  * ⇒ 幅度分是 6 的整数倍 ⇒ `0.5 × 幅度分` 必为整数；到位分量 `0.5 × 100 × ratio` 的取值是
  * {0, 8.333, 16.667, 25, 33.333, 41.667, 50}，永不为 x.5。两者之和不可能落在平局点上。
  * 这不是"暂时没测到"，是这一层**没有**平局点。若将来改权重 / 改达标线使平局可达，
@@ -321,6 +325,23 @@ async function main() {
     `逐动作明细规范文本：${textPass} 通过 / ${textMismatch} 失败（共 ${payload.action_scores_cases.length} 条，逐字节比对）`,
   )
   if (textMismatch > 0) failed = true
+
+  // ---- c4) 整场成绩（会被写进 `activity_log.avg_score` 并进导出文件）----
+  // 两端必须给出同一个值：它是要落库、要进备份、要在界面上当"本次动作成绩"的数。
+  let sessPass = 0
+  let sessMismatch = 0
+  for (const c of payload.session_score_cases) {
+    const got = eq.sessionScoreOf(c.items)
+    if (got === c.expected) sessPass++
+    else {
+      sessMismatch++
+      console.error(`✗ 整场成绩不一致「${c.name}」：Python=${c.expected} TS=${got}`)
+    }
+  }
+  console.log(
+    `整场成绩等价性：${sessPass} 通过 / ${sessMismatch} 失败（共 ${payload.session_score_cases.length} 条，含两个平局点）`,
+  )
+  if (sessMismatch > 0) failed = true
 
   const byName = (n) => payload.cases.find((x) => x.name === n)
   const gotOf = (n) => {

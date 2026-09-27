@@ -230,6 +230,29 @@ export function scoreExercise(verdict: ExerciseVerdict, spec?: Partial<ExerciseS
   return score
 }
 
+/**
+ * 整场活动的成绩（0–100）：对**判定过的**动作的动作分取平均，四舍五入到整数。
+ *
+ * ## 为什么不是"逐帧达成度的平均"
+ *
+ * 那个数（`sessionScores` 的均值）没有"做到位没有"的含义：用户幅度很小地晃满 82 秒，
+ * 逐帧平均也能拿到中等分数，而每个动作的判定都在说「幅度还不够」。用动作分的均值，
+ * 界面上的「本次动作成绩」才与逐动作明细、与「到位动作 X / Y」对得上，
+ * `score >= EXERCISE_PASS_SCORE ⟺ 判为完成` 那条不变量也才在外层继续成立。
+ *
+ * ## 0 不是"得了 0 分"
+ *
+ * `items` 为空（一个动作都没判出来）→ 返回 0。⚠️ 显示端必须靠**明细是否为空**
+ * 区分"没有成绩"与"真的得 0 分"（后者是可达的：全程没动，见 `IDLE_SCORE`）。
+ * 这与老记录该列为 `NULL` 是第三件事 —— 三态别混。
+ */
+export function sessionScoreOf(items: readonly ActionScoreItem[]): number {
+  if (items.length === 0) return 0
+  let sum = 0
+  for (const it of items) sum += it.score
+  return Math.max(0, Math.min(SCORE_MAX, pyRound(sum / items.length)))
+}
+
 // ---------------------------------------------------------------------------
 // 逐动作明细（`activity_log.action_scores` 这一列的**规范文本形态**）
 //

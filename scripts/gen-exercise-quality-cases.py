@@ -48,6 +48,7 @@ from services.exercise_quality import (  # noqa: E402
     judge_exercise,
     score_exercise,
     serialize_action_scores,
+    session_score_of,
 )
 from services.scorer import EXERCISE_ACTIVITY_START  # noqa: E402
 
@@ -316,6 +317,65 @@ def build_action_scores_cases():
     return cases
 
 
+def build_session_score_cases():
+    """整场成绩（`sessionScoreOf`）的用例：真值、取整方向、空明细三态。
+
+    这个数会被**写进 `activity_log.avg_score` 并进导出文件**，所以两端必须给出同一个值。
+
+    这几条不是凑数：
+    - **空明细返回 0**（= "没有成绩"），而"真的得 0 分"是可达的（全程没动）——
+      两者数值相同、含义不同，靠明细是否为空区分，这里把数值形态钉住。
+    - **均值恰好落在 .5 上**：平局取偶（`round_int` / 前端 `pyRound`）与"半向上"
+      （JS `Math.round`）在平局点上给不同的数 —— 79.5 与 80.5 两条正好把方向钉死。
+      ⚠️ 这也意味着**整场成绩这一层是有平局点的**（动作分那一层没有，见守卫文件头），
+      所以"取整实现被换掉"在**这里**抓得到。
+    - **单动作**（均值就是它自己）与**含 0 分**（0 不能被当成"缺项"跳过）。
+    """
+    cases = []
+
+    def add(name, items, note=""):
+        cases.append({
+            "name": name,
+            "items": items,
+            "expected": session_score_of(items),
+            "note": note,
+        })
+
+    add("空明细 → 0（「没有成绩」，不是「得 0 分」）", [],
+        "与老记录的 NULL 是第三件事")
+    add("单动作", [{"id": "a", "score": 84, "grade": GRADE_COMPLETED}])
+    add("3 项·均值 79.33 → 79", [
+        {"id": "a", "score": 84, "grade": GRADE_COMPLETED},
+        {"id": "b", "score": 79, "grade": GRADE_INSUFFICIENT},
+        {"id": "c", "score": 75, "grade": GRADE_INSUFFICIENT},
+    ])
+    # 4 项和 318 → 79.5，和 322 → 80.5：两个**恰好落在平局点**的均值。
+    #
+    # 🔴 平局取偶（`round_int` / 前端 `pyRound`）：79.5 → 80（floor 79 是奇数，进到 80）、
+    #    80.5 → 80（floor 80 是偶数，不进）。若哪天换成"半向上"（JS `Math.round`），
+    #    后者会变成 **81** —— 这两条正好把平局方向钉死。
+    #    也就是说：**动作分那一层没有平局点**（见守卫文件头的推导），
+    #    但**整场成绩这一层有**，所以"取整实现被偷偷换掉"在这里抓得到。
+    add("4 项·均值恰为 79.5（平局取偶：进）", [
+        {"id": "a", "score": 80, "grade": GRADE_COMPLETED},
+        {"id": "b", "score": 79, "grade": GRADE_INSUFFICIENT},
+        {"id": "c", "score": 79, "grade": GRADE_INSUFFICIENT},
+        {"id": "d", "score": 80, "grade": GRADE_COMPLETED},
+    ], "floor=79 为奇数 → 进到 80")
+    add("4 项·均值恰为 80.5（平局取偶：不进）", [
+        {"id": "a", "score": 81, "grade": GRADE_COMPLETED},
+        {"id": "b", "score": 80, "grade": GRADE_COMPLETED},
+        {"id": "c", "score": 80, "grade": GRADE_COMPLETED},
+        {"id": "d", "score": 81, "grade": GRADE_COMPLETED},
+    ], "floor=80 为偶数 → 不进，仍 80；换成 Math.round 会变成 81")
+    add("含 0 分（0 是结论，不是缺项）", [
+        {"id": "a", "score": 0, "grade": GRADE_IDLE},
+        {"id": "b", "score": 100, "grade": GRADE_COMPLETED},
+    ], "均值 50 —— 若把 0 当缺项跳过就会变成 100")
+
+    return cases
+
+
 def load_samples():
     """读取样本文件 —— 与守卫脚本读的是同一批文件（防载荷与文件漂移）。"""
     out = []
@@ -385,6 +445,8 @@ def main():
         "score_cases": build_score_cases(),
         # 逐动作明细的**规范文本**：两端必须逐字节相同（导出/导入只搬运不重算）
         "action_scores_cases": build_action_scores_cases(),
+        # 整场成绩（会被写进 activity_log.avg_score）
+        "session_score_cases": build_session_score_cases(),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
