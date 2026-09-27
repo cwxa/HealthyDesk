@@ -21,9 +21,13 @@
  * `backend/db/migrations.py` 是**同一件事的两种实现**，结构必须同构（字段名一致），
  * 否则导出的数据互相导入不了（ROADMAP 需求 4）。
  *
- * 🔴 加字段/加表必须**同时**做三件事：建 store 语句、`DB_VERSION` +1、
+ * 🔴 **加 store / 加索引**必须**同时**做三件事：建 store 语句、`DB_VERSION` +1、
  *    `onupgradeneeded` 里补建的分支。少做最后一件，老用户升级后新表不存在，
  *    写入静默失败。
+ * ⚠️ **给已有 store 加字段不用动 `DB_VERSION`** —— object store 是**无模式**的，
+ *    多写一个属性不涉及 schema（空抬版本号只会白白多跑一次 upgrade 事务）。
+ *    这条原先写成"加字段也必须做那三件事"，与下面 `ActivityLogRecord.action_scores`
+ *    的说明自相矛盾：照它做不会坏，但会让人误以为"没动版本号 = 加漏了"。
  */
 
 import type { DayAggregate } from './dailyAgg'

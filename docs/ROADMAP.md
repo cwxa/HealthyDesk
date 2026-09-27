@@ -37,7 +37,7 @@
 
 | # | 缺口 | 证据 |
 |---|---|---|
-| 1 | **真机验证空白** | Android 最后一次真机验证是 v1.3.4，此后权限桥反复改动（2026-09-24 才改成继承 `BridgeWebChromeClient`）；mac/iOS **GUI 与摄像头一次都没在真机跑过**。→ v1.6.0 已建**固定验证路径 + 台账**（`device-matrix.md`）并把「界面渲染层」自动化（`verify:ui`，75 项断言）纳入 CI；但 **四端的真机通过行仍为空**，缺口未闭合，见需求 1 |
+| 1 | **真机验证空白** | Android 最后一次真机验证是 v1.3.4，此后权限桥反复改动（2026-09-24 才改成继承 `BridgeWebChromeClient`）；mac/iOS **GUI 与摄像头一次都没在真机跑过**。→ v1.6.0 已建**固定验证路径 + 台账**（`device-matrix.md`）并把「界面渲染层」自动化（`verify:ui`，现 132 项断言）纳入 CI；但 **四端的真机通过行仍为空**，缺口未闭合，见需求 1 |
 | 2 | **移动端后台停止** | `AndroidManifest.xml` 无 `Service`、无 `FOREGROUND_SERVICE`、无 `POST_NOTIFICATIONS`；`android/app/src/main/java/` 下只有 `MainActivity.java`；`MULTIPLATFORM.md §七` 明写「未实现」 |
 | 3 | **两端分发不可用** | mac 包未签名未公证（Gatekeeper 拦）；iOS 只有未签名 `.xcarchive`，**连 IPA 都不是**，无 `embedded.mobileprovision` |
 | 4 | ~~**数据只增不删**~~ ✅ 已解决（v1.5.0） | `NeckActivity.tsx:283` 每 **1500ms** 写一条 `posture_score`，全仓库零清理。8 小时/天 ≈ **1.9 万条/天、57 万条/月**。→ 已有 `posture_daily` 归档 + 保留期清理（默认 30 天，可配 7–365），见需求 4 |
@@ -112,7 +112,8 @@
 
 1. **UI 冒烟确实在跑**：`verify-ui-smoke.mjs` 用 Node 内置 http 静态服务 + Chrome DevTools Protocol
    直连（**零依赖**：Node 22 起自带 `WebSocket`，不引 playwright/puppeteer），
-   把 **5 种运行时平台 × 3 个路由**真实渲染一遍，共 **75 项断言**。
+   把 **5 种运行时平台 × 3 个路由**真实渲染一遍，再在每种组合上走一遍**活动收尾流程**
+   （含落库与历史行回读），共 **132 项断言**。
    CI 里已是一条独立步骤，找不到浏览器时**显式失败**（不静默跳过）。
 2. **守卫有效（变异测试 4/4）**：`.buildenv/mutate-ui-smoke.py` 植入 4 种回归，
    要求冒烟**退出码非 0 且失败原因指向正确那一处**：
