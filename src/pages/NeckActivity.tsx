@@ -11,7 +11,15 @@ import ExercisePanel, { type ExerciseState } from '../components/ExercisePanel'
 import ExerciseGuide from '../components/ExerciseGuide'
 import { EXERCISES as exercises, TOTAL_DURATION_SEC } from '../data/exercises'
 import { speakPostureIssue, speak } from '../utils/speech'
-import { judgeExercise, type ExerciseFrame, type ExerciseGrade } from '../platform/exerciseQuality'
+import {
+  judgeExercise,
+  scoreExercise,
+  serializeActionScores,
+  sessionScoreOf,
+  type ActionScoreItem,
+  type ExerciseFrame,
+  type ExerciseGrade,
+} from '../platform/exerciseQuality'
 import { nativeDiagAsync, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
 import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
@@ -140,9 +148,7 @@ export default function NeckActivity() {
   // Exercise state
   const [exCurrent, setExCurrent] = useState(0)
   const [exTimeLeft, setExTimeLeft] = useState(exercises[0].duration)
-  const [exScores, setExScores] = useState<number[]>([])
   const exTimerRef = useRef<number>(0)
-  const exScoresRef = useRef<number[]>([])
   /**
    * 活动期间的原始帧（带动作下标）。
    *
@@ -150,6 +156,11 @@ export default function NeckActivity() {
    * 才能算「幅度 / 保持时长 / 往复次数」，分数是它的单调映射、丢掉了这些信息。
    * 帧必须带 `action` 下标 —— 7 个动作的类型不同（保持类 / 往复类），
    * 用整段活动的帧去判单个动作是错的（12 秒的动作不该按 82 秒的标称时长算保持比例）。
+   *
+   * 🔴 收尾成绩（「本次动作成绩」/ `avg_score`）现在**从逐动作判定结果派生**
+   * （`sessionScoreOf(verdict.items)`），不再需要"逐帧分数序列" ——
+   * 那个数没有"做到位没有"的含义，见 `exerciseQuality.ts :: sessionScoreOf()` 的说明。
+   * 所以这里只留**原始帧**（判定的输入），不再另存一份分数序列。
    */
   const exFramesRef = useRef<Array<ExerciseFrame & { action: number }>>([])
   // 供 onPoseResult 回调读取当前动作下标：不能把 exCurrent 写进那个 effect 的依赖
@@ -307,9 +318,8 @@ export default function NeckActivity() {
       }
       if (result.type === 'pose' && result.score !== undefined) {
         if (mode === 'exercise') {
-          // 收的是**运动态通道**的分数（动作达成度），不是活动期间的静息姿态分。
-          setExScores(p => { const next = [...p, result.score!]; exScoresRef.current = next; return next })
-          // 原始帧是完成度判定的输入。⚠️ 只推入**有姿态**的帧：
+          // 🔴 只推入**原始帧**：判定的输入是活动量序列（幅度 / 保持时长 / 往复次数），
+          // 分数是它的单调映射、带不回这些信息。⚠️ 只推**有姿态**的帧：
           // `judgeExercise` 把相邻帧的时间差当作"该帧的维持时长"，缺口必须留白而不是补 0。
           exFramesRef.current.push({
             t: Date.now(),
@@ -361,8 +371,6 @@ export default function NeckActivity() {
       setMode('exercise')
       setExCurrent(0)
       setExTimeLeft(exercises[0].duration)
-      setExScores([])
-      exScoresRef.current = []
       exFramesRef.current = []
       setExVerdict(null)
       speak('请跟随引导完成肩颈活动')
@@ -389,8 +397,6 @@ export default function NeckActivity() {
     setMode('exercise')
     setExCurrent(0)
     setExTimeLeft(exercises[0].duration)
-    setExScores([])
-    exScoresRef.current = []
     exFramesRef.current = []
     setExVerdict(null)
     if (isMobile()) localReminder.beginBreak()
@@ -409,6 +415,11 @@ export default function NeckActivity() {
    *     这时下"你没做"的结论是冤枉用户）；
    *   - 三个指标测不到的动作不判（转颈 / 扩胸 / 头部后缩，见 ExercisePanel 的说明）——
    *     对它们说"没检测到动作"同样是冤枉正在做的用户。
+   *
+   * 返回的 `items` 是**逐动作得分明细**（只含判过的），顺序与动作库一致。
+   * 「本次动作成绩」（`sessionScoreOf(items)`）、落库的 `action_scores`、
+   * 界面上的逐动作条、以及"到位动作 X / Y"全部由**同一次判定**派生 ——
+   * 各算各的必然有一天互相打脸。
    */
   const judgeSession = useCallback((): NonNullable<ExerciseState['verdict']> => {
     const frames = exFramesRef.current
@@ -416,6 +427,7 @@ export default function NeckActivity() {
     let moved = 0
     let judged = 0
     let notJudgeable = 0
+    const items: ActionScoreItem[] = []
     for (let i = 0; i < exercises.length; i++) {
       const e = exercises[i]
       if (!e.measurable) {
@@ -425,23 +437,21 @@ export default function NeckActivity() {
       const mine = frames.filter((f) => f.action === i)
       if (mine.length === 0) continue
       judged++
-      const verdict = judgeExercise(mine, {
-        kind: e.kind,
-        duration_ms: e.duration * 1000,
-        min_cycles: e.min_cycles,
-      })
+      const spec = { kind: e.kind, duration_ms: e.duration * 1000, min_cycles: e.min_cycles }
+      const verdict = judgeExercise(mine, spec)
       if (verdict.grade === 'completed') completed++
       // 「动过但没到位」要单独计数：收尾文案靠它区分"没动"与"幅度不够"
       else if (verdict.grade === 'insufficient') moved++
+      // 明细只收**判过的**动作（缺席 = "没判"，不是 "得 0 分"）——
+      // 真 0 分是可达的（判了 idle：全程没动），两者在界面上必须能分开。
+      items.push({ id: e.id, score: scoreExercise(verdict, spec), grade: verdict.grade })
     }
-    return { completed, moved, judged, notJudgeable }
+    return { completed, moved, judged, notJudgeable, items }
   }, [])
 
   const finishExercise = useCallback(async () => {
     clearInterval(exTimerRef.current)
     setMode('done')
-    const ss = exScoresRef.current
-    const avg = ss.length > 0 ? Math.round(ss.reduce((a, b) => a + b, 0) / ss.length) : 0
     const dur = TOTAL_DURATION_SEC
     const verdict = judgeSession()
     setExVerdict(verdict)
@@ -461,7 +471,13 @@ export default function NeckActivity() {
         activity_type: 'exercise',
         exercise_count: exercises.length,
         duration_sec: dur,
-        avg_score: avg,
+        // 🔴 成绩 = 逐动作得分的平均（`sessionScoreOf`），**不是**逐帧达成度的平均
+        //（后者没有"做到位没有"的含义，见 `exerciseQuality.ts` 的说明）。
+        avg_score: sessionScoreOf(verdict.items),
+        // 逐动作明细随活动行一起落库。**必须**与 `avg_score` 同一次构造 ——
+        // 分开算会导致"总分与明细对不上"，而这种不一致在导出文件里是查不出来的。
+        // ⚠️ 明细**不是独立表**：它没有自己的 id，导出/导入后按 id 关联必然断。
+        action_scores: serializeActionScores(verdict.items),
       })
       await data.endBreak()
     } catch (e) {
@@ -569,7 +585,6 @@ export default function NeckActivity() {
     // 活动期间这个分来自**运动态通道**（动作达成度），不是静息姿态分
     activityScore: score,
     hasPose: latestResult?.type === 'pose',
-    sessionScores: exScores,
     totalDur,
     progress,
     qualityHint: liveQuality?.hint ?? '',

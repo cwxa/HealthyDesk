@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import ScoreGauge from './ScoreGauge'
 import ExerciseGuide from './ExerciseGuide'
-import type { ExerciseGrade } from '../platform/exerciseQuality'
+import type { ActionScoreItem, ExerciseGrade } from '../platform/exerciseQuality'
+import { sessionScoreOf } from '../platform/exerciseQuality'
 import { EXERCISES as exercises, NOT_MEASURABLE_LABEL } from '../data/exercises'
 
 export interface ExerciseState {
@@ -17,8 +18,6 @@ export interface ExerciseState {
    */
   activityScore: number
   hasPose: boolean
-  /** 本次活动的达成度采样序列（每个采样点是运动态通道的分数）。 */
-  sessionScores: number[]
   totalDur: number
   progress: number
   /**
@@ -36,11 +35,21 @@ export interface ExerciseState {
    *   「你根本没动」和「你动了但幅度不够」，否则会用"没检测到动作"去说一个正在努力的人
    * - `judged`：**可判定且有采样**的动作数（分母）
    * - `notJudgeable`：当前指标测不到、因此**没参与判定**的动作数
+   * - `items`：**逐动作得分明细**（只含 `judged` 的那些）——
+   *   界面上的「本次动作成绩」与落库的 `action_scores` 都由它派生，
+   *   这样"总分 / 逐项 / 到位动作数"三者同源，不可能互相矛盾。
    *
-   * 摄像头没拍到人时 `judged` 为 0，此时**不能**下"你没做"的结论，
-   * 界面显示 `--`（与「平均达成度」在无数据时显示 `--` 同一口径）。
+   * 摄像头没拍到人时 `judged` 为 0、`items` 为空，此时**不能**下"你没做"的结论，
+   * 界面显示 `--`（与「本次动作成绩」在无明细时显示 `--` 同一口径）。
+   * 🔴 `items` 为空 ≠ "得 0 分"，也 ≠ "老记录没有这项数据"：三态别混。
    */
-  verdict: { completed: number; moved: number; judged: number; notJudgeable: number } | null
+  verdict: {
+    completed: number
+    moved: number
+    judged: number
+    notJudgeable: number
+    items: ActionScoreItem[]
+  } | null
 }
 
 // 动作库已抽到 `src/data/exercises.ts`（ROADMAP-SCORING S7）：这里是**消费者**，
@@ -56,14 +65,10 @@ interface Props {
 
 export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: Props) {
   const navigate = useNavigate()
-  const { phase, current, timeLeft, activityScore, hasPose, sessionScores, totalDur, progress, qualityHint, qualityGrade, verdict } = state
+  const { phase, current, timeLeft, activityScore, hasPose, totalDur, progress, qualityHint, qualityGrade, verdict } = state
   const ex = exercises[current]
 
   if (phase === 'done') {
-    const avg = sessionScores.length > 0
-      ? Math.round(sessionScores.reduce((a, b) => a + b, 0) / sessionScores.length)
-      : 0
-
     // ⚠️ 收尾文案必须与判定**同源**，分三种而不是两种：
     //   有人完成 → 完成；动了没到位 → "幅度还可以更大"；一次都没动 → "没检测到动作"。
     //   只分两种（完成 / 没检测到动作）就会拿"没检测到动作"去说一个确实在动、
@@ -79,6 +84,15 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
           ? { icon: '💪', title: '动作做到了，幅度还可以更大', color: '#EF6C00', sub: '按引导把幅度再打开一点，效果更好' }
           : { icon: '🤔', title: '本次没检测到动作', color: '#EF6C00', sub: '下次跟着引导一起做吧' }
 
+    // ---- 「本次动作成绩」= 逐动作得分的平均（与明细、与到位动作数同源）----
+    // 🔴 这里**不再**用「逐帧达成度的平均」：那个数没有"做到位没有"的含义 ——
+    //    用户幅度很小地晃满 82 秒，逐帧平均也能拿到中等分数，而界面每一句引导都在说
+    //    「幅度还不够」。用它当成绩就是**文案与数字互相打脸**。
+    const items = verdict?.items ?? []
+    const sessionScore = sessionScoreOf(items)
+    const hasScore = items.length > 0
+    const scoreOf = new Map(items.map((it) => [it.id, it]))
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 16 }}>
         <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 200 }}>
@@ -92,12 +106,16 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
         )}
         <div style={{ display: 'flex', gap: 28 }}>
           <div style={{ textAlign: 'center' }}>
-            <p style={{ fontSize: 26, fontWeight: 700, color: '#2E7D32' }}>{sessionScores.length > 0 ? avg : '--'}</p>
-            <p style={{ fontSize: 12, color: '#999' }}>平均达成度</p>
+            {/* 无明细 → `--`。🔴 显示成 0 会被读成"得了 0 分"，
+                而 0 分是**可达的**（全程没动），两者必须分开。 */}
+            <p style={{ fontSize: 26, fontWeight: 700, color: hasScore ? '#2E7D32' : '#bbb' }}>
+              {hasScore ? sessionScore : '--'}
+            </p>
+            <p style={{ fontSize: 12, color: '#999' }}>本次动作成绩</p>
           </div>
           <div style={{ textAlign: 'center' }}>
             {/* 分母用"可判定且有采样"的动作数，不是动作总数：没数据时显示 --，不编造 0/7 */}
-            <p style={{ fontSize: 26, fontWeight: 700, color: '#2E7D32' }}>{judged > 0 ? completedCount : '--'}</p>
+            <p style={{ fontSize: 26, fontWeight: 700, color: judged > 0 ? '#2E7D32' : '#bbb' }}>{judged > 0 ? completedCount : '--'}</p>
             <p style={{ fontSize: 12, color: '#999' }}>到位动作{judged > 0 ? ` / ${judged}` : ''}</p>
           </div>
           <div style={{ textAlign: 'center' }}>
@@ -105,6 +123,42 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
             <p style={{ fontSize: 12, color: '#999' }}>活动时长</p>
           </div>
         </div>
+
+        {/* 逐动作明细：每个动作各得多少分。
+            列出**全部**动作而不是只列判过的 —— 少一个动作用户就会以为"系统把我的动作漏了"。
+            没判过的如实标「未判定」并写明原因，**不编造分数**、也不显示 0。
+            名单与顺序都由动作库派生（不写死），与上面的总分同源。 */}
+        {verdict !== null && (
+          <div style={{
+            width: '100%', maxWidth: 320, maxHeight: 190, overflowY: 'auto',
+            background: '#f9fafb', borderRadius: 10, padding: '10px 12px',
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <p style={{ fontSize: 11, color: '#999', marginBottom: -2 }}>逐动作得分</p>
+            {exercises.map((e) => {
+              const it = scoreOf.get(e.id)
+              const color = it ? (it.grade === 'completed' ? '#2E7D32' : '#EF6C00') : '#bbb'
+              // 未判定的两种原因要分开说，否则用户不知道自己该改什么：
+              //   measurable=false → 这个指标本来就测不到（改也是白改）
+              //   其余             → 这个动作没采到帧（跳过 / 没进画面）
+              const reason = e.measurable ? '未判定' : '未判定·指标测不到'
+              return (
+                <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: '#555', width: 82, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {e.name}
+                  </span>
+                  <div style={{ flex: 1, height: 6, background: '#eee', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${it ? Math.max(0, Math.min(100, it.score)) : 0}%`, background: color, borderRadius: 3 }} />
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 600, color, width: it ? 30 : 96, textAlign: 'right', flexShrink: 0 }}>
+                    {it ? it.score : reason}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
         {/* 说清"判定了几个" —— 只统计指标能反映的动作，剩下几个不装作判过。
             名单由数据里 `measurable === false` 的动作**派生**（短名去重后拼接）：
             写死动作名会与动作库脱钩，改一个动作就得回来改文案。 */}

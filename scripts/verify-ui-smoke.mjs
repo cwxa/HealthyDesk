@@ -26,6 +26,12 @@
  * ----------------------------------------------------
  * 覆盖：
  *   - 五种运行时平台 × 三个路由，逐页渲染 + 导航标记
+ *   - **活动收尾屏**（`#/` 上真实点「开始活动」→「结束活动」）：
+ *     逐动作得分列表、零明细时成绩显示 `--`（不是 0）、7 个动作逐个如实标「未判定」、
+ *     旧口径标签已消失；**再查落库**（走 IndexedDB 的用例才把记录留在同一个源上）：
+ *     `action_scores` 的规范文本逐字节、`avg_score` 与明细同源，
+ *     并在仪表盘历史里回读 —— 零明细显示 `--`、**迁移前的老记录照常显示分数且被标出「旧口径」**。
+ *     这是 S10「逐动作评分」唯一的用户可见出口，ROUTES 那种"页面渲染得出来"的断言覆盖不到它。
  *   - `?platform=` / `?os=` 覆盖是否真的改变界面（平台专属文案的**出现与消失**）
  *   - 客户端路由（点导航后 URL 变化但**不整页刷新**、目标页渲染出来）
  *   - 设置页显示的版本号 = `package.json` 的版本（版本漂移在界面层也能抓到）
@@ -35,6 +41,11 @@
  *   - **摄像头与姿态推理**：无头环境没有摄像头；plain `vite build` 的 dist 里
  *     也没有 MediaPipe 的 wasm/模型（那是 `cap-build` 才补的）。
  *     冒烟只保证"界面走到了取流这一步"，不保证"能出分"。
+ *   - **有真实帧时的收尾分数**：收尾屏那条断言跑的是"零采样"分支，
+ *     "判出来的分数对不对"只能靠 `verify:exercise-quality`（数值层）与真机层。
+ *   - **HTTP 落库的端到端**：桌面/electron 用例只验到"请求发出去时带的是规范文本"
+ *     （探针拦的是 `fetch` 的入参），**没有后端**去收它 —— 真正的写库由
+ *     `verify:schema` 与后端的迁移守卫覆盖。
  *   - 样式细节 / 视觉回归：不做像素比对。
  *   - 真机 WebView 行为：这是**桌面无头 Chrome**，与安卓/iOS 的 WebView 不是同一个内核版本。
  *     真机那部分见 `docs/device-matrix.md`。
@@ -835,6 +846,228 @@ async function main() {
         }
       }
 
+      // ── 活动收尾屏：「本次动作成绩」+ 逐动作得分 ────────────────────────────
+      //
+      // ROUTES 只证明"页面上得来"，覆盖不到**一次活动走完之后那一屏** ——
+      // 而那一屏是 S10「逐动作评分」唯一的用户可见出口（分数、逐动作明细、
+      // "无数据不显示 0"这三件事全在那里）。所以在这里补一段真实交互：
+      // 开始活动 → 结束活动 → 检查收尾屏。
+      //
+      // 🔴 无头环境没有摄像头 ⇒ 一帧都没采到 ⇒ 这里恰好是**零明细**那条边界：
+      //    必须显示 `--`（不是 0 —— 0 分是可达的，代表"全程没动"），
+      //    且 7 个动作**逐个列出**并如实标「未判定」，一个都不能漏、一个都不能编。
+      // ⚠️ 不覆盖：有真实帧时的分数（那要摄像头，属真机层，见 device-matrix.md）。
+      try {
+        const where = `${c.name} 活动收尾屏`
+        await evaluate(cdp, sessionId, `(() => {
+             const a = document.querySelector('a[href="#/"]'); if (a) a.click(); return true;
+           })()`)
+        await waitFor(cdp, sessionId, `location.hash === '#/' || location.hash === ''`, {
+          timeout: 4000,
+          label: `${where} 回到肩颈活动页`,
+        })
+
+        const clickedStart = await evaluate(cdp, sessionId, `(() => {
+             const b = [...document.querySelectorAll('button')]
+               .find(x => x.textContent.replace(/\\s/g, '').includes('开始活动'));
+             if (!b) return false;
+             b.click();
+             return true;
+           })()`)
+        run.check(clickedStart.ok && clickedStart.value === true, `${where} 点得到「开始活动」`, '按钮不存在')
+
+        // 进活动态后「结束活动」才会出现 —— 它出现在动作面板底部
+        await waitFor(cdp, sessionId, `(() => {
+             const b = [...document.querySelectorAll('button')]
+               .find(x => x.textContent.replace(/\\s/g, '') === '结束活动');
+             return !!b;
+           })()`, { timeout: 5000, label: `${where} 出现「结束活动」` })
+
+        // 装一个**落库探针**：桌面（electron，有本机后端）走 HTTP，
+        // 网页 / 安卓 / iOS 没有后端、走 IndexedDB —— **两条路都要能捕获**。
+        // 少了这条，"分数算得对"与"分数真的写下去了"之间那段路就没人验：
+        // 写进去的是不是**规范文本**、`avg_score` 与明细是不是**同源**，全在那一段上。
+        await evaluate(cdp, sessionId, `(() => {
+             window.__ngRec = null;
+             if (!window.__ngOrigFetch) {
+               window.__ngOrigFetch = window.fetch;
+               window.fetch = function (input, init) {
+                 try {
+                   const url = typeof input === 'string' ? input : (input && input.url) || '';
+                   if (url.indexOf('/api/activity/record') >= 0) {
+                     window.__ngRec = { via: 'http', body: String((init && init.body) || '') };
+                   }
+                 } catch (e) { /* 探针不许影响被测代码 */ }
+                 return window.__ngOrigFetch.apply(this, arguments);
+               };
+             }
+             return true;
+           })()`)
+
+        const clickedEnd = await evaluate(cdp, sessionId, `(() => {
+             const b = [...document.querySelectorAll('button')]
+               .find(x => x.textContent.replace(/\\s/g, '') === '结束活动');
+             if (!b) return false;
+             b.click();
+             return true;
+           })()`)
+        run.check(clickedEnd.ok && clickedEnd.value === true, `${where} 点得到「结束活动」`, '按钮不存在')
+
+        const done = await waitFor(cdp, sessionId, `(() => {
+             const ps = [...document.querySelectorAll('p')];
+             const lbl = ps.find(p => p.textContent.trim() === '本次动作成绩');
+             if (!lbl) return null;
+             const val = lbl.previousElementSibling ? lbl.previousElementSibling.textContent.trim() : '';
+             const t = document.body.innerText;
+             return {
+               score: val,
+               hasRows: t.includes('逐动作得分'),
+               undecided: (t.match(/未判定/g) || []).length,
+               oldLabel: t.includes('平均达成度'),
+             };
+           })()`, { timeout: 5000, label: `${where} 渲染出「本次动作成绩」` })
+
+        run.check(done.hasRows, `${where} 列出「逐动作得分」`, '逐动作明细没渲染')
+        // 零明细 → `--`。显示 0 会被读成"得了 0 分"，而 0 分是可达的（全程没动）。
+        run.check(done.score === '--', `${where} 无明细时成绩显示 --（不是 0）`, `实际显示「${done.score}」`)
+        // 7 个动作逐个列出（3 个可判定但零采样 + 4 个指标测不到），如实标「未判定」。
+        run.check(
+          done.undecided === 7,
+          `${where} 7 个动作全部如实标「未判定」`,
+          `实际出现 ${done.undecided} 次（漏动作 或 编造了分数）`,
+        )
+        // 旧口径（逐帧达成度的平均）已经换掉；留着它就是"文案与数字"两套口径并存。
+        run.check(!done.oldLabel, `${where} 不再出现旧口径「平均达成度」`, '旧标签仍在渲染')
+
+        // 读落库结果：HTTP 探针优先，其次 IndexedDB（落库是异步的，给它最多 3 秒）
+        const rec = await evaluate(cdp, sessionId, `(async () => {
+             if (window.__ngRec) return window.__ngRec;
+             const readLatest = () => new Promise((resolve) => {
+               let req;
+               try { req = indexedDB.open('neckguardian'); } catch (e) { resolve(null); return; }
+               req.onerror = () => resolve(null);
+               req.onsuccess = () => {
+                 const db = req.result;
+                 if (!db.objectStoreNames.contains('activity_log')) { db.close(); resolve(null); return; }
+                 const all = db.transaction('activity_log', 'readonly').objectStore('activity_log').getAll();
+                 all.onerror = () => { db.close(); resolve(null); };
+                 all.onsuccess = () => {
+                   const rows = all.result || [];
+                   db.close();
+                   const last = rows[rows.length - 1];
+                   resolve(last ? { via: 'idb', body: JSON.stringify(last) } : null);
+                 };
+               };
+             });
+             for (let i = 0; i < 30; i++) {
+               const r = await readLatest();
+               if (r) return r;
+               await new Promise((s) => setTimeout(s, 100));
+             }
+             return null;
+           })()`)
+
+        const gotRecord = rec.ok && rec.value
+        run.check(
+          !!gotRecord,
+          `${where} 收尾结果真的落库（HTTP / IndexedDB 两条路都查）`,
+          `两种路径都没捕获到：${rec.error || '本次活动没写进任何存储'}`,
+        )
+        if (gotRecord) {
+          let row = null
+          try {
+            row = JSON.parse(rec.value.body)
+          } catch (e) {
+            run.fail(`${where} 落库记录可解析`, `payload 不是 JSON：${String(rec.value.body).slice(0, 80)}`)
+          }
+          if (row) {
+            // 🔴 写进去的必须是**规范文本**（紧凑无空格、键序固定）——
+            // 它与 `serializeActionScores()` 的输出逐字节相同，导出/导入才能跨端互换。
+            // 零明细的规范文本恰好是 `{"v":1,"items":[]}`：
+            // **不是** `{"v":1,"items":[]}` 之外的任何形态（多一个空格就红）。
+            run.check(
+              row.action_scores === '{"v":1,"items":[]}',
+              `${where} 落库的 action_scores 是规范文本（零明细）`,
+              `实际：${JSON.stringify(row.action_scores)}`,
+            )
+            // 总分与明细**同源**：零明细 ⇒ 0（"没有成绩"）。若哪天有人把总分改回
+            // 「逐帧达成度平均」，这里立刻对不上 —— 那正是本次要修的口径。
+            run.check(
+              row.avg_score === 0,
+              `${where} 落库的 avg_score 与明细同源（零明细 ⇒ 0）`,
+              `实际：${JSON.stringify(row.avg_score)}`,
+            )
+          }
+          console.log(`    · 落库通道 ${rec.value.via}`)
+
+          // 只有走 IndexedDB 的用例才把记录留在了**同一个源**上（桌面/electron 发 HTTP，
+          // 冒烟里没有后端 → 没落地），所以历史列表这一段只在 idb 通道上验。
+          // 它证的是「写 → 读 → 解析明细 → 渲染」整条链：少一段就会出现
+          // "详情页说没有成绩、历史里却显示 0 分"这种自相矛盾。
+          if (rec.value.via === 'idb') {
+            // 再插一条**迁移前的老记录**（没有 `action_scores` 键 —— 对应 SQLite 的 NULL）。
+            // 这是本次改动唯一会影响到**存量数据**的地方：老记录的 `avg_score` 是旧算法的
+            // 产物，与现在的成绩不可比。S10 的验收标准要求「旧数据的显示不崩、能区分或明确标注」，
+            // 而"不崩"和"标注"都只能在这里证 —— 光有代码分支不算数。
+            await evaluate(cdp, sessionId, `(async () => {
+                 const db = await new Promise((res, rej) => {
+                   const r = indexedDB.open('neckguardian');
+                   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+                 });
+                 await new Promise((res, rej) => {
+                   const tx = db.transaction('activity_log', 'readwrite');
+                   tx.objectStore('activity_log').put({
+                     timestamp: new Date(Date.now() - 3600e3).toISOString(),
+                     activity_type: 'exercise', exercise_count: 7, duration_sec: 82, avg_score: 63,
+                   });
+                   tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+                 });
+                 db.close();
+                 return true;
+               })()`)
+
+            await evaluate(cdp, sessionId, `(() => {
+                 const a = document.querySelector('a[href="#/dashboard"]'); if (a) a.click(); return true;
+               })()`)
+            await waitFor(cdp, sessionId, `document.body.innerText.includes('肩颈放松活动')`, {
+              timeout: 6000,
+              label: `${where} 历史列表里出现刚记下的活动`,
+            })
+            const hist = await evaluate(cdp, sessionId, `(() => {
+                 const badges = [...document.querySelectorAll('div[title]')]
+                   .filter(d => /本次动作成绩|旧记录|没有可判定的动作/.test(d.getAttribute('title') || ''));
+                 return {
+                   n: badges.length,
+                   texts: badges.map(d => d.textContent.trim()),
+                   legacyTagged: document.body.innerText.includes('旧口径'),
+                 };
+               })()`)
+            const texts = (hist.ok && hist.value && hist.value.texts) || []
+            run.check(
+              texts.length > 0,
+              `${where} 历史行带上了可解释的 title（新记录/旧记录/无判定三态之一）`,
+              '一行都没匹配到 —— ActivityRow 的分支没生效',
+            )
+            // 零明细的那条记录在历史里**必须**是 `--`：写 0 会被读成"得了 0 分"。
+            run.check(
+              texts.includes('--') && !texts.includes('0分'),
+              `${where} 历史里零明细记录显示 --（不是 0分）`,
+              `实际：${JSON.stringify(texts)}`,
+            )
+            // 老记录（无明细）必须**照常显示分数**并**标出"旧口径"** ——
+            // 不显示 = 把用户的历史数据藏起来；不标注 = 让新旧两个不可比的数看起来可比。
+            run.check(
+              texts.includes('63分'),
+              `${where} 老记录（无明细）照常显示分数`,
+              `实际：${JSON.stringify(texts)}`,
+            )
+            run.check(hist.ok && hist.value && hist.value.legacyTagged === true, `${where} 老记录被标出「旧口径」`, '没有可区分的标注')
+          }
+        }
+      } catch (e) {
+        run.fail(`${c.name} 活动收尾屏`, e.message)
+      }
+
       // 页面级错误汇总
       if (uncaught.length) {
         run.fail(`${c.name} 无未捕获异常`, `${uncaught.length} 条：${uncaught.slice(0, 2).join(' | ')}`)
@@ -869,7 +1102,10 @@ async function main() {
     for (const f of run.failures.slice(0, 20)) console.error(`  ✗ ${f}`)
     process.exit(1)
   }
-  console.log(`✅ UI 冒烟通过：${cases.length} 个平台组合 × ${ROUTES.length} 个路由，${run.passed} 项断言`)
+  console.log(
+    `✅ UI 冒烟通过：${cases.length} 个平台组合 × ${ROUTES.length} 个路由` +
+      ` + 活动收尾屏/历史行 ${cases.length} 次，${run.passed} 项断言`,
+  )
   if (EVIDENCE_DIR) console.log(`   截图已存：${path.relative(ROOT, EVIDENCE_DIR)}`)
 }
 
