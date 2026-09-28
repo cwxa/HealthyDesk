@@ -32,6 +32,12 @@
  *     `action_scores` 的规范文本逐字节、`avg_score` 与明细同源，
  *     并在仪表盘历史里回读 —— 零明细显示 `--`、**迁移前的老记录照常显示分数且被标出「旧口径」**。
  *     这是 S10「逐动作评分」唯一的用户可见出口，ROUTES 那种"页面渲染得出来"的断言覆盖不到它。
+ *   - **新手引导**（首次打开时盖在界面上那层）：清掉标志重新加载 → 引导出现 →
+ *     逐步点完 4 步（**每步标题都要变**；只验"遮罩出现了"会漏掉"卡在第 1 步不动"）→
+ *     点「开始使用」→ 遮罩消失 + 「已看过」标志真的落盘 → **再次加载后不再自动出现** →
+ *     设置页「重新查看新手引导」能把它叫回来 → 「跳过」能关掉。
+ *     ⚠️ 这一段必须在 ROUTES **之前**跑完：引导的遮罩盖在页面上，但下层仍在 DOM 里，
+ *     开着它去断言页面文案等于把"被盖住了"验成"渲染得出来"（`innerText` 两层都读得到）。
  *   - `?platform=` / `?os=` 覆盖是否真的改变界面（平台专属文案的**出现与消失**）
  *   - 客户端路由（点导航后 URL 变化但**不整页刷新**、目标页渲染出来）
  *   - 设置页显示的版本号 = `package.json` 的版本（版本漂移在界面层也能抓到）
@@ -46,6 +52,11 @@
  *   - **HTTP 落库的端到端**：桌面/electron 用例只验到"请求发出去时带的是规范文本"
  *     （探针拦的是 `fetch` 的入参），**没有后端**去收它 —— 真正的写库由
  *     `verify:schema` 与后端的迁移守卫覆盖。
+ *   - **引导与提醒弹窗的互斥**（`App.tsx` 里那条 `&& !onboardingOpen`）：无头环境里
+ *     没有提醒会弹（桌面端要后端推、移动端定时器不会立刻触发），这里**验不到**。
+ *     它只在真机上看得出来 —— 与"提醒相关的一切"同属真机层。
+ *   - **`localStorage` 写不进去时的降级**（隐私模式 / 配额满）：那样引导会每次启动都出现。
+ *     无头 Chrome 的临时 profile 复现不出这个环境，只能靠代码里的 try/catch 兜住。
  *   - 样式细节 / 视觉回归：不做像素比对。
  *   - 真机 WebView 行为：这是**桌面无头 Chrome**，与安卓/iOS 的 WebView 不是同一个内核版本。
  *     真机那部分见 `docs/device-matrix.md`。
@@ -107,6 +118,9 @@ const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 2, mobile:
  * 每个平台组合一条。`label` 必须与 `src/platform/runtime.ts:platformLabel()` 逐字一致 ——
  * 断言「界面里显示的平台名」等于「URL 覆盖声明的平台」，才能证明覆盖真的生效了，
  * 而不是"页面碰巧也渲染出来了"。
+ *
+ * `systemTray` / `autoStart` 是**能力期望**，必须与 `runtime.ts` 的 `CAPABILITIES` 一致。
+ * 新手引导的第 4 步按这两个能力选文案，所以它们不只是描述，而是断言依据。
  */
 const PLATFORM_CASES = [
   {
@@ -115,6 +129,8 @@ const PLATFORM_CASES = [
     viewport: DESKTOP_VIEWPORT,
     label: '网页版',
     form: '桌面端',
+    systemTray: false,
+    autoStart: false,
   },
   {
     name: 'electron-windows',
@@ -122,6 +138,8 @@ const PLATFORM_CASES = [
     viewport: DESKTOP_VIEWPORT,
     label: '桌面版 (Windows)',
     form: '桌面端',
+    systemTray: true,
+    autoStart: true,
   },
   {
     name: 'electron-macos',
@@ -129,6 +147,8 @@ const PLATFORM_CASES = [
     viewport: DESKTOP_VIEWPORT,
     label: '桌面版 (macOS)',
     form: '桌面端',
+    systemTray: true,
+    autoStart: true,
   },
   {
     name: 'android',
@@ -136,6 +156,8 @@ const PLATFORM_CASES = [
     viewport: MOBILE_VIEWPORT,
     label: '安卓版',
     form: '移动端',
+    systemTray: false,
+    autoStart: false,
   },
   {
     name: 'ios',
@@ -143,6 +165,8 @@ const PLATFORM_CASES = [
     viewport: MOBILE_VIEWPORT,
     label: 'iOS 版',
     form: '移动端',
+    systemTray: false,
+    autoStart: false,
   },
 ]
 
@@ -531,6 +555,253 @@ async function waitFor(cdp, sessionId, expression, { timeout = WAIT_MS, poll = 1
   throw new Error(`等待超时（${timeout}ms）：${label || expression}；最后一次取值=${last}`)
 }
 
+// ─────────────────────── 新手引导（首次打开） ───────────────────────
+
+/**
+ * 「已看过」标志写在哪个 `localStorage` 键上 —— **从源码里读**，不在这里再写一份。
+ *
+ * 键盘名是**持久化契约**：换了键，所有老用户的"已看过"当场作废、每个人再被引导一次。
+ * 那可以接受，但必须是**有意识的**决定 —— 所以下面的断言把期望值钉死，
+ * 改键名会让守卫红，而不是悄悄换一个键继续跑。
+ */
+/** 期望的键名。改它 = 有意让所有老用户再看一次引导（见 main 里那条断言）。 */
+const EXPECTED_ONBOARDING_KEY = 'neckguardian:onboarding'
+
+function readOnboardingKey() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/platform/onboarding.ts'), 'utf8')
+  const m = /ONBOARDING_KEY\s*=\s*['"]([^'"]+)['"]/.exec(src)
+  return m ? m[1] : ''
+}
+
+/** 源码里实际用的键（由上面的函数读出）。 */
+const ONBOARDING_KEY = readOnboardingKey()
+
+/**
+ * 新手引导那一段的全部断言。返回时把 URL 交还给后面的 ROUTES 段。
+ *
+ * 进入本函数前，调用方已经**清掉标志并重新加载**过 —— 所以这里从"没见过引导的新用户"
+ * 这个状态开始（同一浏览器 profile 下 `localStorage` 是跨用例共享的，
+ * 少了调用方那次清理，第二个平台用例开始就再也看不到引导了）。
+ */
+async function checkOnboarding(cdp, sessionId, run, c, key) {
+  const where = `${c.name} 新手引导`
+  const SEL = '[data-ng="onboarding"]'
+  const SEL_Q = JSON.stringify(SEL)
+
+  const clickByText = (text) => `(() => {
+       const b = [...document.querySelectorAll('button')]
+         .find((x) => x.textContent.replace(/\\s/g, '') === ${JSON.stringify(text)});
+       if (!b) return false;
+       b.click();
+       return true;
+     })()`
+
+  const readStep = `(() => {
+       const root = document.querySelector(${SEL_Q});
+       if (!root) return null;
+       const h2 = root.querySelector('h2');
+       const dots = root.querySelector('[data-ng="onboarding-dots"]');
+       const texts = [...root.querySelectorAll('button')].map((b) => b.textContent.replace(/\\s/g, ''));
+       return {
+         title: h2 ? h2.textContent : '',
+         progress: dots ? dots.textContent.replace(/\\s/g, '') : '',
+         body: root.innerText.replace(/\\s/g, ''),
+         next: texts.indexOf('下一步') >= 0,
+         done: texts.indexOf('开始使用') >= 0,
+         skip: texts.indexOf('跳过') >= 0,
+       };
+     })()`
+
+  // ① 首次打开必须出现（判定读的是 localStorage，同步 —— 所以它与应用壳同一帧）
+  try {
+    await waitFor(cdp, sessionId, `!!document.querySelector(${SEL_Q})`, {
+      timeout: WAIT_MS,
+      label: `${where} 出现`,
+    })
+    run.ok(`${where} 首次打开时出现`)
+  } catch (e) {
+    run.fail(`${where} 首次打开时出现`, `没等到引导 —— 判定失效或遮罩没渲染：${e.message}`)
+    return
+  }
+
+  // ② 起始位置
+  const first = await evaluate(cdp, sessionId, readStep)
+  const info = first.value
+  if (!info) {
+    run.fail(`${where} 读得到当前步骤`, '引导节点在，但读不到标题/进度')
+    return
+  }
+  run.check(
+    /^1\/4$/.test(info.progress),
+    `${where} 从第 1 步开始、共 4 步`,
+    `进度显示「${info.progress}」—— 改了步数？同步改这里与 docs/ROADMAP.md 的需求 11`,
+  )
+  run.check(info.next, `${where} 第 1 步有「下一步」`)
+  run.check(info.skip, `${where} 第 1 步能跳过（不是强制走完）`, '没有「跳过」按钮')
+
+  // ③ 逐步走完：每点一次，标题都必须**变**
+  //    只断言"遮罩还在"会漏掉"卡在第 1 步不动"；只断言"点了有反应"会漏掉"四步同一份文案"。
+  const titles = [info.title]
+  const bodies = [info.body]
+  let last = info
+  for (let n = 2; n <= 4; n++) {
+    const clicked = await evaluate(cdp, sessionId, clickByText('下一步'))
+    if (!clicked.ok || clicked.value !== true) {
+      run.fail(`${where} 点得到「下一步」（去第 ${n} 步）`, '按钮不存在')
+      break
+    }
+    await sleep(180) // 等这一次切换落定，别读到上一帧的标题
+    const r = await evaluate(cdp, sessionId, readStep)
+    if (!r.ok || !r.value) {
+      run.fail(`${where} 第 ${n} 步读得到内容`, r.error || '引导节点不见了')
+      break
+    }
+    last = r.value
+    titles.push(last.title)
+    bodies.push(last.body)
+  }
+  run.check(titles.length === 4, `${where} 4 步全走到了`, `实际走到 ${titles.length} 步`)
+  run.check(
+    titles.length === 4 && new Set(titles).size === 4 && titles.every((t) => t && t.trim()),
+    `${where} 4 步的标题互不相同且非空`,
+    `实际：${JSON.stringify(titles)}`,
+  )
+  run.check(
+    !last.next && last.done,
+    `${where} 最后一步是「开始使用」而不是「下一步」`,
+    `next=${last.next} done=${last.done}`,
+  )
+
+  // ③b 平台差异：第 2 步的形态措辞、第 4 步的托盘/自启措辞都**来自能力矩阵**。
+  //     「出现」和「消失」两边都断言 —— 只验一边抓不到"两边都渲染"
+  //     （`isMobile()` 恒 false、`supports()` 读错字段之类都会漏过去）。
+  const mobileCase = c.form === '移动端'
+  const step2 = bodies[1] || ''
+  const step4 = bodies[3] || ''
+  const want2 = mobileCase ? '手机架在面前' : '摄像头对准自己'
+  const wrong2 = mobileCase ? '摄像头对准自己' : '手机架在面前'
+  run.check(
+    step2.includes(want2),
+    `${where} 第 2 步按形态给对措辞（${want2}）`,
+    `第 2 步实际文案：${step2.slice(0, 120)}`,
+  )
+  run.check(
+    !step2.includes(wrong2),
+    `${where} 第 2 步不出现另一种形态的措辞（${wrong2}）`,
+    'isMobile() 判定失效：两边都渲染，或判定反了',
+  )
+  run.check(
+    c.systemTray ? step4.includes('系统托盘') : step4.includes('不会常驻后台'),
+    `${where} 第 4 步按托盘能力给对措辞（${c.systemTray ? '有托盘' : '无托盘'}）`,
+    `第 4 步实际文案：${step4.slice(0, 140)}`,
+  )
+  run.check(
+    c.systemTray ? !step4.includes('不会常驻后台') : !step4.includes('系统托盘'),
+    `${where} 第 4 步不出现另一种托盘措辞`,
+    'supports("systemTray") 判定失效：两边都渲染，或判定反了',
+  )
+  run.check(
+    c.autoStart === step4.includes('开机自启'),
+    `${where} 第 4 步的自启说明与能力一致（${c.autoStart ? '应有' : '应无'}）`,
+    `第 4 步实际文案：${step4.slice(0, 140)}`,
+  )
+
+  // ④ 收尾：遮罩消失 + 标志落盘
+  const clickedDone = await evaluate(cdp, sessionId, clickByText('开始使用'))
+  run.check(clickedDone.ok && clickedDone.value === true, `${where} 点得到「开始使用」`, '按钮不存在')
+  try {
+    await waitFor(cdp, sessionId, `!document.querySelector(${SEL_Q})`, {
+      timeout: 5000,
+      label: `${where} 遮罩消失`,
+    })
+    run.ok(`${where} 走完后遮罩消失`)
+  } catch (e) {
+    run.fail(`${where} 走完后遮罩消失`, e.message)
+  }
+
+  const flagOf = `(() => { try { return localStorage.getItem(${JSON.stringify(key)}) } catch (e) { return null } })()`
+  const flag = await evaluate(cdp, sessionId, flagOf)
+  run.check(
+    flag.ok && flag.value !== null && Number(flag.value) >= 1,
+    `${where} 「已看过」标志真的落盘`,
+    `localStorage[${key}] = ${JSON.stringify(flag.value)}（没落盘 ⇒ 每次启动都会再讲一遍）`,
+  )
+
+  // ⑤ 再次加载：不再自动出现 —— "只讲一次"这件事唯一的证据
+  await cdp.send('Page.reload', {}, sessionId)
+  await waitFor(cdp, sessionId, `document.readyState === 'complete'`, { label: `${where} 重新加载` })
+  try {
+    await waitFor(cdp, sessionId, `!!document.querySelector('a[href="#/dashboard"]')`, {
+      timeout: WAIT_MS,
+      label: `${where} 重新加载后应用壳就绪`,
+    })
+    await sleep(400) // 壳与引导同一帧判定；这点余量只是免得断言跑在 React 提交之前
+    const again = await evaluate(cdp, sessionId, `!!document.querySelector(${SEL_Q})`)
+    run.check(
+      again.ok && again.value === false,
+      `${where} 再次打开时不再出现`,
+      '引导又弹了一次（标志没生效？）',
+    )
+  } catch (e) {
+    run.fail(`${where} 再次打开时不再出现`, e.message)
+  }
+
+  // ⑥ 回看入口：设置页能把它叫回来，「跳过」能关掉，且不动标志
+  await evaluate(cdp, sessionId, `(() => {
+       const a = document.querySelector('a[href="#/settings"]'); if (a) a.click(); return true;
+     })()`)
+  try {
+    await waitFor(cdp, sessionId, `document.body.innerText.includes('重新查看新手引导')`, {
+      timeout: 8000,
+      label: `${where} 设置页出现回看入口`,
+    })
+    run.ok(`${where} 设置页有「重新查看新手引导」入口`)
+
+    const reopened = await evaluate(cdp, sessionId, clickByText('重新查看新手引导'))
+    run.check(reopened.ok && reopened.value === true, `${where} 点得到回看入口`, '按钮不存在')
+    await waitFor(cdp, sessionId, `!!document.querySelector(${SEL_Q})`, {
+      timeout: 5000,
+      label: `${where} 回看时引导再次出现`,
+    })
+    run.ok(`${where} 回看时引导再次出现`)
+
+    // 回看必须**从第 1 步开始**（上一轮走到过第 4 步；不清内部 step 就会停在那里）
+    const back = await evaluate(cdp, sessionId, readStep)
+    run.check(
+      !!(back.value && /^1\/4$/.test(back.value.progress)),
+      `${where} 回看从第 1 步开始（不是停在上次的步骤）`,
+      `进度显示「${back.value ? back.value.progress : '(读不到)'}」`,
+    )
+
+    const skipped = await evaluate(cdp, sessionId, clickByText('跳过'))
+    run.check(skipped.ok && skipped.value === true, `${where} 点得到「跳过」`, '按钮不存在')
+    await waitFor(cdp, sessionId, `!document.querySelector(${SEL_Q})`, {
+      timeout: 5000,
+      label: `${where} 跳过后遮罩消失`,
+    })
+    run.ok(`${where} 跳过后遮罩消失`)
+
+    const still = await evaluate(cdp, sessionId, flagOf)
+    run.check(
+      still.ok && still.value !== null && Number(still.value) >= 1,
+      `${where} 回看 / 跳过都不会清掉「已看过」标志`,
+      `标志变成 ${JSON.stringify(still.value)} —— 回看不该改变"下次启动是否显示"`,
+    )
+  } catch (e) {
+    run.fail(`${where} 回看入口`, e.message)
+  }
+
+  // 把 URL 交还给 ROUTES 段：`#/` 那一条**不点导航**（它假定启动就落在活动页），
+  // 所以必须先回到 `/`，否则它会拿设置页的内容去对活动页的文案。
+  await evaluate(cdp, sessionId, `(() => {
+       const a = document.querySelector('a[href="#/"]'); if (a) a.click(); return true;
+     })()`)
+  await waitFor(cdp, sessionId, `location.hash === '#/' || location.hash === ''`, {
+    timeout: 4000,
+    label: `${where} 回到活动页`,
+  })
+}
+
 // ─────────────────────────── 主流程 ───────────────────────────
 
 async function main() {
@@ -570,6 +841,19 @@ async function main() {
 
   const run = new Runner()
   let browserVersion = ''
+
+  /**
+   * 钉住新手引导的**持久化契约**：标志所在的那个 `localStorage` 键。
+   *
+   * 🔴 换了键名 ⇒ 所有老用户的"已看过"当场作废、每个人再被引导一次。
+   * 可以接受，但不能**悄悄**发生 —— 所以这里把期望值钉死，改了就红。
+   */
+  run.check(
+    ONBOARDING_KEY === EXPECTED_ONBOARDING_KEY,
+    `新手引导的持久化键仍是 ${EXPECTED_ONBOARDING_KEY}`,
+    `源码里读到的是 ${JSON.stringify(ONBOARDING_KEY)} —— 换键会让老用户的「已看过」作废；` +
+      `若确属有意，同步改本脚本的 EXPECTED_ONBOARDING_KEY 并接受"老用户再看一次引导"`,
+  )
 
   const cleanup = () => {
     cdp.close()
@@ -656,6 +940,20 @@ async function main() {
       // 挂一个哨兵：路由切换后它必须还在 —— 不在了说明发生了整页刷新
       await evaluate(cdp, sessionId, `window.__ngSmokeSentinel = 'alive'; true`)
 
+      // 🔴 清掉「新手引导已看过」标志并**重新加载**，让本用例回到"第一次打开应用"
+      //    那个状态。同一个浏览器 profile 下 `localStorage` 是**跨用例共享**的：
+      //    上一个平台用例走完引导就把标志写成了 1，不清掉的话从第二个用例起
+      //    引导根本不会出现 —— 而"没出现"会被后面那句 `run.ok` 读成通过（假绿）。
+      await evaluate(
+        cdp,
+        sessionId,
+        `(() => { try { localStorage.removeItem(${JSON.stringify(ONBOARDING_KEY)}) } catch (e) {} return true })()`,
+      )
+      await cdp.send('Page.reload', {}, sessionId)
+      await waitFor(cdp, sessionId, `document.readyState === 'complete'`, {
+        label: `${c.name} 清标志后重新加载`,
+      })
+
       if (DUMP) {
         const info = await evaluate(
           cdp,
@@ -680,6 +978,15 @@ async function main() {
       //    —— 浏览器里没有 electronAPI，`onBackendReady` 永不触发，只能等这个兜底计时器。
       //    桌面端因此会先显示 5 秒「正在启动服务...」。不等它，后面找导航项必然落空。
       //    导航项存在 ⟺ 应用壳（Sidebar / BottomTabs）已挂载 —— 这本身就是一条有效断言。
+      // ── 新手引导 ─────────────────────────────────────────────────────────
+      // 必须跑在 ROUTES **之前**（引导段自己会把它关掉）：引导的遮罩盖在页面上，
+      // 但下层仍挂在 DOM 里，`innerText` 两层都读得到 —— 开着遮罩去断言页面文案，
+      // 等于把"被盖住了"验成"渲染得出来"。
+      await checkOnboarding(cdp, sessionId, run, c, ONBOARDING_KEY)
+      // 引导段内部 reload 过一次（验"再次打开不再出现"），哨兵随之消失 → 重挂。
+      // ROUTES 靠它证明"点导航没有整页刷新"，少了这一步会全线误报。
+      await evaluate(cdp, sessionId, `window.__ngSmokeSentinel = 'alive'; true`)
+
       let shellOk = true
       try {
         await waitFor(cdp, sessionId, `!!document.querySelector('a[href="#/dashboard"]')`, {
@@ -1104,7 +1411,7 @@ async function main() {
   }
   console.log(
     `✅ UI 冒烟通过：${cases.length} 个平台组合 × ${ROUTES.length} 个路由` +
-      ` + 活动收尾屏/历史行 ${cases.length} 次，${run.passed} 项断言`,
+      ` + 新手引导 ${cases.length} 次 + 活动收尾屏/历史行 ${cases.length} 次，${run.passed} 项断言`,
   )
   if (EVIDENCE_DIR) console.log(`   截图已存：${path.relative(ROOT, EVIDENCE_DIR)}`)
 }

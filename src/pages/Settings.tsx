@@ -633,6 +633,16 @@ export default function Settings() {
             数据存储：{isMobile() ? '本机 IndexedDB，所有数据不上传' : '本地 SQLite，所有数据不上传'}<br />
             隐私保护：摄像头画面仅在本地处理，{isMobile() ? '姿态推理全程在本机完成。' : '仅在启用 AI 分析时，将匿名的姿态指标与统计数据发送至 DeepSeek'}
           </p>
+
+          {/* 回看入口：新手引导只在**本设备第一次打开**时自动出现，之后只能从这里叫回来。
+              🔴 刻意用手写事件而不是 props：三页路由共用一个 AppShell，把 state 传进
+              「设置页」要额外穿一层；而且回看**不清标志**（看过 ≠ 没看过）。 */}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('show-onboarding'))}
+            style={{ ...ghostBtnStyle(false), marginTop: 14 }}
+          >
+            重新查看新手引导
+          </button>
         </motion.div>
       </div>
     </div>

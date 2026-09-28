@@ -3,11 +3,13 @@ import { HashRouter, Routes, Route, useNavigate, useLocation } from 'react-route
 import { motion, AnimatePresence } from 'framer-motion'
 import Sidebar from './components/Sidebar'
 import BottomTabs from './components/BottomTabs'
+import Onboarding from './components/Onboarding'
 import Dashboard from './pages/Dashboard'
 import NeckActivity from './pages/NeckActivity'
 import Settings from './pages/Settings'
 import { useApi } from './hooks/useApi'
 import { isMobile } from './platform/runtime'
+import { isOnboardingDone } from './platform/onboarding'
 import { localReminder } from './platform/localReminder'
 import { maintainLocalData } from './platform/localMaintenance'
 import { data } from './platform/dataLayer'
@@ -17,6 +19,14 @@ function AppShell() {
   const [backendReady, setBackendReady] = useState(false)
   const [reminderVisible, setReminderVisible] = useState(false)
   const [isStartupReminder, setIsStartupReminder] = useState(false)
+  /**
+   * 新手引导是否显示。
+   *
+   * 判定**只做一次**（启动闸门放行的那一刻），之后完全由事件/回调驱动：
+   * 引导自己关掉、或设置页「重新查看新手引导」把它叫回来。
+   * 别看成一个"每次渲染都算一遍"的派生值 —— 那样一关就会立刻被判定重新打开。
+   */
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { post, get } = useApi()
@@ -48,6 +58,27 @@ function AppShell() {
     if (!mobile) return
     void maintainLocalData()
   }, [mobile])
+
+  // 新手引导：**启动闸门放行的那一刻**判定一次。
+  //
+  // 🔴 判定必须在这里（而不是某个渲染表达式里）：闸门打开前组件在返回加载页，
+  //    那时判定结果会被立刻丢弃；而放行后再判定，「显示引导」与「渲染主界面」
+  //    落在同一帧 —— 不会先闪一下主界面再盖上遮罩。
+  // 🔴 判定读的是 `localStorage`（同步），不依赖后端就绪：桌面端的兜底计时器
+  //    到点时后端**可能还没起来**，若把判定挂在后端上，首次引导会随网络/启动快慢时有时无。
+  useEffect(() => {
+    if (backendReady && !isOnboardingDone()) setOnboardingOpen(true)
+  }, [backendReady])
+
+  // 设置页「重新查看新手引导」→ 事件唤回（与 `show-reminder-modal` 同一套模式，
+  // 免得把 App 的 state 通过 props 一层层传进三页路由）。
+  // ⚠️ 刻意**不**清标志：标志的语义是"这台设备上看过至少一次"，
+  //    回看不该改变"下次启动是否自动显示"。
+  useEffect(() => {
+    const handler = () => setOnboardingOpen(true)
+    window.addEventListener('show-onboarding', handler)
+    return () => window.removeEventListener('show-onboarding', handler)
+  }, [])
 
   useEffect(() => {
     if (window.electronAPI) {
@@ -178,9 +209,11 @@ function AppShell() {
     )
   }
 
+  // 新手引导与提醒弹窗**互斥**：两个都关不掉的遮罩叠在一起，用户只能在两层之间猜。
+  // 引导开着时先不渲染提醒；引导关掉后若提醒仍待处理，这个条件自然又成立，它会自己出现。
   const reminderModal = (
     <AnimatePresence>
-      {reminderVisible && (
+      {reminderVisible && !onboardingOpen && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -247,6 +280,10 @@ function AppShell() {
     </AnimatePresence>
   )
 
+  // 新手引导的挂载点。**常驻**渲染（用 `open` 控制显隐）而不是条件挂载 ——
+  // 条件挂载会让它内部的 `AnimatePresence` 跟着卸载，退场动画永远不播（一闪就没了）。
+  const onboarding = <Onboarding open={onboardingOpen} onDone={() => setOnboardingOpen(false)} />
+
   // ---- 移动端布局：紧凑顶栏 + 内容 + 底部标签栏 ----
   if (mobile) {
     return (
@@ -286,6 +323,7 @@ function AppShell() {
 
         <BottomTabs />
         {reminderModal}
+        {onboarding}
       </div>
     )
   }
@@ -308,6 +346,7 @@ function AppShell() {
       </main>
 
       {reminderModal}
+      {onboarding}
     </div>
   )
 }
