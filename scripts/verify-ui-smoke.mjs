@@ -42,7 +42,8 @@
  *   - 客户端路由（点导航后 URL 变化但**不整页刷新**、目标页渲染出来）
  *   - 设置页显示的版本号 = `package.json` 的版本（版本漂移在界面层也能抓到）
  *   - 未捕获异常、非预期的控制台错误、非预期资源加载失败
- *   - 可选：每页截图留证（`--evidence=<目录>`）
+ *   - 可选：截图留证（`--evidence=<目录>`）—— 每页一张，另加**新手引导的第 1 / 第 4 步**各一张
+ *     （引导是视觉产品，"排版塌了/按钮被遮"这类问题断言看不出来）
  * 不覆盖（如实记录，别读成"验过了"）：
  *   - **摄像头与姿态推理**：无头环境没有摄像头；plain `vite build` 的 dist 里
  *     也没有 MediaPipe 的 wasm/模型（那是 `cap-build` 才补的）。
@@ -624,6 +625,27 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
     return
   }
 
+  /**
+   * 截图留证（仅 `--evidence=` 时）。
+   *
+   * 引导是**视觉**产品：断言只能证明"文案对、行为对"，而**排版塌了 / 文字溢出 /
+   * 按钮被遮住**它一条都看不见。所以第 1 步与最后一步各留一张图给人看 ——
+   * 改文案或改步数的人应该顺手翻一眼这两张。
+   */
+  const shoot = async (tag) => {
+    if (!EVIDENCE_DIR) return
+    await sleep(SETTLE_MS)
+    const shot = await cdp.send(
+      'Page.captureScreenshot',
+      { format: 'png', captureBeyondViewport: false },
+      sessionId,
+    )
+    fs.writeFileSync(
+      path.join(EVIDENCE_DIR, `${c.name}-onboarding-${tag}.png`),
+      Buffer.from(shot.data, 'base64'),
+    )
+  }
+
   // ② 起始位置
   const first = await evaluate(cdp, sessionId, readStep)
   const info = first.value
@@ -638,9 +660,9 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
   )
   run.check(info.next, `${where} 第 1 步有「下一步」`)
   run.check(info.skip, `${where} 第 1 步能跳过（不是强制走完）`, '没有「跳过」按钮')
+  await shoot('1')
 
-  // ③ 逐步走完：每点一次，标题都必须**变**
-  //    只断言"遮罩还在"会漏掉"卡在第 1 步不动"；只断言"点了有反应"会漏掉"四步同一份文案"。
+  // ③ 逐步走完：每点一次，标题都必须**变**  //    只断言"遮罩还在"会漏掉"卡在第 1 步不动"；只断言"点了有反应"会漏掉"四步同一份文案"。
   const titles = [info.title]
   const bodies = [info.body]
   let last = info
@@ -705,6 +727,51 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
     `${where} 第 4 步的自启说明与能力一致（${c.autoStart ? '应有' : '应无'}）`,
     `第 4 步实际文案：${step4.slice(0, 140)}`,
   )
+  await shoot('4')
+
+  // ③c 小屏兜底：把视口压到 **375×340**（刻意比任何在售机型都矮）再读**卡片**的位置。
+  //
+  // 为什么用这么极端的尺寸：真实小屏这一档**当前文案量放得下** —— 实测卡片高 **376px**
+  // （375×420 下 `bottom=398 < 420` 照样通过），所以拿真实尺寸去断言等于写一条
+  // **永远绿的断言**，本项目明令禁止（变异脚本 O10 第一次就是这么栽的）。
+  // 压到 340 之后可用高度只剩 308 ⇒ 内容必定溢出，验的是**兜底机制**：
+  // 卡片必须仍被限制在视口内且可滚动。少了 `maxHeight` / `overflowY`，
+  // 卡片会比视口还高、底部主按钮被推出屏幕，而遮罩挡着底层、页面又不能滚
+  // ⇒ 用户**卡死在引导里**。
+  // ⚠️ 别把这一步读成"真实小屏上有问题"：它压的是兜底，不是当前观感。
+  if (c.form === '移动端') {
+    await cdp.send(
+      'Emulation.setDeviceMetricsOverride',
+      { width: 375, height: 340, deviceScaleFactor: 2, mobile: true },
+      sessionId,
+    )
+    await sleep(300)
+    const fit = await evaluate(cdp, sessionId, `(() => {
+         const root = document.querySelector(${SEL_Q});
+         const card = root && root.firstElementChild;
+         if (!card) return null;
+         const r = card.getBoundingClientRect();
+         return {
+           top: Math.round(r.top),
+           bottom: Math.round(r.bottom),
+           innerH: window.innerHeight,
+           scrollable: card.scrollHeight > card.clientHeight + 4,
+         };
+       })()`)
+    const v = fit.value
+    run.check(
+      !!(v && v.top >= 0 && v.bottom <= v.innerH + 1),
+      `${where} 内容比视口高时卡片仍被限制在视口内（maxHeight 兜底）`,
+      `卡片 ${JSON.stringify(v)} —— 卡片比视口还高，底部按钮被推出屏幕`,
+    )
+    run.check(
+      !!(v && v.scrollable),
+      `${where} 内容比视口高时卡片内容可滚动（overflowY 兜底）`,
+      `卡片 ${JSON.stringify(v)} —— 放不下又滚不动，用户点不到按钮`,
+    )
+    await cdp.send('Emulation.setDeviceMetricsOverride', { ...c.viewport }, sessionId)
+    await sleep(200)
+  }
 
   // ④ 收尾：遮罩消失 + 标志落盘
   const clickedDone = await evaluate(cdp, sessionId, clickByText('开始使用'))
@@ -793,13 +860,22 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
 
   // 把 URL 交还给 ROUTES 段：`#/` 那一条**不点导航**（它假定启动就落在活动页），
   // 所以必须先回到 `/`，否则它会拿设置页的内容去对活动页的文案。
-  await evaluate(cdp, sessionId, `(() => {
-       const a = document.querySelector('a[href="#/"]'); if (a) a.click(); return true;
-     })()`)
-  await waitFor(cdp, sessionId, `location.hash === '#/' || location.hash === ''`, {
-    timeout: 4000,
-    label: `${where} 回到活动页`,
-  })
+  //
+  // ⚠️ 这段单独包 try/catch：它失败只该记一条断言失败，**不该让整轮守卫崩掉**。
+  //    未捕获的 `waitFor` 超时会冒到 main 的 catch，把结论变成
+  //    `::error::UI 冒烟执行失败`（一条 `✗` 都没有）—— 那是"假红"，
+  //    与"假绿"一样有害：变异脚本会把这种轮次误读成"变异没被抓住"（实测踩到）。
+  try {
+    await evaluate(cdp, sessionId, `(() => {
+         const a = document.querySelector('a[href="#/"]'); if (a) a.click(); return true;
+       })()`)
+    await waitFor(cdp, sessionId, `location.hash === '#/' || location.hash === ''`, {
+      timeout: 6000,
+      label: `${where} 回到活动页`,
+    })
+  } catch (e) {
+    run.fail(`${where} 回到活动页`, e.message)
+  }
 }
 
 // ─────────────────────────── 主流程 ───────────────────────────
@@ -982,7 +1058,14 @@ async function main() {
       // 必须跑在 ROUTES **之前**（引导段自己会把它关掉）：引导的遮罩盖在页面上，
       // 但下层仍挂在 DOM 里，`innerText` 两层都读得到 —— 开着遮罩去断言页面文案，
       // 等于把"被盖住了"验成"渲染得出来"。
-      await checkOnboarding(cdp, sessionId, run, c, ONBOARDING_KEY)
+      //
+      // ⚠️ 整段包 try/catch：段落内部任何未捕获异常（多为 Chrome 抖动导致的
+      //    `waitFor` 超时）都只记一条失败，**不让整轮守卫变成"执行失败"**。
+      try {
+        await checkOnboarding(cdp, sessionId, run, c, ONBOARDING_KEY)
+      } catch (e) {
+        run.fail(`${c.name} 新手引导`, `段落异常：${e.message}`)
+      }
       // 引导段内部 reload 过一次（验"再次打开不再出现"），哨兵随之消失 → 重挂。
       // ROUTES 靠它证明"点导航没有整页刷新"，少了这一步会全线误报。
       await evaluate(cdp, sessionId, `window.__ngSmokeSentinel = 'alive'; true`)

@@ -103,6 +103,12 @@ export default function Onboarding({ open, onDone }: { open: boolean; onDone: ()
               border: '1px solid var(--border)',
               display: 'flex',
               flexDirection: 'column',
+              // 🔴 小屏（375×667 这类）上第 4 步的文字最多，卡片会比视口还高 ——
+              //    没有这两条，底部的主按钮会被推到屏幕外，**用户根本点不到「开始使用」**，
+              //    而且遮罩挡着底层、页面又不能滚，直接卡死在引导里。
+              //    （`verify-ui-smoke.mjs` 会把视口压到 375×667 断言按钮仍在视口内。）
+              maxHeight: '100%',
+              overflowY: 'auto',
             }}
           >
             <div
