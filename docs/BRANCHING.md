@@ -118,6 +118,27 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 > 五个 job 全部 `completed/skipped`** —— 这就是"推 `main` 只跑守门、不打包"这条规则的**真凭实据**。
 > （在此之前它只是一行 `if:`，没人验过 GitHub 真的会跳过。）
 
+> 🔴 **`release/**` 链路的首次实效记录（2026-09-29，v1.7.0；**第一次实跑就抓到一处真缺陷**）**
+>
+> 上面那段当时只敢写到"`release/**` 与 `tag` 两条链路**仍未实跑**"。当天就实跑了，结论：
+>
+> - 推 `release/v1.7.0`（run **`36528065523`**）：**守门绿（2m5s，CI 上跑通了 `verify:ui`）**、
+>   四个打包 job 全部启动并完成 —— 也就是说「推发版分支就出包」**确实生效了**。
+> - **但最后一个 job 失败**：`branch release/v1.7.0 与 package.json 版本 1.7.0 不一致`，
+>   紧接着一句 `请先把版本号 bump 到位：node scripts/set-version.js **v**1.7.0`。
+>   那句"建议"里带着 `v` 就是线索 —— `set-version.js` 要的是**不带 v** 的版本号。
+>   根因：`TAG="v${GITHUB_REF_NAME#release/}"`。分支名已经叫 `release/v1.7.0`（带 v），
+>   剥掉 `release/` 得到 `v1.7.0`，再补一个 `v` ⇒ **`vv1.7.0`**，比对基准变成 `v1.7.0` ≠ `1.7.0`。
+>   四个端的包都构建好了，**却一个资产都没发出去**。（已用 bash 逐字复现，不是推断。）
+> - 修法不是改分支名：分支名带 `v` 既是本文档与 §一 的约定，也是 `concurrency.group`
+>   把 tag 归一化到同一并发组（`verify:ci` 断言 15）的前提。改成把分支名的 `v` **可选地**剥掉：
+>   `BRANCH_VER="${GITHUB_REF_NAME#release/}"; TAG="v${BRANCH_VER#v}"` ——
+>   于是 `release/v1.7.0`、`release/1.7.0`、`release/v1.7.0-rc1` 三种写法都落到同一个 TAG。
+> - 已补守卫 **`verify:ci` 16b**（+ 变异 `C16`：退回旧写法必须红）。
+>   ⚠️ 这一条属于**第三类失效**："射程"没问题、"作用域"也没问题，**是那一行自己的表达式写错了** ——
+>   本地 YAML 与 actionlint 都是绿的，只有**真的跑一次**才会暴露。
+>   **教训：「流程写下来」≠「流程跑通过」；没跑过的链路，文档里就要写着"没跑过"。**
+
 **守门**（`verify` job）包含：类型检查、期望值是否与生成器同步、`verify:parity`、
 `verify:schema`、`verify:exercises`、`verify:readme`、`verify:ci`、`build:web` + `verify:ui`、
 `set-version --check`。
