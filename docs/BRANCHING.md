@@ -106,6 +106,18 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 | 推 tag `v*` | ✅ | ✅ | ✅ 允许覆盖 |
 | Actions 手动 `workflow_dispatch` | ✅ | ✅ | —（只构建） |
 
+> **首次生效记录（2026-09-29，实测，不是推断）**
+>
+> 模型上线时推了一次 `main`，**第一次是失败的**：`cancel-in-progress` 忘了包 `${{ }}`，
+> GitHub **拒掉了整个工作流文件** —— run `36522483327` 的 run 名显示成
+> `.github/workflows/build.yml`（不是「四端构建」）、`/jobs` 返回空、`check-runs` 也为空。
+> 本地 `yaml.load()` 与 `verify:ci` 都是绿的（详见 §五 与铁律 #59）。
+>
+> 修好后重推（run **`36522835201`**）：**守门 16 步全绿**（含新增的第 13 步「CI 工作流守卫」），
+> 而 **`Windows 安装包` / `macOS 安装包` / `Android APK` / `iOS 归档` / `汇总产物 · 创建/更新 draft Release`
+> 五个 job 全部 `completed/skipped`** —— 这就是"推 `main` 只跑守门、不打包"这条规则的**真凭实据**。
+> （在此之前它只是一行 `if:`，没人验过 GitHub 真的会跳过。）
+
 **守门**（`verify` job）包含：类型检查、期望值是否与生成器同步、`verify:parity`、
 `verify:schema`、`verify:exercises`、`verify:readme`、`verify:ci`、`build:web` + `verify:ui`、
 `set-version --check`。
