@@ -117,7 +117,7 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 
 ## 五、这套规则自己也有守卫
 
-`npm run verify:ci` —— 14 条断言，盯的就是上面那张表：
+`npm run verify:ci` —— **15 条断言**，盯的就是上面那张表：
 
 | 断言 | 抓什么 |
 |---|---|
@@ -128,10 +128,34 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 | 8 | 🔴 **`--draft` 闸门被去掉**（之后每次打 tag 都自动对外发布） |
 | 9 | "已发布不许覆盖"的判断条件被掏空（护栏还在但永远不触发） |
 | 10 | `concurrency` 改成恒真（tag 构建半路被取消） |
+| 10b | 🔴 **`cancel-in-progress` 没包 `${{ }}`** —— 本地 YAML 合法，但 **GitHub 拒掉整个工作流文件** |
 | 11 | **反向对照**：`verify` job 被加上 `if:`（守门变成"有条件才跑"） |
 
-它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C8 八条变异**全部被抓住**，
+它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C9 九条变异**全部被抓住**，
 外加 N1 负向对照（只改一条注释，守卫必须保持绿 —— 证明它盯的是结构与条件，不是"文本变了就红"）。
+
+### ⚠️ 本守卫查不了"GitHub 认不认"
+
+它查的是**"这些语义还在不在"**，不是"这个文件合法"。第 10b 条就是这么补出来的 ——
+**事故先发生，才有的断言**：把 `cancel-in-progress` 从 `${{ … }}` 改成折叠标量后，
+本地 `yaml.load()` 完全正常，`verify:ci` 也全绿，但推上去的 run 里**一个 job 都没有**，
+页面只说 `workflow file issue`（`if:` 可以省略 `${{ }}` 是它**专属**的例外，别的字段不适用）。
+
+所以 **改完 `build.yml` 请再用 `actionlint` 过一遍**（GitHub Actions 的语义校验器）：
+
+```bash
+gh release download v1.7.12 -R rhysd/actionlint \
+  -p 'actionlint_*_windows_amd64.zip' -D .buildenv/actionlint
+(cd .buildenv/actionlint && unzip -o -q actionlint_*.zip)
+.buildenv/actionlint/actionlint.exe .github/workflows/build.yml
+```
+
+它一条命令就能指出上面那次事故（`expecting a single ${{...}} expression or boolean literal`），
+还能抓 context 名拼错、`needs` 指向不存在的 job 等一整类问题。
+
+**刻意没接进 CI**：那会给守门引入一个**需要联网下载的二进制依赖**，而本项目的取舍是
+"守卫的依赖越少，守卫自己坏掉的概率越低"（同 `verify-readme.mjs`）。代价就是：
+**这一步是人工的，别忘**。
 
 **改 `build.yml` 之前先读本文件与那个变异脚本。**
 
