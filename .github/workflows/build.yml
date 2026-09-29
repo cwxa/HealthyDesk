@@ -6,8 +6,13 @@
 #     - macOS：安装包要内置一个 **macOS 原生的 Python 后端**，PyInstaller 不能交叉编译
 #   因此这两个产物只能交给 GitHub 的 macOS runner。
 #
-# 触发方式：
-#   - 打 tag（v*）→ 构建四端，并自动创建一个 **draft Release**（CD）
+# 触发方式（分支模型见 docs/BRANCHING.md）：
+#   - 推 `release/vX.Y.Z` 分支 → 构建四端，并**创建/更新该版本的 draft Release**（CD）。
+#     版本号**取自分支名**，与 package.json 必须一致；目标是**已发布**的 Release 时直接失败
+#     （已发布的资产不可被覆盖，要发行就升版本号）。
+#   - 打 tag（v*）→ 同上；差别是 tag 被当作**定稿动作**，允许覆盖已发布 Release 的资产。
+#   - 推 main / feat|fix|chore|docs 分支 → **只跑守门（verify）**，不打包。
+#     （此前推 main 是**完全不触发**的 —— CI 对主干零设防，这是补上的洞。）
 #   - Actions 页面手动触发（workflow_dispatch）→ 只构建，不碰 Release
 #
 # 两道闸门（都是刻意保留的，不是没做完）：
@@ -28,18 +33,31 @@ name: 四端构建
 on:
   workflow_dispatch:
   push:
+    branches:
+      # 主干：每次合进来都要过守门。
+      - main
+      # 发版专线：推它 = 构建四端 + 创建/更新该版本的 draft Release（版本号取自分支名）。
+      - 'release/**'
+      # 开发分支：只跑守门，不打包（打包 job 的 `if` 里已排除它们）。
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'docs/**'
     tags:
       - 'v*'
 
 permissions:
   contents: read
 
-# 同一 ref 重复触发时，取消上一次还没跑完的。
-# ⚠️ 只在手动触发时取消：**tag 触发的构建必须跑完**（它后面接着发 Release），
-#    半路取消会留下一个空壳 release。
+# 同一 ref 重复触发时，取消上一次还没跑完的（**哪些能取消**见下面 cancel-in-progress）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+  # 只有「纯守门」的触发允许被后来的推送取消（迭代快、也便宜）。
+  # 🔴 tag 与 release/** 分支**必须跑完**：它们后面接着写 Release，
+  #    半路取消会留下一个资产残缺的 release。
+  cancel-in-progress: >-
+    !startsWith(github.ref, 'refs/tags/') &&
+    !startsWith(github.ref, 'refs/heads/release/')
 
 jobs:
   # ─────────────────────────────────────────────────────────────
@@ -137,6 +155,13 @@ jobs:
       - name: README 下载区守卫
         run: npm run verify:readme
 
+      # 本工作流自己的守卫：on:/if:/concurrency 决定了「什么触发构建、什么对外发布」，
+      # 改错了既没有编译错误、也没有别的测试会红。盯的是 --
+      # 打包 job 的 if 还在不在、`--draft` 闸门在不在、tag 会不会被半路取消。
+      # 纯文本守卫（按缩进取块），不需要构建，也不装依赖。
+      - name: CI 工作流守卫
+        run: npm run verify:ci
+
       # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
       # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
       # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，
@@ -162,6 +187,13 @@ jobs:
     name: Windows 安装包
     runs-on: windows-latest
     needs: verify
+    # 🔴 只有「要出产物」的触发才打包：release/** 分支、tag、手动。
+    #    推 main 与 feat|fix|chore|docs 分支**只跑守门** —— 否则每次提交都要烧四个 runner，
+    #    而绝大多数提交根本不打算发版。
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
@@ -229,6 +261,11 @@ jobs:
     name: macOS 安装包（${{ matrix.arch }}）
     runs-on: ${{ matrix.runner }}
     needs: verify
+    # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -426,6 +463,11 @@ jobs:
     name: Android APK
     runs-on: ubuntu-24.04
     needs: verify
+    # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
@@ -594,6 +636,11 @@ jobs:
     # macos-15：`macos-14` 的弃用支持 2026-11-02 到期，别贴着期限走
     runs-on: macos-15
     needs: verify
+    # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
@@ -698,15 +745,18 @@ jobs:
   #        gh release upload <tag> "release2/NeckGuardian-<ver>-android-release.apk" --clobber
   # ─────────────────────────────────────────────────────────────
   release:
-    name: 发布 Release（draft）
+    name: 汇总产物 · 创建/更新 draft Release
     runs-on: ubuntu-24.04
     needs:
       - desktop-windows
       - desktop-macos
       - mobile-android
       - mobile-ios
-    # 只有打 tag 才发布；手动 dispatch 只构建、不碰 Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 发布只发生在「定稿性」的触发上：tag、或 release/** 分支。
+    # 手动 dispatch 只构建、不碰 Release。
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: write
     steps:
@@ -731,17 +781,32 @@ jobs:
           echo "=== 待发布 ==="
           ls -lh dist-release/
 
-          # tag 与 package.json 版本必须对得上，否则会发出版本号错乱的 Release。
+          # 版本号的唯一来源按触发分两种：
+          #   - tag  v1.3.8 / v1.3.8-rc1                → 版本取 tag 名
+          #   - 分支 release/v1.3.8 / release/v1.3.8-rc1 → 版本取分支名，tag 补成 v1.3.8
+          # 两者都必须与 package.json 一致，否则会发出版本号错乱的 Release。
           # 允许预发布后缀：v1.3.8-rc1、v1.3.8-cdverify 都按 1.3.8 校验
           # （这样预演 CD 不用动 package.json 的版本号）。
           VER=$(node -p "require('./package.json').version")
-          TAG="${GITHUB_REF_NAME#v}"
-          BASE="${TAG%%-*}"
-          echo "package.json=$VER  tag=$TAG  (比对基准=$BASE)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            FROM_TAG=1
+          else
+            TAG="v${GITHUB_REF_NAME#release/}"
+            FROM_TAG=0
+          fi
+          BASE="${TAG#v}"; BASE="${BASE%%-*}"
+          echo "package.json=$VER  ref=${GITHUB_REF_NAME}  目标 tag=$TAG  (比对基准=$BASE)"
           if [ "$VER" != "$BASE" ]; then
-            echo "::error::tag $TAG 与 package.json 版本 $VER 不一致"
+            echo "::error::${GITHUB_REF_TYPE} ${GITHUB_REF_NAME} 与 package.json 版本 $VER 不一致"
+            echo "::error::分支构建请先把版本号 bump 到位：node scripts/set-version.js ${BASE}"
             exit 1
           fi
+          # 写成 env 给后面的步骤用：每步各自重推一遍 tag，推错了就是发错版本。
+          {
+            echo "RELEASE_TAG=$TAG"
+            echo "FROM_TAG=$FROM_TAG"
+          } >> "$GITHUB_ENV"
 
       - name: 剔除不可分发的 Android debug 包
         run: |
@@ -777,9 +842,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="$RELEASE_TAG"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在 → 覆盖上传资产"
+            IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+            # 🔴 已发布的 Release 是**对外契约**：资产和 SHA256SUMS 已经被人下载、也被
+            #    README 的 releases/latest 指向。分支构建只允许写 draft —— 要发行就往上
+            #    升版本号，不要去覆盖别人手上的下载。
+            #    （tag 触发是定稿动作，保留原有的 --clobber 覆盖能力。）
+            if [ "$IS_DRAFT" != "true" ] && [ "$FROM_TAG" != "1" ]; then
+              echo "::error::Release $TAG 已发布（非 draft），分支构建不许覆盖它的资产"
+              echo "::error::请升版本号后重开 release 分支：node scripts/set-version.js <新版本>"
+              exit 1
+            fi
+            echo "Release $TAG 已存在（draft=$IS_DRAFT）→ 覆盖上传资产"
             gh release upload "$TAG" dist-release/* --clobber
           else
             gh release create "$TAG" \
@@ -798,6 +873,6 @@ jobs:
             echo "人工确认无误后发布："
             echo
             echo '```'
-            echo "gh release edit ${GITHUB_REF_NAME} --draft=false --latest"
+            echo "gh release edit ${RELEASE_TAG} --draft=false --latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
