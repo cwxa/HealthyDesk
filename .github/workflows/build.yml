@@ -55,9 +55,11 @@ concurrency:
   # 只有「纯守门」的触发允许被后来的推送取消（迭代快、也便宜）。
   # 🔴 tag 与 release/** 分支**必须跑完**：它们后面接着写 Release，
   #    半路取消会留下一个资产残缺的 release。
-  cancel-in-progress: >-
-    !startsWith(github.ref, 'refs/tags/') &&
-    !startsWith(github.ref, 'refs/heads/release/')
+  # 🔴 必须写成 `${{ }}`：`cancel-in-progress` 只接受**单个 `${{...}}` 表达式或布尔字面量**，
+  #    不写花括号会被当成纯文本 → GitHub 拒掉**整个工作流文件**。
+  #    实测 2026-09-29：推上去的 run 里**一个 job 都没有**，页面只说 "workflow file issue"，
+  #    本地 YAML 解析完全正常（`yaml.load` 通过）—— 是 GitHub 专属语义，不是 YAML 语法。
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/heads/release/') }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────

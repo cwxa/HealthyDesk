@@ -28,9 +28,29 @@
  *   9) `release` job 仍保留"**已发布的 Release 不许被分支构建覆盖**"的护栏，
  *      且断言的是**判断条件原文 + `exit 1`**（只查变量名的话，把条件掏空也抓不到）
  *   10) `concurrency.cancel-in-progress` 排除 tag —— tag 构建半路被取消会留下空壳 release
+ *   10b) `cancel-in-progress` 必须是 `${{ }}` 表达式或布尔字面量。
+ *       🔴 2026-09-29 实测踩到：写成折叠标量（`>-` + 裸表达式）时**本地 YAML 解析完全正常**，
+ *       但 GitHub 拒掉**整个工作流文件** —— 推上去的 run 里**一个 job 都没有**。
+ *       `if:` 可以省略 `${{ }}` 是它**专属**的例外，别的字段不适用。
  *   11) **反向对照**：`verify` job **不许有 `if:`**（守门必须对所有触发无条件跑）。
  *       这条也是给守卫自己照镜子的：它证明前面几条读的是**各自的作用域**，
  *       而不是"拿全文随便 includes 一下"。
+ *
+ * ## ⚠️ 本守卫的射程边界（如实记下）
+ *
+ * 它能查的是**"这些语义还在不在"**，查不了"GitHub 认不认这个文件"。
+ * 上一条 10b 就是这么补出来的 —— 事故先发生，才有的断言。
+ * **改完 `build.yml` 请再用 `actionlint` 过一遍**（GitHub Actions 的语义校验器，
+ * 能抓 `${{ }}`、context 名拼错、`needs` 指向不存在的 job 等一整类问题）：
+ *
+ * ```bash
+ * gh release download v1.7.12 -R rhysd/actionlint -p 'actionlint_*_windows_amd64.zip' -D .buildenv/actionlint
+ * (cd .buildenv/actionlint && unzip -o -q actionlint_*_windows_amd64.zip)
+ * .buildenv/actionlint/actionlint.exe .github/workflows/build.yml
+ * ```
+ *
+ * 没把它接进 CI：那会给守门引入一个**需要联网下载的二进制依赖**，
+ * 而本项目的取舍是"守卫的依赖越少越不容易自己坏掉"（见 `verify-readme.mjs` 同一段取舍）。
  *
  * ## 为什么是文本断言而不是 YAML 解析
  *
@@ -205,6 +225,19 @@ check(
   conc.includes('refs/tags/'),
   '10) tag 构建不被后来的推送取消（半路取消会留下空壳 release）',
   `实际 cancel-in-progress：${(conc.match(/cancel-in-progress:[\s\S]*/) || [''])[0].trim()}`,
+)
+
+// 🔴 实测踩到（2026-09-29）：`cancel-in-progress` 写成折叠标量（`>-` + 裸表达式）时，
+//    本地 `yaml.load()` **完全正常**，但 GitHub 会拒掉**整个工作流文件** ——
+//    推上去的 run 里**一个 job 都没有**，页面只说 "workflow file issue"。
+//    原因：该字段只接受**单个 `${{...}}` 表达式或布尔字面量**，
+//    **不适用 `if:` 那种"可以省略 `${{ }}`"的例外**（那是 `if` 专属）。
+//    这条断言就是那次事故的牙齿。
+const cancelVal = ((conc.match(/^ {2}cancel-in-progress:(.*)$/m) || [])[1] || '').trim()
+check(
+  /^\$\{\{[\s\S]*\}\}$/.test(cancelVal) || cancelVal === 'true' || cancelVal === 'false',
+  '10b) cancel-in-progress 是 `${{ }}` 表达式或布尔字面量（裸文本会被 GitHub 拒掉整个文件）',
+  `实际：${cancelVal || '(空)'} —— 必须包 ${{ }}，别写折叠标量`,
 )
 
 // ── 反向对照 ───────────────────────────────────────────────────────────────
