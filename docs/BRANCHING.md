@@ -1,7 +1,7 @@
 # 分支模型与发版流程
 
 > 2026-09-29 起生效。**CI 触发的唯一真相来源**是 `.github/workflows/build.yml`，
-> 由 `npm run verify:ci` 守着（21 条断言 + 变异自证）。
+> 由 `npm run verify:ci` 守着（22 条断言 + 变异自证）。
 >
 > 为什么单独写一份：以前 `main` 是**裸的** —— 推上去 CI **什么都不跑**（工作流的 `on:`
 > 只有 tag 与手动），而"推发版分支就出包"这件事没有任何地方写下来过。
@@ -181,7 +181,7 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 
 ## 五、这套规则自己也有守卫
 
-`npm run verify:ci` —— **21 条断言**，盯的就是上面那张表：
+`npm run verify:ci` —— **22 条断言**，盯的就是上面那张表：
 
 | 断言 | 抓什么 |
 |---|---|
@@ -199,9 +199,10 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 | 14 | `release` job 的**上传后回读校验**被删掉（资产可能缺、校验文件名可能与线上不一致） |
 | 15 | `concurrency.group` 改回按 `github.ref`（分支与 tag 并发写同一个 Release） |
 | 16 | 某个打包 job 的**同源校验**被拿掉（那个端可以打包出旧前端而全程绿） |
+| 16b | 🔴 `release` job 的「分支名 → 版本」**把 `release/v1.7.0` 拼成 `vv1.7.0`**（四个端的包都打好了，却一个资产都发不出去 —— 见 §四 的首次实效记录） |
 | 17 | Windows 或 macOS 的**后端启动冒烟**被删掉 / 被掏空 |
 
-它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C15 十五条变异**全部被抓住**，
+它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C16 十六条变异**全部被抓住**，
 外加 N1/N2 两条负向对照（N1 只改一条注释、N2 只改 `timeout-minutes` 的取值 45→60，
 两种情况守卫**都必须保持绿** —— 证明它盯的是结构与条件，不是"文本变了就红"或"把数字写死"）。
 
