@@ -29,7 +29,8 @@ import {
  *     旧实现还**三项取最大值**，于是"肩高差很大"能冒充"头部侧屈的幅度"
  *     （= 这个动作的评分在看别的部位）。`metric` 专治这一条。
  *     ⚠️ 副作用：**动作分数值会变**，历史记录与新记录不可比 →
- *     `ACTION_SCORES_VERSION` 1 升 2，显示端把老明细标成「旧口径」。
+ *     `ACTION_SCORES_VERSION` 1 → 2（v1.7.0 改成活动范围）→ 3（v1.7.1 加时间支撑），
+ *     显示端按**版本**把老明细标成「旧口径」并说明是哪一把尺子。
  *   - 每帧活动量先经 `pyRound1` 再做**一切**比较 —— 用户看到的数字与系统判定
  *     必须同源（S1 的教训：`raw = 59.94` 取整成 60 却提示「幅度不足」）。
  *   - `heldMs` 是左黎曼和：只累加 `activity[i] >= ACTIVITY_ONSET` 的区间，
@@ -37,8 +38,19 @@ import {
  *   - `holdRatio` 的分母是**标称时长**，不是实际采集跨度（用户离开画面
  *     不能让分母变小）；结果钳到 [0, 1] —— 采样跨度偶尔会略超标称时长
  *     （计时器与帧率不可能严丝合缝），显示成 183% 只会让人困惑。
+ *   - 🔴 **范围的两端还必须被时间支撑**（v1.7.1 第三次返工）：`max` / `min` 都只由
+ *     **单帧**决定，所以一次抖动（含跟踪失败返回 `0.0`）就能偷走 `min`，把
+ *     「12 秒一动不动」变成「一直保持着」（实测 82 分、`completed`）；往复计数是
+ *     同一个病 —— `cycles` 只要「某帧 ≥ onset、随后某帧 ≤ trough」，于是
+ *     **3 处单帧跳变 = 3 次环绕**（实测 84 分）。现在先用 `supportFiltered()`
+ *     把占时不足 `MIN_POSE_MS` 的孤立段钳回邻居之间，再算范围。
+ *     v1.7.0 修的是**减谁**（活动范围 vs 绝对偏离），这一次修的是**减的东西算不算数**。
  *   - ⚠️ **至少要两帧**才谈得上"范围"：只有一帧时范围 = 0，与"一帧都没有"
  *     同样按 `idle` 处理（**不能**退回用绝对偏离顶上，那会把刚修掉的缺陷放回来）。
+ *   - ⚠️ **已知未覆盖**：`supportFiltered()` 不动首段 / 末段（没有"两侧邻居"就无法
+ *     判断它是孤立尖峰还是"序列从这里才开始"）⇒ **首帧 / 末帧的抖动仍可能偷走基线**。
+ *     首帧尤其现实（上游第一帧就是检测到的第一帧）。没修的原因与后端同（见
+ *     `pose_detector.py`：三个量全是 `abs()`，特征层没有方向信息）。
  *
  * ⚠️ 改动本文件必须同步改 `backend/services/exercise_quality.py`，
  * 并跑 `npm run verify:parity`（`verify-exercise-quality.mjs` 会逐条对拍）。
@@ -97,6 +109,8 @@ export const HOLD_TARGET_RATIO = 0.6
 export const CYCLE_TROUGH_RATIO = 0.4
 export const DEFAULT_MIN_CYCLES = 3
 export const MAX_FRAME_GAP_MS = 1500
+/** 一个极值 / 一次到位至少要占这么长的时间，否则算检测噪声（见 `supportFiltered`）。 */
+export const MIN_POSE_MS = 200
 
 // ---- 动作分（单个动作的成绩）----
 // 目标只有一个：**分数与判定不许互相打脸**。算法与那条核心不变量见 `scoreExercise()`。
@@ -163,16 +177,75 @@ export interface ExerciseVerdict {
  * 与旧实现位置相同：先算 raw，最后统一 `pyRound1` 一次。**不能**先把每轴各自取整
  * 再取 max —— 那会与"先取 max 再取整"分叉，凭空多出一个取整点。
  */
+/**
+ * 把「时间支撑不足」的孤立段钳回相邻两段之间（v1.7.1 第三次返工）。
+ * `backend/services/exercise_quality.py :: _support_filtered()` 的逐位等价实现。
+ *
+ * ## 为什么需要它
+ *
+ * 活动量 = `(本段 max − 本段 min) ÷ 该量静息阈值`，而 `min`（基线）由**单帧**决定。
+ * 一次反向抖动（含跟踪失败返回 `0.0`、或 EMA 还没吃掉的一次跳变）就能偷走最低位，
+ * 使整段其余帧的活动量**全部** ≥ onset ——「近 12 秒一动不动」被判成「保持到位」
+ * （实测 82 分、`completed`）。往复计数是同一个病：`cycles` 只要求
+ * 「某帧 ≥ onset、随后某帧 ≤ trough」，于是**3 处单帧跳变 = 3 次环绕**（实测 84 分）。
+ *
+ * 共同的病因是**极值没有被时间支撑**。所以：一段值如果占的时间太短，就不承认它是
+ * 一个「位」，把它钳回两侧真正站得住的值之间。
+ *
+ * ## 怎么做
+ *
+ * 先按「可分辨」切段：相邻两帧相差 ≥ 该量静息阈值就起新段。然后对**两侧都有邻居段**
+ * 的段 `k`，若 `ts[右邻居段首帧] − ts[段 k 首帧] < MIN_POSE_MS` ⇒ 判为支撑不足，
+ * 把段内每个值**钳到左右邻居段的值域之间**。
+ *
+ * 两个关键取舍（与后端注释同一份理由，这里只留结论）：
+ * - **钳到区间而非替换成邻居值**：只削掉超出邻居范围的部分，区间内部逐位不动。
+ * - **必须两侧都有邻居段**：首段 / 末段一律不动 ⇒ `MIN_POSE_MS` 只对内部短段生效。
+ * - **判据是「到右邻居段首帧的时间」而不是「段内首尾差」**：后者在单帧段上恒为 0，
+ *   会把「采样稀疏、一帧就代表 500ms」的正常帧也判成孤立。用前者之后，
+ *   **采样间隔 ≥ MIN_POSE_MS 时永远不会出现短命段**，即这条修订只对高帧率的抖动生效。
+ */
+function supportFiltered(vals: number[], ts: number[], thr: number): number[] {
+  const n = vals.length
+  if (n < 3) return vals.slice()
+  const segStart = [0]
+  for (let i = 1; i < n; i++) if (Math.abs(vals[i] - vals[i - 1]) >= thr) segStart.push(i)
+  segStart.push(n) // 哨兵，省掉「最后一段」的特判
+  const out = vals.slice()
+  for (let k = 1; k < segStart.length - 2; k++) {
+    // 跳过首段 (k=0) 与末段
+    const a = segStart[k]
+    const b = segStart[k + 1]
+    if (ts[b] - ts[a] >= MIN_POSE_MS) continue
+    let lo = Infinity
+    let hi = -Infinity
+    for (let i = segStart[k - 1]; i < a; i++) {
+      if (vals[i] < lo) lo = vals[i]
+      if (vals[i] > hi) hi = vals[i]
+    }
+    for (let i = b; i < segStart[k + 2]; i++) {
+      if (vals[i] < lo) lo = vals[i]
+      if (vals[i] > hi) hi = vals[i]
+    }
+    for (let i = a; i < b; i++) out[i] = Math.min(Math.max(vals[i], lo), hi)
+  }
+  return out
+}
+
 function amplitudesOf(frames: ExerciseFrame[], metric: ExerciseMetric): number[] {
   const metrics = metric === METRIC_ANY ? Object.keys(METRIC_FIELD) : [metric]
+  const ts = frames.map((f) => f.t)
   const series: number[][] = []
   for (const m of metrics) {
     const field = METRIC_FIELD[m]
     const thr = METRIC_THRESHOLD[m]
+    // 🔴 先削掉「没被时间支撑」的孤立段，再取最低位当基线 —— 顺序不能反：
+    // 反了的话那么一帧抖动照样能偷走 base（旧缺陷）。
+    const vals = supportFiltered(frames.map((f) => f[field]), ts, thr)
     let base = Infinity
-    for (const f of frames) if (f[field] < base) base = f[field]
+    for (const v of vals) if (v < base) base = v
     // `- base` 之后必然 ≥ 0（base 就是最小值），所以不必再 max(0, …)
-    series.push(frames.map((f) => (f[field] - base) / thr))
+    series.push(vals.map((v) => (v - base) / thr))
   }
   const out: number[] = []
   for (let i = 0; i < frames.length; i++) {
@@ -352,16 +425,17 @@ export function sessionScoreOf(items: readonly ActionScoreItem[]): number {
 /**
  * 明细文本的格式版本。将来改形态靠它区分老数据，**别靠猜结构**。
  *
- * 🔴 v1 → v2 **不是"形态"变了**（字段完全相同），而是**分数的口径变了**：
- * v1.7.0 把幅度从"绝对偏离、三项取最大"改成"该动作针对的量的活动范围"，
- * 于是同一个动作的分数在 v1 与 v2 下**不是同一把尺子**。
+ * 🔴 v1 → v2 与 v2 → v3 **都不是「形态」变了**（字段完全相同），而是**分数的口径变了**：
+ * v1.7.0 把幅度从"绝对偏离、三项取最大"改成"该动作针对的量的活动范围"（v1 → v2）；
+ * v1.7.1 又要求极值必须被 `MIN_POSE_MS` 的时间支撑（v2 → v3）——
+ * 同一串帧在 v3 下可能从 `completed` 掉到 `idle`，分数自然不在同一把尺子上。
  * 形态不变却要升版本，正是为了这件事：显示端必须能把老明细标成「旧口径」，
  * 否则用户会拿两个不可比的数字互相比较（那正是"展示了不能证明的数字"）。
  */
-export const ACTION_SCORES_VERSION = 2
+export const ACTION_SCORES_VERSION = 3
 
 /** 仍然**能解析**的历史版本（显示端要标注口径，但不必显示成 `--`）。 */
-export const ACTION_SCORES_LEGACY_VERSIONS: readonly number[] = [1]
+export const ACTION_SCORES_LEGACY_VERSIONS: readonly number[] = [1, 2]
 
 export interface ActionScoreItem {
   /** 动作库里的稳定标识（`Exercise.id`）。**不存中文名** —— 名字会随文案变，id 不会。 */
@@ -405,9 +479,12 @@ export function serializeActionScores(items: readonly ActionScoreItem[]): string
  * 老记录该列为 `NULL`，同样走 `null` 分支（那是"这个版本还没有这项数据"，
  * 与"本次没判出来"是两件事，界面文案要分开）。
  *
- * ⚠️ **`legacy` 不是"坏值"**：v1 的文本结构完全合法，只是分数用了旧口径算。
- * 把它当坏值丢掉，等于凭空抹掉用户的历史成绩；照常显示而不标注，等于让用户
- * 拿两把尺子量出来的数字互相比。所以这里**解析 + 标版本**，由显示端决定怎么说。
+ * ⚠️ **`legacy` 不是"坏值"**：v1 / v2 的文本结构完全合法，只是分数用了**当年那把尺子**算
+ * （v1 = 绝对偏离 + 三项取最大；v2 = 活动范围 + 无时间支撑）。
+ * 把它当坏值丢掉，等于凭空抹掉用户的历史成绩；照常显示而不标注理由，等于让用户
+ * 拿两把尺子量出来的数字互相比。所以这里**解析 + 标版本**，由显示端决定怎么说 ——
+ * ⚠️ 而"怎么说"**必须按版本分开**：两版口径互不相同，一句话糊过去
+ * = 用一个错的理由去解释一个不可比的数字（比不解释更误导）。
  */
 export function parseActionScoresDetailed(text: unknown): ParsedActionScores | null {
   if (typeof text !== 'string' || text === '') return null

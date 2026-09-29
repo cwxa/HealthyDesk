@@ -1375,12 +1375,14 @@ async function main() {
           if (row) {
             // 🔴 写进去的必须是**规范文本**（紧凑无空格、键序固定）——
             // 它与 `serializeActionScores()` 的输出逐字节相同，导出/导入才能跨端互换。
-            // 零明细的规范文本恰好是 `{"v":2,"items":[]}`：
-            // **不是** `{"v":2,"items":[]}` 之外的任何形态（多一个空格就红）。
+            // 零明细的规范文本恰好是 `{"v":3,"items":[]}`：
+            // **不是** `{"v":3,"items":[]}` 之外的任何形态（多一个空格就红）。
             // 🔴 版本号必须在**两处**同时改（这里 + `exerciseQuality.ACTION_SCORES_VERSION`）：
             // 它是"落库字节"与"源码常量"之间唯一的交叉校验点，漏改一处这里就红。
+            //   口径每改一次就升一次（v1 → v2 → v3），别嫌烦 —— 这个号是显示端
+            //   区分"两把尺子量出来的分数"的唯一依据。
             run.check(
-              row.action_scores === '{"v":2,"items":[]}',
+              row.action_scores === '{"v":3,"items":[]}',
               `${where} 落库的 action_scores 是规范文本（零明细）`,
               `实际：${JSON.stringify(row.action_scores)}`,
             )
@@ -1442,6 +1444,29 @@ async function main() {
                  return true;
                })()`)
 
+            // 再插一条 **v2 明细**记录：v1.7.1 起 v2 也进了历史版本（口径从"活动范围"
+            // 改成"活动范围 **+ 时间支撑**"）。它和 v1 走的是**同一个 `parsed.legacy` 分支**，
+            // 但显示端的说明文案**按版本分开说** —— 所以这条要验的不是"有没有标旧口径"
+            // （v1 那条已经验了），而是**标出来的理由对不对**。
+            // 少了它，"按版本分文案"就是一句没人守的承诺（而错理由比没理由更误导）。
+            await evaluate(cdp, sessionId, `(async () => {
+                 const db = await new Promise((res, rej) => {
+                   const r = indexedDB.open('neckguardian');
+                   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+                 });
+                 await new Promise((res, rej) => {
+                   const tx = db.transaction('activity_log', 'readwrite');
+                   tx.objectStore('activity_log').put({
+                     timestamp: new Date(Date.now() - 10800e3).toISOString(),
+                     activity_type: 'exercise', exercise_count: 7, duration_sec: 82, avg_score: 76,
+                     action_scores: '{"v":2,"items":[{"id":"neck-flex-left","score":76,"grade":"insufficient"}]}',
+                   });
+                   tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+                 });
+                 db.close();
+                 return true;
+               })()`)
+
             await evaluate(cdp, sessionId, `(() => {
                  const a = document.querySelector('a[href="#/dashboard"]'); if (a) a.click(); return true;
                })()`)
@@ -1458,6 +1483,10 @@ async function main() {
                  return {
                    n: badges.length,
                    texts: badges.map(d => d.textContent.trim()),
+                   // 旧口径的**理由**文案（按版本不同）：v1 = "偏离有多大 + 三项取最大"、
+                   // v2 = "活动范围 + 无时间支撑"。取出来是为了验"理由对不对"，
+                   // 而不只是"有没有标一个'旧口径'的章"。
+                   titles: badges.map(d => d.getAttribute('title') || ''),
                    legacyTagged: document.body.innerText.includes('旧口径'),
                  };
                })()`)
@@ -1489,6 +1518,20 @@ async function main() {
               texts.includes('88分'),
               `${where} v1 明细（旧口径）照常显示分数`,
               `实际：${JSON.stringify(texts)}`,
+            )
+            run.check(
+              texts.includes('76分'),
+              `${where} v2 明细（旧口径）照常显示分数`,
+              `实际：${JSON.stringify(texts)}`,
+            )
+            // 🔴 旧口径的**理由**必须按版本分开说：两版口径互不相同，
+            // 用一句话糊过去 = 用一个错的理由去解释一个不可比的数字（比不解释更误导）。
+            // 用户 hover 到分数上看到的就是这句。
+            const titles = (hist.ok && hist.value && hist.value.titles) || []
+            run.check(
+              titles.some((t) => t.includes('（v1）')) && titles.some((t) => t.includes('（v2）')),
+              `${where} 旧口径说明按版本分开（v1 / v2 各一句）`,
+              `实际 titles：${JSON.stringify(titles)}`,
             )
           }
         }

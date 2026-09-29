@@ -204,13 +204,15 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   const timeDisplay = isToday ? `今天 ${time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : timeStr
 
   // 🔴 活动分有**四态**，显示必须分开（判据见 `exerciseQuality.parseActionScoresDetailed`）：
-  //   `null`           → 老记录：写它的时候还没有逐动作明细，数字来自**改动前的旧口径**
-  //                      （静息分 / 逐帧达成度），与现在的成绩**不可比** → 标出来，别假装能比
-  //   `legacy` (v1)    → 有明细，但分数是 v1.7.0 **之前**的算法（幅度按绝对偏离算）——
-  //                      同样不可比，也必须标出来（这是 v1.7.0 新增的那一态）
-  //   `items: []`      → 判过了但一个动作都没判出来（摄像头没拍到人）→ 显示 `--`
-  //                      （写 0 会被读成"得了 0 分"，而 0 分是可达的：全程没动）
-  //   `items.length>0` → 本次动作成绩，与收尾页的「逐动作得分」同源
+  //   `null`              → 老记录：写它的时候还没有逐动作明细，数字来自**改动前的旧口径**
+  //                         （静息分 / 逐帧达成度），与现在的成绩**不可比** → 标出来，别假装能比
+  //   `legacy` (v1 / v2)  → 有明细，但分数是用**当年那把尺子**算的，同样不可比：
+  //                         v1 = 幅度按"绝对偏离"、三项取最大；v2 = 幅度按"活动范围"、
+  //                         但不要求极值被时间支撑。⚠️ 两版口径**互不相同**，
+  //                         所以下面的 explain 按 `parsed.version` 分开说
+  //   `items: []`         → 判过了但一个动作都没判出来（摄像头没拍到人）→ 显示 `--`
+  //                         （写 0 会被读成"得了 0 分"，而 0 分是可达的：全程没动）
+  //   `items.length>0`    → 本次动作成绩，与收尾页的「逐动作得分」同源
   const parsed = parseActionScoresDetailed(activity.action_scores)
   const legacy = parsed === null || parsed.legacy
   const items = parsed === null ? null : parsed.items
@@ -220,8 +222,13 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   if (parsed === null) {
     explain = '旧记录：当时这个分数用的是改动前的算法，与现在的「本次动作成绩」不可比'
   } else if (parsed.legacy) {
+    // 🔴 历史版本不止一个，**口径各不相同**，文案必须按版本说 ——
+    // 否则会把 v1 的记录说成"活动范围口径"（那是 v2 才有的事），
+    // 等于用一个错的理由去解释一个不可比的数字。
     explain =
-      '旧口径：这条记录的逐动作分数按 v1.7.0 之前的算法（幅度看的是"偏离有多大"而不是"动了多大范围"），与现在的分数不可比'
+      parsed.version === 1
+        ? '旧口径（v1）：分数按"偏离有多大"算、且三个维度取最大 —— 与现在的"活动范围 + 时间支撑"不可比'
+        : '旧口径（v2）：分数按"活动范围"算，但没要求这个范围的两端被时间支撑（一帧抖动也算数）—— 与现在不可比'
   } else if (items!.length === 0) {
     explain = '本次活动没有可判定的动作（摄像头没拍到人？），因此没有成绩'
   } else {

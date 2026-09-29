@@ -17,11 +17,11 @@
  *      —— 那个映射一端改了另一端没改，症状是"同一个动作在手机与电脑上看的是不同部位"。
  *   b) 样本文件一致性：载荷里的 frames/spec 必须与 scripts/samples/*.json 逐字段相同
  *      （防止"改了文件忘了重新生成"这种静默漂移）
- *   c) 判定用例（33 条，含边界、数据中断、滞回计数、取整平局点、metric 口径）六个字段逐条相等
+ *   c) 判定用例（39 条，含边界、数据中断、滞回计数、取整平局点、metric 口径、**时间支撑**）六个字段逐条相等
  *   d) 语义硬断言：三段样本三种结论、负样本必须失败、中断不计入、滞回不重复计数、
  *      hint 与 grade 一一对应、onset 与 S1 同源
  *   e) 取整灵敏度自检（守卫的守卫）
- *   f) **动作分**：同一批用例（33）+ 3 段样本 + 14 条边界合成用例，两端逐条相等。
+ *   f) **动作分**：同一批用例（39）+ 3 段样本 + 14 条边界合成用例，两端逐条相等。
  *      动作分与判定**同源**（同一份 verdict、同一个 spec），所以两条链上的任何一处漂移都红。
  *   g) **动作分的核心不变量**：`分数 >= 达标分` ⟺ `判定为「完成」`，在**真实判定**铺出的
  *      网格（幅度 × 保持帧数、幅度 × 循环数）上成立 —— 证的是"端到端同向"，
@@ -48,6 +48,15 @@
  *      再叠一条**动作库驱动**的检查：对 `exercises.ts` 里每个 `measurable` 动作，
  *      "只让它**声明**的 metric 摆动"必须判完成、"只让别的维度摆动"必须不判完成 ——
  *      这一条证的是**动作库的 metric 声明是对的**，而不是"某个函数自己跟自己自洽"。
+ *   l) 🔴 **v1.7.1 时间支撑的两条反例**（第三次返工）—— v1.7.0 修的是"减谁"，
+ *      这一轮修的是"减的东西算不算数"：
+ *      ① **密集帧(50ms)孤立单帧抖动 → 必须 idle**：习惯性歪头 6° 的人坐着一动不动、
+ *         中间只有一帧抖回 0°，旧口径下这一帧偷走基线 ⇒ 整段判 completed、82 分。
+ *         往复类是同一扇门的另一边：3 处单帧跳变 = cycles 3 ⇒ 判完成、84 分。
+ *      ② **同样帧值、只把采样间隔改成 500ms → 必须仍算数**：一帧就代表 500ms，
+ *         它**是**被时间支撑的。这一条与 ① 帧值逐位相同、只有 `t` 不同 ——
+ *         它钉住"时间门不是无脑钳掉所有孤立极值"。
+ *      外加两条**不误伤**断言：密集帧下的真实保持 / 真实环绕（每段 ≥ 1s）照常判完成。
  *
  * ⚠️ **已知未覆盖（写清楚，免得被当成测过了）**：**动作分**那一层的「取整平局」在当前常量下
  * **不可达**，因此"把 `pyRound` 换成 `Math.round`"在**动作分**这一层抓不到
@@ -125,6 +134,37 @@ export const __data = data
  */
 function makeMathRoundVariant(sm, eq) {
   const r1 = (x) => Math.round(x * 10) / 10 // ← 唯一差异之一
+  /**
+   * `supportFiltered` 的副本（照抄实现）。
+   * 🔴 它**必须**跟着真实实现走：这个变体若停留在旧口径，"取整灵敏度自检"会**假绿** ——
+   * 它对每一条用例都会给出不同结论，于是"能区分 pyRound1 / Math.round"永远成立，
+   * 而它证明的其实只是"两个不同的算法不一样"。v1.7.1 加时间支撑时同步补了这一份。
+   */
+  const supportCopy = (vals, ts, thr) => {
+    const n = vals.length
+    if (n < 3) return vals.slice()
+    const segStart = [0]
+    for (let i = 1; i < n; i++) if (Math.abs(vals[i] - vals[i - 1]) >= thr) segStart.push(i)
+    segStart.push(n)
+    const out = vals.slice()
+    for (let k = 1; k < segStart.length - 2; k++) {
+      const a = segStart[k]
+      const b = segStart[k + 1]
+      if (ts[b] - ts[a] >= eq.MIN_POSE_MS) continue
+      let lo = Infinity
+      let hi = -Infinity
+      for (let i = segStart[k - 1]; i < a; i++) {
+        if (vals[i] < lo) lo = vals[i]
+        if (vals[i] > hi) hi = vals[i]
+      }
+      for (let i = b; i < segStart[k + 2]; i++) {
+        if (vals[i] < lo) lo = vals[i]
+        if (vals[i] > hi) hi = vals[i]
+      }
+      for (let i = a; i < b; i++) out[i] = Math.min(Math.max(vals[i], lo), hi)
+    }
+    return out
+  }
   return (frames, spec) => {
     const kind = spec?.kind ?? 'hold'
     const metric =
@@ -137,12 +177,18 @@ function makeMathRoundVariant(sm, eq) {
       return { grade: 'idle', hint: eq.HINT_IDLE, peak_activity: 0, held_ms: 0, hold_ratio: 0, cycles: 0 }
     }
     const metrics = metric === eq.METRIC_ANY ? Object.keys(eq.METRIC_FIELD) : [metric]
+    const ts = frames.map((f) => f.t)
     const series = metrics.map((m) => {
       const field = eq.METRIC_FIELD[m]
       const thr = eq.METRIC_THRESHOLD[m]
+      const vals = supportCopy(
+        frames.map((f) => f[field]),
+        ts,
+        thr,
+      )
       let base = Infinity
-      for (const f of frames) if (f[field] < base) base = f[field]
-      return frames.map((f) => (f[field] - base) / thr)
+      for (const v of vals) if (v < base) base = v
+      return vals.map((v) => (v - base) / thr)
     })
     const acts = frames.map((_, i) => r1(Math.max(...series.map((s) => s[i]))))
     let peak = acts[0]
@@ -701,7 +747,13 @@ async function main() {
     ['空串', ''],
     ['不是 JSON', 'neckguardian'],
     ['是数组不是对象', '[1,2,3]'],
-    ['版本不认识（将来版本的文本）', '{"v":3,"items":[]}'],
+    [
+      // ⚠️ 必须**跟着当前版本走**：写死 v3 之后，v1.7.1 把版本升到 3 时
+      //    "将来版本"就变成了合法版本，这条断言会当场失效（而且报的是"坏值未被拒绝"，
+      //    看起来像实现坏了）。用 `ACTION_SCORES_VERSION + 1` 才永远真是"将来"。
+      `版本不认识（将来版本 v${eq.ACTION_SCORES_VERSION + 1} 的文本）`,
+      `{"v":${eq.ACTION_SCORES_VERSION + 1},"items":[]}`,
+    ],
     ['版本是字符串（不做隐式转换）', '{"v":"2","items":[]}'],
     ['版本缺失', '{"items":[]}'],
     ['items 不是数组', '{"v":2,"items":{}}'],
@@ -717,19 +769,27 @@ async function main() {
     }
   }
 
-  // 🔴 v1 的文本**不是**坏值：结构合法，只是分数用了旧口径（绝对偏离）。
+  // 🔴 旧口径的文本**不是**坏值：结构合法，只是分数用了当年那把尺子。
   //    丢掉它 = 抹掉用户的历史成绩；照常显示而不标注 = 让用户拿两把尺子量出来的
-  //    数字互相比。所以它必须能解析出来，并且**让调用方看到 legacy**。
-  const legacyText = '{"v":1,"items":[{"id":"neck-flex-left","score":84,"grade":"completed"}]}'
-  const legacyParsed = eq.parseActionScoresDetailed(legacyText)
-  if (legacyParsed === null) {
-    rtBad.push('v1（旧口径）文本被当成坏值拒绝了 —— 老用户的历史成绩会凭空消失')
-  } else if (legacyParsed.legacy !== true || legacyParsed.version !== 1) {
-    rtBad.push(`v1 文本解析出来但没标成 legacy：${JSON.stringify(legacyParsed)}`)
-  } else if (legacyParsed.items.length !== 1 || legacyParsed.items[0].score !== 84) {
-    rtBad.push(`v1 文本的明细没还原出来：${JSON.stringify(legacyParsed.items)}`)
-  } else if (eq.parseActionScores(legacyText)?.length !== 1) {
-    rtBad.push('只要明细的那个接口（parseActionScores）没能读出 v1 的文本')
+  //    数字互相比。所以**每一个**仍可解析的历史版本都必须能读出来、并让调用方看到 legacy。
+  //    ⚠️ 必须**遍历**而不是只测 v1：v1.7.1 把 v2 也变成了历史版本，
+  //    一条"只测 v1"的断言会让 v2 的兼容性完全没人守（而 v2 明细正是 v1.7.0 那一版用户的数据）。
+  const legacyVersions = [...(eq.ACTION_SCORES_LEGACY_VERSIONS ?? [])]
+  if (legacyVersions.length === 0) {
+    rtBad.push('可解析的历史版本为空 —— 老明细会被整份丢掉，等于抹掉用户的历史成绩')
+  }
+  for (const lv of legacyVersions) {
+    const legacyText = `{"v":${lv},"items":[{"id":"neck-flex-left","score":84,"grade":"completed"}]}`
+    const legacyParsed = eq.parseActionScoresDetailed(legacyText)
+    if (legacyParsed === null) {
+      rtBad.push(`v${lv}（旧口径）文本被当成坏值拒绝了 —— 老用户的历史成绩会凭空消失`)
+    } else if (legacyParsed.legacy !== true || legacyParsed.version !== lv) {
+      rtBad.push(`v${lv} 文本解析出来但没标成 legacy：${JSON.stringify(legacyParsed)}`)
+    } else if (legacyParsed.items.length !== 1 || legacyParsed.items[0].score !== 84) {
+      rtBad.push(`v${lv} 文本的明细没还原出来：${JSON.stringify(legacyParsed.items)}`)
+    } else if (eq.parseActionScores(legacyText)?.length !== 1) {
+      rtBad.push(`只要明细的那个接口（parseActionScores）没能读出 v${lv} 的文本`)
+    }
   }
   // 反向对照：当前版本**不许**被标成 legacy（不然"旧口径"这个标签就成了装饰）
   const currentParsed = eq.parseActionScoresDetailed(payload.action_scores_cases[1].expected)
@@ -744,7 +804,7 @@ async function main() {
   } else {
     console.log(
       `✓ 明细解析：跨语言往返 ${payload.action_scores_cases.length} 条全部还原、` +
-        `${badInputs.length} 类坏值全部拒绝、v1 旧口径能解析且被标出（当前版本不标）`,
+        `${badInputs.length} 类坏值全部拒绝、旧口径 v${legacyVersions.join('、v')} 都能解析且被标出（当前版本不标）`,
     )
   }
 
@@ -868,6 +928,59 @@ async function main() {
     console.log(
       `✓ 反例③ 动作库驱动：${library.length} 个可判定动作按**声明的 metric** 做足幅度都判完成，` +
         `且"只动别的量"都不判完成（${kAnySkipped} 个 metric=any 的动作按定义跳过反向检查）`,
+    )
+  }
+
+  // ---- l) 🔴 v1.7.1 时间支撑反例（第三次返工）----
+  //
+  // 与 k) 同一思路：这一层证的是**结论本身**，而不是"两端算得一样"。
+  // 下面六条里，前三条在旧实现下都是错的（① 82 分 completed、② 82 分、③ 84 分 completed），
+  // 后三条证的是修法**没有误伤**真实动作与稀疏采样。
+  // ⚠️ 这一层跑的是**前端实现**：后端变异要靠 c) 层（重生成期望值后与 TS 对不上）才抓得到。
+  const lBad = []
+  const expectGrade = (name, want) => {
+    const c = byName(name)
+    if (!c) {
+      lBad.push(`载荷里缺少用例「${name}」—— 这一层没东西可验`)
+      return
+    }
+    const v = eq.judgeExercise(c.frames, c.spec)
+    const s = eq.scoreExercise(v, c.spec)
+    if (v.grade !== want) {
+      lBad.push(
+        `「${name}」应为 ${want}，实际 ${v.grade}` +
+          `（peak=${v.peak_activity}、cycles=${v.cycles}、held=${v.held_ms}ms、${s} 分）`,
+      )
+      return
+    }
+    // 顺手把核心不变量在这一层再验一次（只验方向，不重复 g 段的网格）
+    if (want === eq.GRADE_COMPLETED && s < eq.EXERCISE_PASS_SCORE) {
+      lBad.push(`「${name}」判完成却只有 ${s} 分（低于达标线 ${eq.EXERCISE_PASS_SCORE}）`)
+    }
+    if (want === eq.GRADE_IDLE && s !== eq.IDLE_SCORE) {
+      lBad.push(`「${name}」判没动却有 ${s} 分（应为 ${eq.IDLE_SCORE}）`)
+    }
+  }
+  // ① 密集帧的孤立抖动偷不走基线（旧口径 82 分 completed）
+  expectGrade('时间支撑·密集帧(50ms)孤立单帧抖动 → 偷不走基线', eq.GRADE_IDLE)
+  // ② 连续两帧一样拦得住（判据是"到下一段的时间"，不是"恰好一帧"）
+  expectGrade('时间支撑·密集帧(50ms)连续两帧抖动 → 一样偷不走', eq.GRADE_IDLE)
+  // ③ 同一扇门的另一边：密集帧的跳变凑不出循环次数（旧口径 cycles=3 → 84 分 completed）
+  expectGrade('时间支撑·往复类密集帧单帧跳变 → 凑不出循环次数', eq.GRADE_IDLE)
+  // ④ 时间门的**边界证据**：帧值逐位相同、只有间隔 500ms ⇒ 那一帧就代表 500ms，必须仍算数
+  expectGrade('时间支撑·同样帧值但稀疏采样(500ms) → 那一帧就是 500ms，必须仍算数', eq.GRADE_COMPLETED)
+  // ⑤⑥ 不误伤：密集帧下的真实保持 / 真实环绕（每段 ≥ 1s）必须照常判完成
+  expectGrade('时间支撑·密集帧真实保持动作（每段 ≥ 2s）不被误伤', eq.GRADE_COMPLETED)
+  expectGrade('时间支撑·往复类密集帧真实环绕（每段 1s）不被误伤', eq.GRADE_COMPLETED)
+
+  if (lBad.length > 0) {
+    // 与 k 段同一约束：每条各带 `✗`，否则变异判定无法区分是哪一条反例被触发。
+    console.error(`✗ l) 时间支撑反例不成立 ${lBad.length} 处：`)
+    for (const x of lBad) console.error(`✗   ${x}`)
+    hardFail++
+  } else {
+    console.log(
+      '✓ 时间支撑：密集帧的孤立抖动不再偷走基线 / 凑出循环，稀疏采样与真实动作都不受影响（6 条）',
     )
   }
 

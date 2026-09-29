@@ -49,6 +49,7 @@ from services.exercise_quality import (  # noqa: E402
     METRIC_SHOULDER,
     METRIC_SPINE,
     METRIC_THRESHOLD,
+    MIN_POSE_MS,
     SCORE_WEIGHT_AMPLITUDE,
     SCORE_WEIGHT_EFFORT,
     UNMET_MAX_SCORE,
@@ -239,6 +240,61 @@ def build_cases():
         "旧口径下这就是 82 分（姿势越差越容易「自动过关」）；新口径必须 0 分",
     )
 
+    # ---- v1.7.1 时间支撑（第三次返工）：极值必须被**时间**支撑 ----
+    # v1.7.0 修的是「减谁」（活动范围 vs 绝对偏离），这一轮修的是「减的东西算不算数」。
+    # 病因：`min`（基线）由**单帧**决定，所以一次抖动（含跟踪失败返回 0.0）就能偷走它 ——
+    # 整段其余帧的活动量随即全部 ≥ onset ⇒「12 秒一动不动」被判成「保持到位」（实测 82 分）。
+    # 往复计数是同一扇门的另一边：`cycles` 只要「某帧 ≥ onset、随后某帧 ≤ trough」，
+    # 于是 3 处单帧跳变 = 3 次环绕（实测 84 分）。
+    #
+    # 🔴 下面第一、二条**帧值逐位相同、只有采样间隔不同**，结论必须相反：
+    #    50ms 采样 ⇒ 一帧只占 50ms ⇒ 不构成「一个位」⇒ 没动；
+    #    500ms 采样 ⇒ 那一帧本身就代表 500ms ⇒ 是名副其实的一次偏离 ⇒ 算数。
+    #    这一对同时钉住了「判据是到下一段的时间，而不是段内首尾差」
+    #    和「时间门不是无脑钳掉所有孤立极值」。
+    shake = [6.0] * 12 + [0.0] + [6.0] * 11  # 24 帧
+    add(
+        "时间支撑·密集帧(50ms)孤立单帧抖动 → 偷不走基线",
+        grid(shake, step=50),
+        {"kind": KIND_HOLD, "duration_ms": 1200, "min_cycles": 0, "metric": METRIC_HEAD},
+        "旧口径下 base 被那一帧偷走 → 整段判 completed、82 分。"
+        "⚠️ 这一帧只占 50ms，不构成「一个位」",
+    )
+    add(
+        "时间支撑·同样帧值但稀疏采样(500ms) → 那一帧就是 500ms，必须仍算数",
+        grid(shake, step=500),
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_HEAD},
+        "与上一条 frames 逐位相同、只有 t 不同。稀疏采样下一帧代表的时间 ≥ MIN_POSE_MS ⇒ "
+        "永远不会出现短命段（这也是旧样本/旧用例逐位不变的原因）",
+    )
+    add(
+        "时间支撑·密集帧(50ms)连续两帧抖动 → 一样偷不走",
+        grid([6.0] * 12 + [0.0, 0.0] + [6.0] * 10, step=50),
+        {"kind": KIND_HOLD, "duration_ms": 1200, "min_cycles": 0, "metric": METRIC_HEAD},
+        "判据是「到下一段首帧的时间」，不是「恰好一帧」⇒ 连续两帧（共 100ms）同样拦得住",
+    )
+    add(
+        "时间支撑·往复类密集帧单帧跳变 → 凑不出循环次数",
+        grid([0.5] * 8 + [9.0] + [0.5] * 6 + [9.0] + [0.5] * 6 + [9.0] + [0.5], step=50),
+        {"kind": KIND_CYCLIC, "duration_ms": 1200, "min_cycles": 3, "metric": METRIC_HEAD},
+        "同一扇门的另一边：旧口径下 3 处单帧跳变 = cycles 3 → 判完成、84 分。"
+        "修掉后 range 归零 ⇒ 全程没动",
+    )
+
+    # 修法不能被误伤：真实动作的每一「位」都站得够久，必须照常判完成。
+    add(
+        "时间支撑·密集帧真实保持动作（每段 ≥ 2s）不被误伤",
+        grid([0.0] * 8 + [8.0] * 40 + [0.0] * 8, step=50),
+        {"kind": KIND_HOLD, "duration_ms": 3000, "min_cycles": 0, "metric": METRIC_HEAD},
+        "起势 / 保持 / 回位三段都够长 ⇒ 幅度 1.6、保持 2s/3s ⇒ 判完成（时间门只削短命段）",
+    )
+    add(
+        "时间支撑·往复类密集帧真实环绕（每段 1s）不被误伤",
+        grid([0.0] * 4 + [8.0] * 20 + [0.0] * 4 + [8.0] * 20 + [0.0] * 4 + [8.0] * 20 + [0.0] * 4, step=50),
+        {"kind": KIND_CYCLIC, "duration_ms": 4000, "min_cycles": 3, "metric": METRIC_HEAD},
+        "每个「位」占 1s（> MIN_POSE_MS）⇒ 全部被支撑 ⇒ 三次环绕照常计满",
+    )
+
     # ---- 取整平局点：把 pyRound1 与 Math.round 拉到不同答案 ----
     # 逐帧活动量 raw = 1.25（→×10 = 12.5）：本项目口径取偶得 1.2，Math.round 得 1.3。
     # raw = 0.25（→2.5）更狠：本项目得 0.2（idle），Math.round 得 0.3（幅度不足）——
@@ -362,9 +418,9 @@ def build_action_scores_cases():
       生产里的 id 都是 ASCII slug，所以这个坑只有在"有人给动作库加了个中文 id /
       有人把 id 改成显示名"时才会炸 —— 那时它会先在这里红，而不是在用户互换文件时。
     - **引号与反斜杠**：转义规则两端不同就抓得到。
-    - **空列 / 边界分（0 与 100）**：`{"v":2,"items":[]}` 与 0 分是两件事，形态必须钉住。
-      ⚠️ 版本号从 1 升到 2 是因为**分数口径变了**（幅度从"绝对偏离"改成"活动范围"），
-      形态没变 —— 显示端要靠这个号把老明细标成「旧口径」。
+    - **空列 / 边界分（0 与 100）**：`{"v":3,"items":[]}` 与 0 分是两件事，形态必须钉住。
+      ⚠️ 版本号 1 → 2（改成活动范围）→ 3（加时间支撑）**都不是形态变了**，而是**分数口径变了**，
+      形态自始至终没变 —— 显示端要靠这个号把老明细标成「旧口径」，并说清是哪一把尺子。
     - **一串完整明细**：钉住项**顺序**不被重排（Python 的 dict 与 JS 的对象都保证插入序，
       但"保证"是要有证据的）。
 
@@ -503,6 +559,7 @@ def main():
             "CYCLE_TROUGH_RATIO": CYCLE_TROUGH_RATIO,
             "DEFAULT_MIN_CYCLES": DEFAULT_MIN_CYCLES,
             "MAX_FRAME_GAP_MS": MAX_FRAME_GAP_MS,
+            "MIN_POSE_MS": MIN_POSE_MS,
             # 结论 / 类型
             "GRADE_COMPLETED": GRADE_COMPLETED,
             "GRADE_INSUFFICIENT": GRADE_INSUFFICIENT,
