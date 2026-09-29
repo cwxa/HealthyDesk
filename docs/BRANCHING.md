@@ -181,6 +181,20 @@ gh release edit v1.7.0 --draft=false --latest       # 人工放行（CI 的 Summ
 > | APK 匿名下载字节数 | ✅ `Content-Length: 17710302` == 实际收到 `17710302` == Release 声明值 |
 > | 下载字节的 sha256 | ✅ 与线上 `SHA256SUMS.txt` 登记值**逐位相同**（比 §9.4 清单多走一步：清单只要求比字节数） |
 >
+> 🔁 **第二次实跑（2026-09-29 当天，v1.7.1；两条链路各一次，都一次跑通）**
+>
+> - `release/v1.7.1` 分支 run **`36578379238`**：守门 → 四端 → `release` job 全绿；
+>   取证行 `package.json=1.7.1  ref=release/v1.7.1  目标 tag=v1.7.1  (比对基准=1.7.1)`。
+> - 这次**分支 run 没建出 tag**（`gh release create --draft` 只建了 Release 对象，
+>   `git ls-remote --tags origin 'v1.7.1*'` 当时**为空**）⇒ 随后 `git tag -a v1.7.1 <commit> -F …`
+>   是**全新创建**，不需要 `--force` 覆盖任何东西。**建注释 tag 前先 `ls-remote` 看一眼**，
+>   比"猜它建没建"便宜。
+> - tag run **`36580114378`**：同样六步全绿，取证行 `package.json=1.7.1  ref=v1.7.1  目标 tag=v1.7.1  (比对基准=1.7.1)`
+>   —— 与分支那条**只差 `ref=` 这一段**，第二次实跑确认了这条判据是稳的。
+> - 发布后匿名核验同 v1.7.0 五项全过，**另加一项**：把 `SHA256SUMS.txt` 下载下来、
+>   按 Release 说明跑 `sha256sum -c --ignore-missing`，输出 `NeckGuardian-1.7.1-android-release.apk: OK`
+>   —— 这才真正证明**给用户的校验文件是可用的**（文件名字段与 GitHub 实际资产名逐字一致）。
+> - ⚠️ 依旧**没有真并发的实跑**：分支 run 先结束，tag run 才排上。
 > ⚠️ **仍未实跑**：`FROM_TAG=1` 允许覆盖**已发布** Release 那条（`IS_DRAFT != true && FROM_TAG != 1`）
 > 只有在"发布之后又推一次同一个 tag"时才会走到 —— 本次 Release 当时还是 draft，
 > 走的是 `Release v1.7.0 已存在（draft=true）→ 覆盖上传资产`。要真验它，得在已发布状态下重推 tag。
