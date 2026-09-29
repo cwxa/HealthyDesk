@@ -823,7 +823,7 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────
-  # CD：打 tag 时把四端产物汇总成一个 **draft** Release
+  # CD：推 release 分支 / 打 tag 时把四端产物汇总成一个 **draft** Release
   #
   # 🔴 为什么是 draft 而不是直接 publish
   #    "构建成功" ≠ "能用"。mac / iOS 产物至今**没有做过真机验证**，
@@ -831,6 +831,9 @@ jobs:
   #    所以留一道人工闸门 —— 确认无误后再：
   #        gh release edit <tag> --draft=false --latest
   #    （这是刻意设计，不是没做完。要全自动就把下面的 `--draft` 去掉。）
+  #
+  # ⚠️ 手动 dispatch **不碰 Release**（只构建）—— 所以这个 job 的 `if:` 里没有 workflow_dispatch，
+  #    而四个打包 job 有。别把两处改成一样。
   #
   # 🔴 Android：CI 只有在提供签名 secrets 时才出正式包，否则产出的是
   #    **debug 包（不可分发）** → 这里直接剔除，不进 Release。
