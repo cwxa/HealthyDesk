@@ -1,7 +1,7 @@
 # 分支模型与发版流程
 
 > 2026-09-29 起生效。**CI 触发的唯一真相来源**是 `.github/workflows/build.yml`，
-> 由 `npm run verify:ci` 守着（14 条断言 + 变异自证）。
+> 由 `npm run verify:ci` 守着（21 条断言 + 变异自证）。
 >
 > 为什么单独写一份：以前 `main` 是**裸的** —— 推上去 CI **什么都不跑**（工作流的 `on:`
 > 只有 tag 与手动），而"推发版分支就出包"这件事没有任何地方写下来过。
@@ -122,14 +122,45 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 `verify:schema`、`verify:exercises`、`verify:readme`、`verify:ci`、`build:web` + `verify:ui`、
 `set-version --check`。
 
-**并发**：同一个 ref 重复触发会取消上一次；但 **tag 与 `release/**` 不取消**
+**每个 job 都有 `timeout-minutes`**（2026-09-29 补）：这是**兜「挂死」**的宽松上限，不是性能目标。
+不设的话，中途卡住（等网络、等锁、轮询不退出）会一直烧到默认上限（6 小时），
+而**挂起比失败贵得多、也没有任何提示**。本项目真的发生过：退役的 runner 标签让 job
+既不报错也不失败地永远排队、`electron-builder` 退避重试、后端冒烟 60 次轮询。
+
+**每个打包 job 的收尾门**（各自都做，缺一不可）：
+
+| job | 静态校验 | 运行时冒烟 |
+|---|---|---|
+| `desktop-windows` | 后端 PE 格式 + 同源校验 | ✅ 跑**解包后的** exe，等 `/api/health` 且 `status=ok` |
+| `desktop-macos`（×2 架构） | 权限声明 / Mach-O 架构 / 可执行位 / 同源校验 | ✅ 跑 `.app` 内后端，等 `/api/health` |
+| `mobile-android` | 签名指纹与历史一致 + 同源校验 | —（真机才测得出，见 §四） |
+| `mobile-ios` | 权限声明 / BundleID / Mach-O + 同源校验 | —（CI 出的是未签名 `.xcarchive`） |
+
+> Windows 的运行时冒烟是 **2026-09-29 补的**：它是**主力分发平台**，此前只有静态校验 ——
+> 而"格式对 + 哈希对"推不出"起得来"（端口占用、DB 初始化失败、PyInstaller 漏收动态库、
+> 路径解析错，全都只有真跑一次才暴露）。
+
+**CD 收尾会回读校验**（`release` job）：`gh release create/upload` 返回 0 **不等于**资产已可查
+（列表接口有最终一致性延迟，实测 create 成功 19 秒后仍返回 `assets=0`），
+所以上传后**轮询资产数量**直到与 `dist-release/` 对上；再**逐字比对** `SHA256SUMS.txt` 里登记的
+文件名与 GitHub 上的实际资产名 —— GitHub 会把资产名里的连续空白压成一个点
+（`NeckGuardian Setup 1.7.0.exe` → `NeckGuardian.Setup.1.7.0.exe`），照抄本地名就等于
+给用户一份 `sha256sum -c` **跑不通**的校验文件。
+
+**并发**：组名按**版本**归一化（`release/v1.7.0` 分支与 `v1.7.0` tag 落进**同一组**），
+重复触发会取消上一次；但 **tag 与 `release/**` 不取消**
 （它们后面接着写 Release，半路取消会留下资产残缺的空壳）。
+> ⚠️ 2026-09-29 之前组名用的是 `github.ref`，于是 `release/v1.7.0` 与 `v1.7.0` 是**两个不同的组** →
+> 并发跑、并发写**同一个** Release（一个 `create`、一个 `upload --clobber`）。
+> 归一化只能**反过来做**：GitHub 表达式**没有**字符串替换/切片
+> （可用函数只有 always / cancelled / case / contains / endsWith / failure / format / fromJSON /
+> hashFiles / join / startsWith / success / toJSON）—— 所以是把 **tag 的组名伪装成同名 release 分支**。
 
 ---
 
 ## 五、这套规则自己也有守卫
 
-`npm run verify:ci` —— **15 条断言**，盯的就是上面那张表：
+`npm run verify:ci` —— **21 条断言**，盯的就是上面那张表：
 
 | 断言 | 抓什么 |
 |---|---|
@@ -139,19 +170,38 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 | 7 | `release` job 不再由 tag / release 分支触发 |
 | 8 | 🔴 **`--draft` 闸门被去掉**（之后每次打 tag 都自动对外发布） |
 | 9 | "已发布不许覆盖"的判断条件被掏空（护栏还在但永远不触发） |
-| 10 | `concurrency` 改成恒真（tag 构建半路被取消） |
+| 10 | `cancel-in-progress` 改成恒真（tag 构建半路被取消） |
 | 10b | 🔴 **`cancel-in-progress` 没包 `${{ }}`** —— 本地 YAML 合法，但 **GitHub 拒掉整个工作流文件** |
 | 11 | **反向对照**：`verify` job 被加上 `if:`（守门变成"有条件才跑"） |
+| 12 | 某个 job 的 `timeout-minutes` 被拿掉（挂住就烧到 6 小时上限） |
+| 13 | 往 `verify:all` 加了守卫却**没接进 CI**（CI 永绿、只有本地会红） |
+| 14 | `release` job 的**上传后回读校验**被删掉（资产可能缺、校验文件名可能与线上不一致） |
+| 15 | `concurrency.group` 改回按 `github.ref`（分支与 tag 并发写同一个 Release） |
+| 16 | 某个打包 job 的**同源校验**被拿掉（那个端可以打包出旧前端而全程绿） |
+| 17 | Windows 或 macOS 的**后端启动冒烟**被删掉 / 被掏空 |
 
-它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C9 九条变异**全部被抓住**，
-外加 N1 负向对照（只改一条注释，守卫必须保持绿 —— 证明它盯的是结构与条件，不是"文本变了就红"）。
+它有牙的证明是 `.buildenv/mutate-ci.py`（**不入库**）：C1–C15 十五条变异**全部被抓住**，
+外加 N1/N2 两条负向对照（N1 只改一条注释、N2 只改 `timeout-minutes` 的取值 45→60，
+两种情况守卫**都必须保持绿** —— 证明它盯的是结构与条件，不是"文本变了就红"或"把数字写死"）。
+
+> 🔴 **变异测试真的抓到过两条守卫自身的缺陷**，都不是"猜"出来的：
+> - 第 8 条：`includes('--draft')` 被 Summary 里的 `--draft=false` 满足（断言落在**注释上**）；
+> - 第 10 条：`conc.includes('refs/tags/')` 被 `group:` 那一行满足（断言落在**错误的块上**）——
+>   这是 2026-09-29 第二轮改 `group:` 时**当场**被变异抓到的。
+>
+> 规律：**断言的范围越宽，越容易被范围里"别的正确东西"满足**。
+> 所以断言必须"先按缩进取块、再落到具体那一行/那个参数"，且**改完断言必须重跑变异**。
 
 ### ⚠️ 本守卫查不了"GitHub 认不认"
 
-它查的是**"这些语义还在不在"**，不是"这个文件合法"。第 10b 条就是这么补出来的 ——
-**事故先发生，才有的断言**：把 `cancel-in-progress` 从 `${{ … }}` 改成折叠标量后，
-本地 `yaml.load()` 完全正常，`verify:ci` 也全绿，但推上去的 run 里**一个 job 都没有**，
-页面只说 `workflow file issue`（`if:` 可以省略 `${{ }}` 是它**专属**的例外，别的字段不适用）。
+它查的是**"这些语义还在不在"**，不是"这个文件合法"。这个边界已经被实测踩过**两次**：
+
+| # | 改法 | 本地 YAML | 后果 |
+|---|---|---|---|
+| 10b | `cancel-in-progress` 写成折叠标量 + 裸表达式 | 完全正常 | GitHub **拒掉整个工作流文件**，run 里一个 job 都没有 |
+| 15 | 用了 `replace(github.ref_name, 'release/', '')` 归一化 group | 完全正常 | `replace` 在 GitHub 表达式里**根本不存在**（actionlint：`undefined function "replace"`） |
+
+两次都是 `verify:ci` 全绿、`yaml.load()` 全绿，**只有 actionlint 能抓**。
 
 所以 **改完 `build.yml` 请再用 `actionlint` 过一遍**（GitHub Actions 的语义校验器）：
 
@@ -162,12 +212,20 @@ gh release download v1.7.12 -R rhysd/actionlint \
 .buildenv/actionlint/actionlint.exe .github/workflows/build.yml
 ```
 
-它一条命令就能指出上面那次事故（`expecting a single ${{...}} expression or boolean literal`），
+它一条命令就能指出上面两次事故，例如：
+
+```
+build.yml:62:37: expecting a single ${{...}} expression or boolean literal "true" or "false",
+                 but found plain text node                          ← 10b 那次
+build.yml:62:37: undefined function "replace". available functions are ...  ← 15 那次
+```
+
 还能抓 context 名拼错、`needs` 指向不存在的 job 等一整类问题。
+⚠️ 别加 `-color never` —— 它会被当成文件名（`could not read "never"`）。
 
 **刻意没接进 CI**：那会给守门引入一个**需要联网下载的二进制依赖**，而本项目的取舍是
 "守卫的依赖越少，守卫自己坏掉的概率越低"（同 `verify-readme.mjs`）。代价就是：
-**这一步是人工的，别忘**。
+**这一步是人工的，别忘**。改过 `build.yml` 的提交，在推之前必须跑过一次。
 
 **改 `build.yml` 之前先读本文件与那个变异脚本。**
 

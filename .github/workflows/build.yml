@@ -49,9 +49,23 @@ on:
 permissions:
   contents: read
 
-# 同一 ref 重复触发时，取消上一次还没跑完的（**哪些能取消**见下面 cancel-in-progress）。
+# 同一**版本**重复触发时，取消上一次还没跑完的（**哪些能取消**见下面 cancel-in-progress）。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # 🔴 group 要的是「**版本**」，不是「ref」。
+  #    `release/v1.7.0` 分支与 `v1.7.0` tag 是**两个不同的 ref** —— 按 `github.ref` 分组会让
+  #    它们落进**不同组**，于是**并发**跑，而两者的 release job 会写**同一个** Release
+  #    （一个 create、一个 upload --clobber）。后果不是"慢"，是**错**：
+  #    create 撞车报 "already_exists"，或两份资产互相覆盖，让 SHA256SUMS 与实际内容对不上。
+  #    归一化到版本名后，tag 构建会**排队等**分支构建跑完（组内 FIFO）。
+  #    ⚠️ concurrency 里只能引用 `github` / `inputs` / `vars` 上下文；函数只用下面这两个，
+  #       因为 GitHub 表达式**没有字符串切片/替换**：可用函数只有
+  #       always / cancelled / case / contains / endsWith / failure / format / fromJSON /
+  #       hashFiles / join / startsWith / success / toJSON —— **没有 replace**。
+  #       （2026-09-29 实测：先写了 `replace(github.ref_name, 'release/', '')`，
+  #         actionlint 直接报 `undefined function "replace"`。本地 YAML 依旧完全正常。）
+  #       所以反过来做：把 **tag 的组名伪装成同名 release 分支的组名** ——
+  #         tag `v1.7.0` → `release/v1.7.0`，与分支 `release/v1.7.0` 的 ref_name 逐字相同。
+  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/') && format('release/{0}', github.ref_name) || github.ref_name }}
   # 只有「纯守门」的触发允许被后来的推送取消（迭代快、也便宜）。
   # 🔴 tag 与 release/** 分支**必须跑完**：它们后面接着写 Release，
   #    半路取消会留下一个资产残缺的 release。
@@ -68,6 +82,12 @@ jobs:
   verify:
     name: 守门 · 一致性 / 类型 / 版本
     runs-on: ubuntu-24.04
+    # 🔴 六个 job 都设了 timeout-minutes —— 这是**兜「挂死」**的宽松上限，不是性能目标。
+    #    不设的话中途卡住（等网络、等锁、轮询不退出）会一直烧到默认上限（6 小时），
+    #    而本项目**真的发生过挂起**：退役 runner 标签让 job 既不报错也不失败地永远排队、
+    #    electron-builder 退避重试、后端冒烟 60 次轮询。挂住比失败贵得多，也没有提示。
+    #    取值 ≈ 正常耗时的 3~6 倍，故意留足余量（宁可慢，不可误杀）。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -189,6 +209,8 @@ jobs:
     name: Windows 安装包
     runs-on: windows-latest
     needs: verify
+    # 兜「挂死」的宽松上限（正常约 15 分钟：pip 装 mediapipe/opencv + PyInstaller + NSIS）。
+    timeout-minutes: 90
     # 🔴 只有「要出产物」的触发才打包：release/** 分支、tag、手动。
     #    推 main 与 feat|fix|chore|docs 分支**只跑守门** —— 否则每次提交都要烧四个 runner，
     #    而绝大多数提交根本不打算发版。
@@ -225,8 +247,10 @@ jobs:
 
       # 拦住"后端产物与目标平台不符"这一整类问题
       # （打包会成功，但装到目标机器上后端永远起不来）
+      # ⚠️ 显式带 `--target=win`：不带的话判据退化成"宿主平台是什么"，而宿主是 runner 决定的
+      #    —— 一旦 base 镜像换成非 Windows，或本机复跑，这条断言就静默失去意义。
       - name: 校验后端产物平台
-        run: npm run verify:backend
+        run: npm run verify:backend -- --target=win
 
       - name: 打包安装包
         run: npx electron-builder --win --publish never
@@ -237,6 +261,61 @@ jobs:
       - name: 同源校验（包内前端 = 本次 dist）
         run: npm run verify:source -- --packed=release2/win-unpacked/resources/app/dist/assets
 
+      # 🔴 前面全是"静态检查产物对不对"，这一步是**唯一**能回答
+      #    "这个包在 Windows 上到底能不能跑"的自动化手段 —— 与 macOS job 的同名步骤对称。
+      #    背景：macOS 早就有这条，Windows（**主力分发平台**）反而一直没有，只查了 PE 格式与
+      #    前端哈希。而"格式对 + 哈希对"推不出"起得来"：端口占用、DB 初始化失败、
+      #    PyInstaller 漏收动态库、路径解析错，这些全都只有在真的跑一次时才暴露。
+      #    它能抓到：PE 能执行 / 端口能监听 / 数据库能初始化 / 路径解析正确。
+      #    仍验不到的（需人工在真机跑）：安装器 UI、Electron 窗口、摄像头链路、SmartScreen 拦截。
+      # ⚠️ 必须 `shell: bash`：windows runner 默认是 pwsh，下面这段是 POSIX 写法。
+      #    runner 自带 Git Bash，且这样与 macOS 那条保持**同一套语句与同一套报错文案**，
+      #    不会出现"两端各写一遍、各错各的"。
+      # ⚠️ 跑的是 release2/win-unpacked 里的**解包副本**，而安装包（NSIS）在上一步
+      #    "打包安装包"就已经生成 → 这里产生的运行时数据**不会**进安装包。
+      - name: 后端启动冒烟（跑解包后的 exe，等 /api/health）
+        shell: bash
+        run: |
+          set -euo pipefail
+          BE="release2/win-unpacked/resources/neckguardian-backend/neckguardian-backend.exe"
+          if [ ! -f "$BE" ]; then
+            echo "::error::解包目录里找不到后端：$BE"
+            ls -la release2/win-unpacked/resources/ || true
+            exit 1
+          fi
+          LOG="$RUNNER_TEMP/backend-smoke.log"
+          "$BE" > "$LOG" 2>&1 &
+          PID=$!
+          echo "后端 PID = $PID"
+
+          ready=0
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "::error::后端进程在就绪前就退出了（第 ${i} 次探测）"
+              tail -80 "$LOG" || true
+              exit 1
+            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:18920/api/health -o "$RUNNER_TEMP/health.json" 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::120 秒内 /api/health 未就绪"
+            tail -80 "$LOG" || true
+            exit 1
+          fi
+          echo "健康检查响应: $(cat "$RUNNER_TEMP/health.json")"
+          grep -q '"status":"ok"' "$RUNNER_TEMP/health.json" \
+            || { echo "::error::/api/health 没有返回 status=ok"; exit 1; }
+          echo "--- 后端启动日志 ---"
+          tail -20 "$LOG" || true
+
       - uses: actions/upload-artifact@v7
         with:
           name: NeckGuardian-Windows
@@ -244,6 +323,10 @@ jobs:
             release2/*.exe
             release2/*.blockmap
           if-no-files-found: error
+          # ⚠️ 默认保留 90 天。构建只在 release 分支 / tag / 手动时发生，
+          #    失败的发布尝试会留下一堆"永远不会再被下载"的产物占配额。
+          #    30 天足够覆盖"发布后发现某端要补资产，从 CI 产物重传"这条流程。
+          retention-days: 30
 
   # ─────────────────────────────────────────────────────────────
   # macOS 桌面安装包（dmg + zip）
@@ -263,6 +346,8 @@ jobs:
     name: macOS 安装包（${{ matrix.arch }}）
     runs-on: ${{ matrix.runner }}
     needs: verify
+    # 兜「挂死」的宽松上限（每个矩阵项各算一次；正常约 20~30 分钟）。
+    timeout-minutes: 90
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
     if: >-
       startsWith(github.ref, 'refs/heads/release/') ||
@@ -453,6 +538,7 @@ jobs:
             release2/*.dmg
             release2/*.zip
           if-no-files-found: error
+          retention-days: 30
 
   # ─────────────────────────────────────────────────────────────
   # Android APK
@@ -465,6 +551,8 @@ jobs:
     name: Android APK
     runs-on: ubuntu-24.04
     needs: verify
+    # 兜「挂死」的宽松上限（正常约 15~25 分钟：Gradle 首次拉依赖最慢）。
+    timeout-minutes: 60
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
     if: >-
       startsWith(github.ref, 'refs/heads/release/') ||
@@ -625,6 +713,7 @@ jobs:
           name: NeckGuardian-Android
           path: release2/*.apk
           if-no-files-found: error
+          retention-days: 30
 
   # ─────────────────────────────────────────────────────────────
   # iOS 归档
@@ -638,6 +727,8 @@ jobs:
     # macos-15：`macos-14` 的弃用支持 2026-11-02 到期，别贴着期限走
     runs-on: macos-15
     needs: verify
+    # 兜「挂死」的宽松上限（正常约 20~35 分钟：pod install + xcodebuild archive 都慢）。
+    timeout-minutes: 90
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
     if: >-
       startsWith(github.ref, 'refs/heads/release/') ||
@@ -729,6 +820,7 @@ jobs:
           name: NeckGuardian-iOS
           path: release2/ios/NeckGuardian.xcarchive.tgz
           if-no-files-found: error
+          retention-days: 30
 
   # ─────────────────────────────────────────────────────────────
   # CD：打 tag 时把四端产物汇总成一个 **draft** Release
@@ -749,6 +841,9 @@ jobs:
   release:
     name: 汇总产物 · 创建/更新 draft Release
     runs-on: ubuntu-24.04
+    # 兜「挂死」的宽松上限（正常约 2~4 分钟：下载四个 artifact + 上传）。
+    # ⚠️ 里面有个**故意留的**重试轮询（等资产可查，见下），所以别设太紧。
+    timeout-minutes: 30
     needs:
       - desktop-windows
       - desktop-macos
@@ -867,10 +962,65 @@ jobs:
               dist-release/*
           fi
 
+      # 🔴 回读校验。`gh release create/upload` 返回 0 **不等于**资产已经可查 ——
+      #    这一步把"看起来传上去了"变成断言，盯两件事：
+      #      ① 资产**数量**对不对（少一个 = 某个端静默没进 Release）；
+      #      ② SHA256SUMS.txt 里写的文件名**与 GitHub 实际资产名逐个一致**。
+      #    为什么要②：GitHub 会改写资产名里的连续空白（`NeckGuardian Setup 1.7.0.exe`
+      #    → `NeckGuardian.Setup.1.7.0.exe`）。生成校验文件时若照抄本地名，
+      #    用户按 Release 说明跑 `sha256sum -c SHA256SUMS.txt` 会整条 FAILED「找不到文件」
+      #    —— 白给一份**没法用的**校验文件，而且只有用户会发现。
+      #    ⚠️ ①要轮询：release 刚创建时查询接口有最终一致性延迟（实测 create 成功 19 秒后
+      #       仍返回 assets=0，几十秒后同一对象是 7 个）。只查一次极易误判 → 这里重试。
+      - name: 回读校验：资产真的都传上去了，且校验文件名与线上一致
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          want=$(ls dist-release | wc -l | tr -d ' ')
+          echo "期望资产数 = $want（dist-release 里的文件，含 SHA256SUMS.txt）"
+
+          got=-1
+          for i in $(seq 1 12); do
+            got=$(gh release view "$TAG" --json assets --jq '.assets | length')
+            echo "第 ${i} 次回读：assets=$got / 期望=$want"
+            [ "$got" = "$want" ] && break
+            sleep 10
+          done
+          if [ "$got" != "$want" ]; then
+            echo "::error::资产数与期望不符（实际 $got，期望 $want）—— 差 120 秒仍未追平，不是延迟问题"
+            gh release view "$TAG" --json assets --jq '.assets[].name' || true
+            echo "::error::本地产物清单："
+            ls -la dist-release/ || true
+            exit 1
+          fi
+
+          # 线上资产名 → 与 SHA256SUMS.txt 里的名字逐个对（SHA256SUMS.txt 自己不在校验表里）
+          # ⚠️ 两侧都用 `LC_ALL=C sort`：默认 locale 的排序规则可能不同，会造成假不一致。
+          # ⚠️ 这里**故意不单独 cat 两份清单**：`diff -u` 在不一致时会把两侧都打出来，够定位了；
+          #    而多印一次会让这两个文件名在文本里各出现两次，守卫的锚点就不再唯一。
+          gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort > "$RUNNER_TEMP/gh-assets.txt"
+          grep -v '^SHA256SUMS\.txt$' "$RUNNER_TEMP/gh-assets.txt" | LC_ALL=C sort > "$RUNNER_TEMP/gh-assets-checked.txt" || true
+          sed -E 's/^[0-9a-fA-F]+[[:space:]]+//' dist-release/SHA256SUMS.txt | LC_ALL=C sort > "$RUNNER_TEMP/sums-names.txt"
+
+          if ! diff -u "$RUNNER_TEMP/sums-names.txt" "$RUNNER_TEMP/gh-assets-checked.txt"; then
+            echo "::error::SHA256SUMS.txt 的名字与线上资产名不一致 —— 用户跑 sha256sum -c 会整条 FAILED（多半是没做空白→点的转换）"
+            exit 1
+          fi
+          echo "✅ 资产齐全（$want 个），且校验文件名与线上逐字一致"
+
       - name: 在 Summary 里给出后续动作
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           {
             echo "## Release 已创建为 draft"
+            echo
+            echo "| 资产 | 大小 |"
+            echo "|---|---|"
+            gh release view "$RELEASE_TAG" --json assets \
+              --jq '.assets[] | "| `\(.name)` | \(.size) B |"' || true
             echo
             echo "人工确认无误后发布："
             echo
