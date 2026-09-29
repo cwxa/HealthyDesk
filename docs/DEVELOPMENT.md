@@ -10,6 +10,7 @@
 | 文档 | 管什么 |
 |---|---|
 | **本文件** | 架构、目录结构、核心组件、数据库、API、开发流程、开发铁律 |
+| [BRANCHING.md](BRANCHING.md) | **分支模型与发版流程**：`main` / `feat|fix|chore|docs` / `release/vX.Y.Z`、CI 触发表、`verify:ci` 守卫 |
 | [MULTIPLATFORM.md](MULTIPLATFORM.md) | 四端构建与打包、CI/CD、macOS 签名公证、iOS 权限链、**发布前验证清单** |
 | [ANDROID_BUILD.md](ANDROID_BUILD.md) | 安卓工具链（JDK/SDK/Gradle）、出包、release 签名与密钥备份 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 历年踩坑与排查手册（"又坏了"先翻这个） |
@@ -71,10 +72,11 @@ npm run verify:parity      # 双端数值等价对拍（见 §4.2）
 npm run verify:exercises   # 动作库守卫：唯一数据源 / 逐项对拍 / 引导数据化（S7）
 npm run verify:schema      # 表结构与迁移守卫：编号连续 / 空库列 / 老库升级 / 幂等与重放 / 三处字段同构
 npm run verify:readme      # README 下载区守卫：不写版本号 / 体积 / 逐版本下载链接
+npm run verify:ci          # CI 工作流守卫：打包 job 的 if / --draft 闸门 / tag 不被取消（见 BRANCHING.md）
 npm run verify:backend     # 后端产物 magic bytes 与目标平台是否匹配
 npm run verify:ui          # 界面层冒烟（5 平台 × 3 路由 + 新手引导 + 活动收尾屏，见 MULTIPLATFORM §9.8）
 npm run verify:source      # 包内前端 = 本次 dist（逐文件 sha256）
-npm run verify:all         # parity + exercises + schema + readme + 版本号五处一致性
+npm run verify:all         # parity + exercises + schema + readme + ci + 版本号五处一致性
 npm run set-version -- --check   # 只检查版本号一致性
 ```
 
@@ -754,11 +756,22 @@ npm run verify:parity     # 静息：24 常量 + 80 评分用例 + 439 帧平滑
 
 ### 8.2 发布流程
 
-打 `v*` tag → CI 构建四端 → 建 **draft** Release → 人工确认后
-`gh release edit <tag> --draft=false --latest` 公开。
+**分支模型与完整流程见 [BRANCHING.md](BRANCHING.md)，这里只列主干动作。**
+
+```bash
+node scripts/set-version.js 1.7.0        # 五处同步（versionCode 随版本变化自动 +1）
+npm run verify:all
+git switch -c release/v1.7.0 && git push -u origin release/v1.7.0
+#   → CI 四端构建 + 创建/更新 v1.7.0 的 draft Release（版本号取自分支名）
+git tag v1.7.0 && git push origin v1.7.0        # 定稿（tag 允许覆盖已发布资产）
+gh release edit v1.7.0 --draft=false --latest   # 人工放行
+```
 
 **停在 draft 是刻意的**：mac / iOS 未做真机验证，Release 一旦公开就有人下载。
 Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 CD 自动剔除。
+
+🔴 **分支构建不许覆盖已发布的 Release**：目标 Release 若不是 draft，`release/**` 触发会
+直接失败 —— 已发布资产与 `SHA256SUMS` 是"对外契约"，要发行就往上**升版本号**。
 
 发布前必须过 [MULTIPLATFORM.md §9 验证清单](MULTIPLATFORM.md)，
 发布后必须匿名 `curl` 验 Content-Type。
@@ -878,6 +891,7 @@ Permission denied"指的是删除与跨目录搬运，同目录改名不受影�
 | 55 | UI 冒烟里凡有「**只有首次才出现**」的东西（新手引导的 `localStorage` 标志就是一例），**每个用例都必须把它显式复位到初始状态**再开始 | 一个浏览器 profile 跑完 5 个平台组合，而**存储是跨用例共享**的：第一个用例走完引导就把标志写成了 `1`，从第二个用例起引导根本不出现 —— 而"没出现"不会被当成问题，`run.ok` 那一句照样打 ✓。于是这条断言**只在 1/5 的用例上真跑过**，剩下四个是空的。这与铁律 #33（"检测不到就跳过"）是同一类假绿，但更隐蔽：**五个平台组合全绿**，没有任何一处提示你漏了 |
 | 56 | 「一次性界面」（新手引导 / 首次弹窗）的显示判定必须**同步可读**，且要在**启动闸门放行的同一帧**完成；不许挂在设置表 / IndexedDB / 后端的异步读取上 | 桌面端的启动闸门有个 5 秒兜底计时器，它到点时后端**可能还没起来** —— 判定挂在后端上，引导就会随启动快慢**时有时无**；挂在放行之后的异步回调上，则会**先闪一下主界面再盖上遮罩**。所以标志存 `localStorage`（同步），**不进设置表**：它描述的是"**这台设备**上这份界面有没有被讲解过"，不是用户偏好 —— 放进设置表还会被导出/导入带着走（新设备反而没有引导）。代价要如实对外说：`localStorage` 按浏览器 profile 隔离，**重装 / 换设备 / 清站点数据后会再看一次**，别写成"每个用户只看到一次" |
 | 57 | 需要重新构建的变异脚本，每轮结论必须是**三态**：抓住 / 未抓住 / **轮次无效**。判据是"有没有出现守卫的**崩溃出口**"（本项目是 `::error::UI 冒烟执行失败`），不能只看 `rc != 0` 与 `✗` 行 | 实测踩到：一轮报"未抓住"，而**手动重现明明抓住了**。真因是守卫在 `main` 的 catch 里崩溃后 `exit 1` —— 这种轮次**一条 `✗` 都没有**，"rc≠0 但没有预期关键词"就被读成了"变异没被抓住"。于是我会去给一条**本来有牙**的断言加料，越改越偏（把"守卫崩了"当成"守卫没牙"，与把它当成"全绿"一样有害）。配套两条：① 崩溃多为资源竞争的偶发，脚本**自动重跑一次**再下结论；② 守卫自己的每个分段（引导段、收尾段…）都要 **try/catch 兜住**，别让一个偶发的 `waitFor` 超时冒泡成"执行失败" |
+| 58 | 凡是**决定"什么会发布"的配置**（工作流的 `on:` / 各 job 的 `if:` / `concurrency`、发布脚本里的闸门），必须有一条守卫盯着，且**守卫要被变异证明有牙** | `build.yml` 是全仓库唯一"改错了既没有编译错误、也没有别的测试会红"的文件，而它决定的事最贵：去掉 `--draft` → 之后**每次打 tag 都自动对外发布**；去掉打包 job 的 `if:` → 推 `main` 也烧四个 runner、主干提交混进产物；给 `verify` job 加 `if:` → 让"兜底的那一道"变成有条件的。现由 `npm run verify:ci` 盯着（14 条断言；变异 C1–C8 + N1 负向对照）。⚠️ 变异实测**抓出一条真缺陷**：原断言只查 `includes('--draft')`，而 Summary 里那句提示 `gh release edit … --draft=false …` **也含这个子串** → 删掉真正的 `--draft` 参数照样绿。**断言要落在"结构 / 参数"上，不能落在"某个子串出现过"上**（与 #50 同源：位置取错，守卫就永远匹配得上或永远匹配不上） |
 > 🔴 **维护本表的规矩**：编号必须**唯一且递增**。向表尾追加新条目之前，**先扫一眼表尾**有没有
 > 因历史上"追加在末尾"而错位的条目 —— v1.6.0 实测踩到：追加 UI 六条（当时编号 #30–35）时，
 > 原有的 #30（夏令时用例）被挤到新条目后面却忘了重编号，表里同时出现两个 `| 30 |`。

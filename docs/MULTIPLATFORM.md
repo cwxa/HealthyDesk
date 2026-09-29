@@ -225,8 +225,15 @@ node scripts/ios-build.js --export       # 导出 IPA（需签名）
 
 ## 四、CI：四端一起构建
 
-`.github/workflows/build.yml`，打 tag（`v*`）或手动触发（`gh workflow run build.yml`）。
-⚠️ **推 main 不会触发** —— 改了工作流要验证，必须手动 dispatch。
+`.github/workflows/build.yml`。**触发条件与分支模型的唯一真相来源是
+[BRANCHING.md](BRANCHING.md)** —— 这里只列 job 与产物。要点：
+
+| 触发 | 守门 `verify` | 四端构建 | draft Release |
+|---|---|---|---|
+| 推 `main` / `feat|fix|chore|docs` 分支 | ✅ | — | — |
+| 推 `release/v<X.Y.Z>` 分支 | ✅ | ✅ | ✅ 创建/更新 |
+| 推 tag（`v*`） | ✅ | ✅ | ✅ 允许覆盖 |
+| 手动触发（`gh workflow run build.yml`） | ✅ | ✅ | — |
 
 | Job | Runner | 产物 |
 |---|---|---|
@@ -284,11 +291,20 @@ CI 页面看起来只是"一直在跑"。这比"失败"更难发现。
 > 后端评分/角度模块只依赖 `numpy`（mediapipe 是惰性导入），所以守门任务
 > 不需要安装 opencv + mediapipe 那 400MB。
 
-### CD：打 tag 自动发 **draft** Release
+### CD：release 分支 / tag → **draft** Release
 
-打 `v*` tag → 四端构建全部成功后，`release` job 汇总产物、生成 `SHA256SUMS.txt`、
-调用 `gh release create --draft` 建一个 draft Release。
-**手动 dispatch 不碰 Release**（只构建），所以 `if` 是 `startsWith(github.ref, 'refs/tags/v')`。
+两条触发都会走到同一个 `release` job（汇总产物 → 生成 `SHA256SUMS.txt` →
+`gh release create --draft`）：
+
+- **推 `release/vX.Y.Z` 分支** → 版本号**取自分支名**，创建或**覆盖**该版本的 draft Release。
+  迭代时反复推同一条分支即可（`--clobber` 覆盖同名资产），不用打新 tag。
+- **推 tag `v*`** → 同上；tag 被当作**定稿动作**，额外允许覆盖**已发布** Release 的资产。
+
+**手动 dispatch 不碰 Release**（只构建）。
+
+🔴 **分支构建不许覆盖已发布的 Release**：目标 Release 若不是 draft，`release/**` 触发会
+直接 `::error::` 失败。已发布资产与 `SHA256SUMS` 是**对外契约**（有人下载过、README 的
+`releases/latest` 指着它），要发行就往上**升版本号**。
 
 🔴 **为什么停在 draft**：`"构建成功" ≠ "能用"`。mac / iOS 产物至今**没做过真机验证**，
 Android 的摄像头链路也只在 v1.3.4 验过一轮。Release 一旦公开就有人下载，
@@ -362,8 +378,11 @@ gh release edit v1.3.8 --draft=false --latest
 > `assets: []`，看起来像"一个都没传上去"（实测：job 成功后 19 秒查是 0，几十秒后同一对象 7 个）。
 > 看**单个** release 接口 `GET /releases/<id>` 并隔一会儿复看，别凭一次查询下结论。
 >
-> 预演 CD 全链路：`git tag -a v1.3.7-cdverify && git push origin v1.3.7-cdverify`，
-> 验证完 `gh release delete v1.3.7-cdverify --yes --cleanup-tag` + `git push --delete origin <tag>`。
+> 预演 CD 全链路：**推一条 `release/v<版本>-rc1` 分支**即可 —— 版本号按 `-rc1` 前的部分
+> 校验，它会**覆盖**该版本已有的 draft 资产，**不留垃圾 Release**；验完删分支：
+> `git push origin --delete release/v1.7.0-rc1`。
+> （旧做法是打一个一次性 tag（`v1.3.7-cdverify`），验完还得
+> `gh release delete --cleanup-tag` 清掉 —— 有了 release 分支就不必了。）
 > 已发布的 Release 数量**跑完要核对没变**（防误删）。
 
 ### 往已发布的 Release 补资产（CI 产物 → Release）
@@ -580,17 +599,21 @@ npm run icons:generate    # 三个脚本一起跑：桌面 ico/icns/菜单栏图
 
 ### 9.1 通用（先跑，不过就别打包）
 
+**前提**：这些要在 `release/v<X.Y.Z>` 分支上跑（见 [BRANCHING.md](BRANCHING.md)）。
+`main` 上跑过同一套守门，但**发版这一轮的结论只能以发版分支上的这次为准**。
+
 ```bash
-npm run verify:all          # 数值对拍 + 五处版本号一致性
+npm run verify:all          # 数值对拍 + 各守卫（含 verify:ci）+ 五处版本号一致性
 npm run verify:backend      # 后端产物 magic bytes 与目标平台匹配
 npm run build:web           # UI 冒烟需要 dist（下一行依赖它）
-npm run verify:ui           # 界面渲染 / 路由 / 平台判定（无头 Chrome，5 平台 × 3 页）
+npm run verify:ui           # 界面渲染 / 路由 / 平台判定（无头 Chrome，5 平台 × 3 页 + 新手引导 + 收尾屏）
 ```
 
 - [ ] `verify:parity` 全通过：21 常量 + 80 评分用例 + 439 帧平滑 + 8 角度 + 不变量
       + 运动态 32 用例 + 语音隔离 + 部位健康度 9 常量 + 3 映射 + 18 用例（含取整灵敏度自检）
       + 动作完成度 17 常量 + 3 段离线样本 + 29 用例（含取整灵敏度自检）
 - [ ] `set-version --check` 五处版本号一致
+- [ ] `verify:ci` 通过（工作流的触发条件与 `--draft` 闸门没被改坏）
 - [ ] `verify-backend --target=<平台>` 通过（🔴 在 Windows 上传 `--target=mac` **必须 exit 1**；
       测退出码不要接管道，`| tail` 会把 `$?` 换成 tail 的）
 
