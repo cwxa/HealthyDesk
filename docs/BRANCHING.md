@@ -84,8 +84,12 @@ git push -u origin release/v1.7.0
 定稿与放行：
 
 ```bash
-git tag v1.7.0 && git push origin v1.7.0          # tag = 定稿（允许覆盖已发布资产）
-gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary 里会打印这条）
+# 🔴 用**注释 tag**（`-a`），不要轻量 tag：历史 v1.5.0 起全是注释 tag（远程带 `^{}` 展开那一行），
+#    这样 `git describe` 认得出、`git cat-file tag v1.7.0` 能读到发版说明、
+#    也才配得上"tag = 定稿动作"这个定位。
+git tag -a v1.7.0 -F .buildenv/tag-msg-v1.7.0.txt   # 定稿（允许覆盖已发布资产）
+git push origin v1.7.0
+gh release edit v1.7.0 --draft=false --latest       # 人工放行（CI 的 Summary 里会打印这条）
 ```
 
 🔴 **为什么"放行"那一步不自动化**：四端的**真机通过行到现在还是空的**（见
@@ -138,6 +142,52 @@ gh release edit v1.7.0 --draft=false --latest    # 人工放行（CI 的 Summary
 >   ⚠️ 这一条属于**第三类失效**："射程"没问题、"作用域"也没问题，**是那一行自己的表达式写错了** ——
 >   本地 YAML 与 actionlint 都是绿的，只有**真的跑一次**才会暴露。
 >   **教训：「流程写下来」≠「流程跑通过」；没跑过的链路，文档里就要写着"没跑过"。**
+
+> 🔴 **`tag` 链路的首次实效记录（2026-09-29，v1.7.0；一次跑通）**
+>
+> 接上一条：当天把 `release/**` 修好之后，打的第一个 tag 就是 v1.7.0 的定稿动作。
+> **tag 是注释 tag**（`git tag -a v1.7.0 -F …`）—— 与 v1.5.0 以来的历史一致
+> （远程带 `^{}` 展开行就是它的证据），不是轻量 tag。
+>
+> - tag 指向 `3960ac2`（= `main` 尖端），推上去触发 run **`36531433717`**。
+> - **守门绿 → 四个打包 job 全部启动并完成 → `release` job 六步全绿**，
+>   含回读校验：`期望资产数 = 8`、第 1 次回读 `assets=8 / 期望=8`、
+>   `✅ 资产齐全（8 个），且校验文件名与线上逐字一致`。
+> - 🔴 **逐字取证"走的确实是 tag 那条分支"**（不是"看起来成功了"）：
+>   ```
+>   package.json=1.7.0  ref=v1.7.0  目标 tag=v1.7.0  (比对基准=1.7.0)
+>   ```
+>   对 tag 触发，`TAG` 直接取 `GITHUB_REF_NAME`、`FROM_TAG=1`；分支触发才会走
+>   `${GITHUB_REF_NAME#release/}` 那两行。两条路的**输出同名**，所以只能靠日志里的
+>   这一行区分 —— 这也正是上一条事故查得出来的原因（`ref=` 与 `目标 tag=` 并排打印了）。
+> - ⚠️ **"同一并发组"只被分别跑过，没有真并发的实跑**：分支 run（`36529416155`）先结束，
+>   tag run 才排上；「tag 排队等分支」这条还只是**设计**，没有两个 run 真正重叠的证据。
+>
+> **tag 构建会把资产整体换掉**（不是"补传"）：`gh release upload --clobber` 覆盖全部 8 个文件，
+> 实测 7 个包的 sha256 **全部变化** —— 也就是说 Electron / NSIS / Gradle 的产物**不是逐字节可复现的**
+> （时间戳、签名块都会进字节）。两条推论，写下来备查：
+>
+> 1. **对外发布的必须是"最末一次"构建**。分支构建之后又打了 tag，用户下的就是 tag 那次；
+>    拿分支那次的哈希去核对会以为"资产被改过"。
+> 2. 所以 §9 的产物层校验（同源、字节数）**要在放行后用线上文件做**，不能拿本地旧产物顶替。
+>
+> **放行与发布后核验（本次实际结果）**：
+>
+> | 项 | 结果 |
+> |---|---|
+> | `gh release edit v1.7.0 --draft=false --latest` | ✅ `draft=false prerelease=false publishedAt=2026-09-29T06:43:06Z` |
+> | `releases/latest` 入口 | ✅ 302 → `…/releases/tag/v1.7.0`（README 下载区就是它） |
+> | APK 匿名 `Content-Type` | ✅ `application/vnd.android.package-archive`（§9.4 那条：错了手机点开装不上） |
+> | APK 匿名下载字节数 | ✅ `Content-Length: 17710302` == 实际收到 `17710302` == Release 声明值 |
+> | 下载字节的 sha256 | ✅ 与线上 `SHA256SUMS.txt` 登记值**逐位相同**（比 §9.4 清单多走一步：清单只要求比字节数） |
+>
+> ⚠️ **仍未实跑**：`FROM_TAG=1` 允许覆盖**已发布** Release 那条（`IS_DRAFT != true && FROM_TAG != 1`）
+> 只有在"发布之后又推一次同一个 tag"时才会走到 —— 本次 Release 当时还是 draft，
+> 走的是 `Release v1.7.0 已存在（draft=true）→ 覆盖上传资产`。要真验它，得在已发布状态下重推 tag。
+>
+> 发布完成后 `release/v1.7.0` 分支（本地 + 远程）已删除：`main` 已经吃到全部提交、`v1.7.0`
+> 是注释 tag，两者都能完整复现这次构建；留一条**已被发布**的 release 分支反而是个陷阱
+> —— 再往上推一次会撞上"已发布不许覆盖"那道闸门而失败（见 §三）。
 
 **守门**（`verify` job）包含：类型检查、期望值是否与生成器同步、`verify:parity`、
 `verify:schema`、`verify:exercises`、`verify:readme`、`verify:ci`、`build:web` + `verify:ui`、
