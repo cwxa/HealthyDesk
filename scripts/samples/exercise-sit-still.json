@@ -1,7 +1,7 @@
 {
   "name": "sit-still",
-  "description": "负样本：全程没动 —— 人坐在那儿没做动作，只有坐姿自身的微小抖动（峰值活动量 0.2，低于 idle 线 0.25）",
-  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0 },
+  "description": "负样本：全程没动 —— 人坐在那儿没做动作，只有坐姿自身的微小抖动（头部在 0.5°–1.1° 之间飘，活动**范围**仅 0.6°，除以 5° 阈值后 0.1，低于 idle 线 0.25）",
+  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0, "metric": "head" },
   "expected_grade": "idle",
   "frames": [
     { "t": 0, "head_angle": 0.5, "shoulder_diff": 0.4, "spine_angle": 1.0 },

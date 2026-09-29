@@ -22,7 +22,31 @@
     "EXERCISE_PASS_SCORE": 80,
     "UNMET_MAX_SCORE": 79,
     "IDLE_SCORE": 0,
-    "ACTION_SCORES_VERSION": 1
+    "ACTION_SCORES_VERSION": 2
+  },
+  "metrics": {
+    "field": {
+      "head": "head_angle",
+      "shoulder": "shoulder_diff",
+      "spine": "spine_angle"
+    },
+    "threshold": {
+      "head": 5.0,
+      "shoulder": 4.0,
+      "spine": 10.0
+    },
+    "names": {
+      "head": "head",
+      "shoulder": "shoulder",
+      "spine": "spine",
+      "any": "any"
+    }
+  },
+  "action_scores_versions": {
+    "current": 2,
+    "legacy": [
+      1
+    ]
   },
   "sample_files": [
     "exercise-neck-left-flex.json",
@@ -33,7 +57,7 @@
     {
       "name": "neck-left-flex",
       "source_file": "samples/exercise-neck-left-flex.json",
-      "description": "颈部左侧屈：正常完成 —— 幅度到位（头部侧屈 10°，活动量 2.0）且保持约 87% 时长",
+      "description": "颈部左侧屈：正常完成 —— 头部从端正位侧屈到 10°（活动**范围** 10°，除以 5° 阈值 = 活动量 2.0）并保持约 87% 标称时长",
       "expected_grade": "completed",
       "frames": [
         {
@@ -190,7 +214,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
@@ -205,7 +230,7 @@
     {
       "name": "sit-still",
       "source_file": "samples/exercise-sit-still.json",
-      "description": "负样本：全程没动 —— 人坐在那儿没做动作，只有坐姿自身的微小抖动（峰值活动量 0.2，低于 idle 线 0.25）",
+      "description": "负样本：全程没动 —— 人坐在那儿没做动作，只有坐姿自身的微小抖动（头部在 0.5°–1.1° 之间飘，活动**范围**仅 0.6°，除以 5° 阈值后 0.1，低于 idle 线 0.25）",
       "expected_grade": "idle",
       "frames": [
         {
@@ -362,12 +387,13 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
         "hint": "没检测到动作，跟着引导慢慢做",
-        "peak_activity": 0.2,
+        "peak_activity": 0.1,
         "held_ms": 0,
         "hold_ratio": 0.0,
         "cycles": 0
@@ -377,12 +403,12 @@
     {
       "name": "too-shallow",
       "source_file": "samples/exercise-too-shallow.json",
-      "description": "幅度不足：动了，但头部侧屈只到 3°（活动量 0.6，达到 idle 线却没到有效活动线 1.0）—— 全程维持也只能判「幅度不够」",
+      "description": "幅度不足：动了，但头部只从端正位侧屈到 3°（活动**范围** 3°，除以 5° 阈值 = 活动量 0.6，越过 idle 线却没到有效活动线 1.0）—— 全程维持也只能判「幅度不够」",
       "expected_grade": "insufficient",
       "frames": [
         {
           "t": 0,
-          "head_angle": 3.0,
+          "head_angle": 0.0,
           "shoulder_diff": 1.0,
           "spine_angle": 4.0
         },
@@ -534,7 +560,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -555,7 +582,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
@@ -574,7 +602,8 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
@@ -587,8 +616,8 @@
       "expected_score": 0
     },
     {
-      "name": "单帧·幅度到位",
-      "note": "单帧没有区间 → 保持时长为 0",
+      "name": "单帧·无区间可算（范围 = 0）",
+      "note": "单帧算不出范围 → 与「一帧都没有」同样按没动处理。⚠️ **不许**退回「用这一帧的绝对偏离顶上」—— 那等于在角落里把刚修掉的缺陷放回来",
       "frames": [
         {
           "t": 0,
@@ -600,43 +629,18 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
-        "grade": "insufficient",
-        "hint": "保持住，别急着放下",
-        "peak_activity": 2.0,
+        "grade": "idle",
+        "hint": "没检测到动作，跟着引导慢慢做",
+        "peak_activity": 0.0,
         "held_ms": 0,
         "hold_ratio": 0.0,
         "cycles": 0
       },
-      "expected_score": 36
-    },
-    {
-      "name": "单帧·幅度不足",
-      "note": "",
-      "frames": [
-        {
-          "t": 0,
-          "head_angle": 3.0,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        }
-      ],
-      "spec": {
-        "kind": "hold",
-        "duration_ms": 12000,
-        "min_cycles": 0
-      },
-      "expected": {
-        "grade": "insufficient",
-        "hint": "幅度还不够，再大一点",
-        "peak_activity": 0.6,
-        "held_ms": 0,
-        "hold_ratio": 0.0,
-        "cycles": 0
-      },
-      "expected_score": 18
+      "expected_score": 0
     },
     {
       "name": "单帧·完全静止",
@@ -652,12 +656,13 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
         "hint": "没检测到动作，跟着引导慢慢做",
-        "peak_activity": 0.1,
+        "peak_activity": 0.0,
         "held_ms": 0,
         "hold_ratio": 0.0,
         "cycles": 0
@@ -666,11 +671,11 @@
     },
     {
       "name": "缺省 spec",
-      "note": "不传 spec 时按保持类、标称时长 0 处理",
+      "note": "不传 spec 时按保持类、标称时长 0、metric=any 处理",
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -704,7 +709,7 @@
         "grade": "insufficient",
         "hint": "保持住，别急着放下",
         "peak_activity": 2.0,
-        "held_ms": 2000,
+        "held_ms": 1500,
         "hold_ratio": 0.0,
         "cycles": 0
       },
@@ -712,11 +717,11 @@
     },
     {
       "name": "边界·取整后 0.2 即 idle 线之下",
-      "note": "0.2 < 0.25",
+      "note": "范围 1.0° → 0.2 < 0.25",
       "frames": [
         {
           "t": 0,
-          "head_angle": 1.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -868,7 +873,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
@@ -882,11 +888,11 @@
     },
     {
       "name": "边界·取整后 0.3 已越过 idle 线",
-      "note": "0.3 > 0.25 → 判幅度不足",
+      "note": "范围 1.5° → 0.3 > 0.25 → 判幅度不足",
       "frames": [
         {
           "t": 0,
-          "head_angle": 1.5,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1038,7 +1044,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -1056,7 +1063,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 4.99,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1208,13 +1215,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
         "peak_activity": 1.0,
-        "held_ms": 12000,
+        "held_ms": 11500,
         "hold_ratio": 1.0,
         "cycles": 0
       },
@@ -1226,7 +1234,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 4.7,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1378,7 +1386,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -1396,7 +1405,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 5.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1548,13 +1557,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
         "peak_activity": 1.0,
-        "held_ms": 12000,
+        "held_ms": 11500,
         "hold_ratio": 1.0,
         "cycles": 0
       },
@@ -1566,7 +1576,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1638,7 +1648,7 @@
         },
         {
           "t": 6000,
-          "head_angle": 0.0,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1689,12 +1699,19 @@
           "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
         }
       ],
       "spec": {
         "kind": "hold",
         "duration_ms": 10000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
@@ -1712,7 +1729,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1772,7 +1789,7 @@
         },
         {
           "t": 5000,
-          "head_angle": 0.0,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -1835,12 +1852,19 @@
           "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
         }
       ],
       "spec": {
         "kind": "hold",
         "duration_ms": 10000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -1854,11 +1878,11 @@
     },
     {
       "name": "比例·超过 1 时钳到 1",
-      "note": "采样跨度 22s > 标称 12s，比例会 >1，钳到 1 避免显示 183%",
+      "note": "采样跨度 23s > 标称 12s，比例会 >1，钳到 1 避免显示 183%",
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2130,13 +2154,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
         "peak_activity": 2.0,
-        "held_ms": 22000,
+        "held_ms": 21500,
         "hold_ratio": 1.0,
         "cycles": 0
       },
@@ -2148,7 +2173,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2180,13 +2205,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 0,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
         "hint": "保持住，别急着放下",
         "peak_activity": 2.0,
-        "held_ms": 2000,
+        "held_ms": 1500,
         "hold_ratio": 0.0,
         "cycles": 0
       },
@@ -2198,7 +2224,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2224,13 +2250,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
         "hint": "保持住，别急着放下",
         "peak_activity": 2.0,
-        "held_ms": 3000,
+        "held_ms": 2000,
         "hold_ratio": 0.2,
         "cycles": 0
       },
@@ -2242,7 +2269,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2268,7 +2295,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -2286,7 +2314,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2318,7 +2346,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -2380,12 +2409,13 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
-        "peak_activity": 2.0,
+        "peak_activity": 1.8,
         "held_ms": 1500,
         "hold_ratio": 0.5,
         "cycles": 3
@@ -2430,49 +2460,50 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
         "hint": "再多做几次",
-        "peak_activity": 2.0,
+        "peak_activity": 1.8,
         "held_ms": 1000,
         "hold_ratio": 0.3,
         "cycles": 2
       },
-      "expected_score": 70
+      "expected_score": 69
     },
     {
       "name": "往复·在起点附近抖动（滞回防重复计数）",
-      "note": "",
+      "note": "上升后一直停在 onset 之上（活动量 1.2 > 1.0），没有归位 → 不得计成多次循环",
       "frames": [
         {
           "t": 0,
-          "head_angle": 5.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 500,
-          "head_angle": 6.0,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 1000,
-          "head_angle": 5.0,
+          "head_angle": 6.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 1500,
-          "head_angle": 7.0,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 2000,
-          "head_angle": 5.0,
+          "head_angle": 6.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         }
@@ -2480,25 +2511,26 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 1
+        "min_cycles": 1,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
         "hint": "再多做几次",
-        "peak_activity": 1.4,
-        "held_ms": 2000,
-        "hold_ratio": 0.7,
+        "peak_activity": 2.0,
+        "held_ms": 1500,
+        "hold_ratio": 0.5,
         "cycles": 0
       },
-      "expected_score": 32
+      "expected_score": 36
     },
     {
       "name": "往复·恰好回落到 trough（算一次归位）",
-      "note": "",
+      "note": "trough = 0.4 × onset：回落恰好落在 0.4 上要算一次归位",
       "frames": [
         {
           "t": 0,
-          "head_angle": 2.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2513,26 +2545,39 @@
           "head_angle": 2.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 10.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 6.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
         }
       ],
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 1
+        "min_cycles": 1,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
         "peak_activity": 2.0,
-        "held_ms": 500,
-        "hold_ratio": 0.2,
+        "held_ms": 1000,
+        "hold_ratio": 0.3,
         "cycles": 1
       },
       "expected_score": 86
     },
     {
       "name": "往复·回落到 trough 之上（不算归位）",
-      "note": "",
+      "note": "最低只回到活动量 0.7（> 0.4）→ 一次都没归位",
       "frames": [
         {
           "t": 0,
@@ -2548,7 +2593,13 @@
         },
         {
           "t": 1000,
-          "head_angle": 2.5,
+          "head_angle": 6.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         }
@@ -2556,17 +2607,843 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 1
+        "min_cycles": 1,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
         "hint": "再多做几次",
-        "peak_activity": 2.0,
+        "peak_activity": 1.5,
         "held_ms": 500,
         "hold_ratio": 0.2,
         "cycles": 0
       },
-      "expected_score": 36
+      "expected_score": 34
+    },
+    {
+      "name": "metric·head：肩高差再大也不算头部动作",
+      "note": "旧口径（三项取最大）会把肩高差当成「头部侧屈的幅度」→ 判完成；新口径必须判没动",
+      "frames": [
+        {
+          "t": 0,
+          "head_angle": 1.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        }
+      ],
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "min_cycles": 0,
+        "metric": "head"
+      },
+      "expected": {
+        "grade": "idle",
+        "hint": "没检测到动作，跟着引导慢慢做",
+        "peak_activity": 0.0,
+        "held_ms": 0,
+        "hold_ratio": 0.0,
+        "cycles": 0
+      },
+      "expected_score": 0
+    },
+    {
+      "name": "metric·shoulder：同一串帧换看肩部就是真动作",
+      "note": "范围 12% > 阈值 4% → 幅度 3.0，且保持到位",
+      "frames": [
+        {
+          "t": 0,
+          "head_angle": 1.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        }
+      ],
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "min_cycles": 0,
+        "metric": "shoulder"
+      },
+      "expected": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 3.0,
+        "held_ms": 11000,
+        "hold_ratio": 0.9,
+        "cycles": 0
+      },
+      "expected_score": 94
+    },
+    {
+      "name": "metric·any：兜底口径下取活动范围最大的那一个量",
+      "note": "与 metric=shoulder 同结论（head 没动，肩部动了）",
+      "frames": [
+        {
+          "t": 0,
+          "head_angle": 1.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        }
+      ],
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "min_cycles": 0,
+        "metric": "any"
+      },
+      "expected": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 3.0,
+        "held_ms": 11000,
+        "hold_ratio": 0.9,
+        "cycles": 0
+      },
+      "expected_score": 94
+    },
+    {
+      "name": "metric·非法值回落 any",
+      "note": "未知 metric 不许「猜一个维度」，回落 any（只会更宽容，不会看错部位）",
+      "frames": [
+        {
+          "t": 0,
+          "head_angle": 1.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 2500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 3500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 5500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 6500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 7500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11500,
+          "head_angle": 1.0,
+          "shoulder_diff": 12.0,
+          "spine_angle": 0.0
+        }
+      ],
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "min_cycles": 0,
+        "metric": "elbow"
+      },
+      "expected": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 3.0,
+        "held_ms": 11000,
+        "hold_ratio": 0.9,
+        "cycles": 0
+      },
+      "expected_score": 94
+    },
+    {
+      "name": "metric·spine：基线歪 12° 但全程不动 → 没动",
+      "note": "旧口径下这就是 82 分（姿势越差越容易「自动过关」）；新口径必须 0 分",
+      "frames": [
+        {
+          "t": 0,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 1000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 1500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 2000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 2500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 3000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 3500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 4000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 4500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 5000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 5500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 6500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 7500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        },
+        {
+          "t": 11500,
+          "head_angle": 1.0,
+          "shoulder_diff": 1.0,
+          "spine_angle": 12.0
+        }
+      ],
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "min_cycles": 0,
+        "metric": "spine"
+      },
+      "expected": {
+        "grade": "idle",
+        "hint": "没检测到动作，跟着引导慢慢做",
+        "peak_activity": 0.0,
+        "held_ms": 0,
+        "hold_ratio": 0.0,
+        "cycles": 0
+      },
+      "expected_score": 0
     },
     {
       "name": "取整平局点·逐帧 raw 0.25（结论也会不同）",
@@ -2574,7 +3451,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 1.25,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2726,7 +3603,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "idle",
@@ -2744,7 +3622,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 3.75,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -2896,7 +3774,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -2914,7 +3793,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 6.25,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -3066,13 +3945,14 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "completed",
         "hint": "很好，保持住",
         "peak_activity": 1.2,
-        "held_ms": 12000,
+        "held_ms": 11500,
         "hold_ratio": 1.0,
         "cycles": 0
       },
@@ -3084,7 +3964,7 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 10.0,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -3108,7 +3988,7 @@
         },
         {
           "t": 2000,
-          "head_angle": 0.0,
+          "head_angle": 10.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -3183,12 +4063,43 @@
           "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 0.0,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
         }
       ],
       "spec": {
         "kind": "hold",
         "duration_ms": 8000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -3206,144 +4117,150 @@
       "frames": [
         {
           "t": 0,
-          "head_angle": 3.33,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 500,
-          "head_angle": 2.77,
+          "head_angle": 3.33,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 1000,
-          "head_angle": 4.44,
+          "head_angle": 2.77,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 1500,
-          "head_angle": 3.11,
+          "head_angle": 4.44,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 2000,
-          "head_angle": 5.55,
+          "head_angle": 3.11,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 2500,
-          "head_angle": 4.55,
+          "head_angle": 5.55,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 3000,
-          "head_angle": 2.22,
+          "head_angle": 4.55,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 3500,
-          "head_angle": 1.99,
+          "head_angle": 2.22,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
           "t": 4000,
-          "head_angle": 3.33,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 4500,
-          "head_angle": 2.77,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 5000,
-          "head_angle": 4.44,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 5500,
-          "head_angle": 3.11,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 6000,
-          "head_angle": 5.55,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 6500,
-          "head_angle": 4.55,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 7000,
-          "head_angle": 2.22,
-          "shoulder_diff": 0.0,
-          "spine_angle": 0.0
-        },
-        {
-          "t": 7500,
           "head_angle": 1.99,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 8000,
+          "t": 4500,
           "head_angle": 3.33,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 8500,
+          "t": 5000,
           "head_angle": 2.77,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 9000,
+          "t": 5500,
           "head_angle": 4.44,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 9500,
+          "t": 6000,
           "head_angle": 3.11,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 10000,
+          "t": 6500,
           "head_angle": 5.55,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 10500,
+          "t": 7000,
           "head_angle": 4.55,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
-          "t": 11000,
+          "t": 7500,
           "head_angle": 2.22,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
         {
+          "t": 8000,
+          "head_angle": 1.99,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 8500,
+          "head_angle": 3.33,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 2.77,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 9500,
+          "head_angle": 4.44,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10000,
+          "head_angle": 3.11,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 10500,
+          "head_angle": 5.55,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 11000,
+          "head_angle": 4.55,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
           "t": 11500,
+          "head_angle": 2.22,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 12000,
           "head_angle": 1.99,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
@@ -3352,7 +4269,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -3365,12 +4283,12 @@
       "expected_score": 39
     },
     {
-      "name": "长序列（45 帧）",
+      "name": "长序列（46 帧）",
       "note": "",
       "frames": [
         {
           "t": 0,
-          "head_angle": 4.05,
+          "head_angle": 0.0,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
         },
@@ -3637,12 +4555,19 @@
           "head_angle": 4.05,
           "shoulder_diff": 0.0,
           "spine_angle": 0.0
+        },
+        {
+          "t": 22500,
+          "head_angle": 4.05,
+          "shoulder_diff": 0.0,
+          "spine_angle": 0.0
         }
       ],
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected": {
         "grade": "insufficient",
@@ -3670,7 +4595,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 80
     },
@@ -3688,7 +4614,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 84
     },
@@ -3706,7 +4633,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 100
     },
@@ -3724,7 +4652,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 50
     },
@@ -3742,7 +4671,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 79
     },
@@ -3760,7 +4690,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 79
     },
@@ -3778,7 +4709,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 15
     },
@@ -3796,7 +4728,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 8
     },
@@ -3814,7 +4747,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 0
     },
@@ -3832,7 +4766,8 @@
       "spec": {
         "kind": "hold",
         "duration_ms": 12000,
-        "min_cycles": 0
+        "min_cycles": 0,
+        "metric": "head"
       },
       "expected_score": 0
     },
@@ -3850,7 +4785,8 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected_score": 80
     },
@@ -3868,7 +4804,8 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected_score": 79
     },
@@ -3886,7 +4823,8 @@
       "spec": {
         "kind": "cyclic",
         "duration_ms": 3000,
-        "min_cycles": 3
+        "min_cycles": 3,
+        "metric": "head"
       },
       "expected_score": 100
     },
@@ -3913,7 +4851,7 @@
     {
       "name": "空明细（本次一个动作都没判出来）",
       "items": [],
-      "expected": "{\"v\":1,\"items\":[]}",
+      "expected": "{\"v\":2,\"items\":[]}",
       "note": "与「老记录该列为 NULL」不同 —— 这是「判过了，但一个都没判出来」"
     },
     {
@@ -3925,7 +4863,7 @@
           "grade": "completed"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"neck-flex-left\",\"score\":84,\"grade\":\"completed\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"neck-flex-left\",\"score\":84,\"grade\":\"completed\"}]}",
       "note": ""
     },
     {
@@ -3937,7 +4875,7 @@
           "grade": "idle"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"sit-still\",\"score\":0,\"grade\":\"idle\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"sit-still\",\"score\":0,\"grade\":\"idle\"}]}",
       "note": "0 分是一个**真结论**，不是缺失"
     },
     {
@@ -3949,7 +4887,7 @@
           "grade": "completed"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"neck-flex-right\",\"score\":100,\"grade\":\"completed\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"neck-flex-right\",\"score\":100,\"grade\":\"completed\"}]}",
       "note": ""
     },
     {
@@ -3966,7 +4904,7 @@
           "grade": "insufficient"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"neck-flex-left\",\"score\":84,\"grade\":\"completed\"},{\"id\":\"shoulder-circles\",\"score\":79,\"grade\":\"insufficient\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"neck-flex-left\",\"score\":84,\"grade\":\"completed\"},{\"id\":\"shoulder-circles\",\"score\":79,\"grade\":\"insufficient\"}]}",
       "note": "未达标的分数上限 79 与达标线 80 相邻 —— 形态里必须看得出两者不同"
     },
     {
@@ -3978,7 +4916,7 @@
           "grade": "completed"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"颈部左侧屈\",\"score\":84,\"grade\":\"completed\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"颈部左侧屈\",\"score\":84,\"grade\":\"completed\"}]}",
       "note": "Python 默认 ensure_ascii=True 会转义成 \\u9888…，JS 不转义 —— 两端会写出不同的字节"
     },
     {
@@ -3990,7 +4928,7 @@
           "grade": "completed"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"a\\\"b\\\\c\",\"score\":90,\"grade\":\"completed\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"a\\\"b\\\\c\",\"score\":90,\"grade\":\"completed\"}]}",
       "note": ""
     },
     {
@@ -4017,7 +4955,7 @@
           "grade": "idle"
         }
       ],
-      "expected": "{\"v\":1,\"items\":[{\"id\":\"neck-flex-left\",\"score\":92,\"grade\":\"completed\"},{\"id\":\"neck-flex-right\",\"score\":79,\"grade\":\"insufficient\"},{\"id\":\"shoulder-circles\",\"score\":80,\"grade\":\"completed\"},{\"id\":\"chin-tuck\",\"score\":0,\"grade\":\"idle\"}]}",
+      "expected": "{\"v\":2,\"items\":[{\"id\":\"neck-flex-left\",\"score\":92,\"grade\":\"completed\"},{\"id\":\"neck-flex-right\",\"score\":79,\"grade\":\"insufficient\"},{\"id\":\"shoulder-circles\",\"score\":80,\"grade\":\"completed\"},{\"id\":\"chin-tuck\",\"score\":0,\"grade\":\"idle\"}]}",
       "note": "顺序即动作在库里的顺序，不许被重排（重排会让两端的 diff 无意义）"
     }
   ],

@@ -11,16 +11,17 @@
  * 与移动端（`src/platform/exerciseQuality.ts`）。**两端给出不同结论**是这一层最贵的 bug ——
  * 手机上说你完成了、电脑上说你没做，用户不知道该信谁；而 S10 还要拿这个结论当活动成绩。
  *
- * 校验九层：
+ * 校验十层：
  *   a) 常量：阈值 / 结论 / 引导文案 / **动作分权重** / **明细文本格式版本** 两端逐项相等
- *      （改一端不改另一端会红）
+ *      （改一端不改另一端会红），外加**幅度口径的映射表**（metric → 帧字段 / 阈值）逐键相等
+ *      —— 那个映射一端改了另一端没改，症状是"同一个动作在手机与电脑上看的是不同部位"。
  *   b) 样本文件一致性：载荷里的 frames/spec 必须与 scripts/samples/*.json 逐字段相同
  *      （防止"改了文件忘了重新生成"这种静默漂移）
- *   c) 判定用例（29 条，含边界、数据中断、滞回计数、取整平局点）六个字段逐条相等
+ *   c) 判定用例（33 条，含边界、数据中断、滞回计数、取整平局点、metric 口径）六个字段逐条相等
  *   d) 语义硬断言：三段样本三种结论、负样本必须失败、中断不计入、滞回不重复计数、
  *      hint 与 grade 一一对应、onset 与 S1 同源
  *   e) 取整灵敏度自检（守卫的守卫）
- *   f) **动作分**：同一批用例（29）+ 3 段样本 + 14 条边界合成用例，两端逐条相等。
+ *   f) **动作分**：同一批用例（33）+ 3 段样本 + 14 条边界合成用例，两端逐条相等。
  *      动作分与判定**同源**（同一份 verdict、同一个 spec），所以两条链上的任何一处漂移都红。
  *   g) **动作分的核心不变量**：`分数 >= 达标分` ⟺ `判定为「完成」`，在**真实判定**铺出的
  *      网格（幅度 × 保持帧数、幅度 × 循环数）上成立 —— 证的是"端到端同向"，
@@ -30,11 +31,23 @@
  *      所以"两端字节一样"是导出文件可互换的唯一保证 —— 解析后比较会放过键序、空白、
  *      Unicode 转义这三类真实差异（而它们正是两门语言最容易各错各的地方）。
  *   i) **明细解析端**：Python 写出的文本必须能被 TS 的 `parseActionScores()` 还原（跨语言往返），
- *      且 13 类坏值（老记录的 NULL、手改过的文件、将来版本的文本）一律返回 `null`
+ *      且各类坏值（老记录的 NULL、手改过的文件、将来版本的文本）一律返回 `null`
  *      —— 不许丢掉坏项留下半份，那会被读成"本次只判了这几个动作"。
+ *      🔴 而 **v1 的文本不算坏值**：它结构合法、只是分数用了旧口径 ——
+ *      必须能解析出来并让调用方看到 `legacy: true`（丢掉它等于抹掉用户的历史成绩，
+ *      照常显示而不标注等于让用户拿两把尺子量出来的数字互相比）。
  *   j) **整场成绩**（`sessionScoreOf`，会被写进 `activity_log.avg_score` 并进导出文件）：
  *      6 条用例两端相等，其中两条的均值**恰好落在平局点**（79.5 / 80.5）。
  *      🔴 这一层**有**平局点，所以"取整实现被偷偷换掉"在**这里**抓得到（见下面的"已知未覆盖"）。
+ *   k) 🔴 **v1.7.0 改幅度口径的两条反例**（本层的全部意义 —— 旧口径下它们都是错的）：
+ *      ① **只动别的维度不许判完成**：肩高差从 0% 摆到 12%、头一动不动，判「头部侧屈」
+ *         时必须是**没动**（旧口径三项取最大 → 判完成、84 分）。这一条同时钉住
+ *         「每个动作只用它自己针对的量打分」。
+ *      ② **基线本身就超阈值 + 全程不动 → 必须 idle 且 0 分**：脊柱习惯性歪 12° 的人
+ *         坐在那儿不动（旧口径 → 判完成、82 分）—— 也就是"姿势越差越容易自动过关"。
+ *      再叠一条**动作库驱动**的检查：对 `exercises.ts` 里每个 `measurable` 动作，
+ *      "只让它**声明**的 metric 摆动"必须判完成、"只让别的维度摆动"必须不判完成 ——
+ *      这一条证的是**动作库的 metric 声明是对的**，而不是"某个函数自己跟自己自洽"。
  *
  * ⚠️ **已知未覆盖（写清楚，免得被当成测过了）**：**动作分**那一层的「取整平局」在当前常量下
  * **不可达**，因此"把 `pyRound` 换成 `Math.round`"在**动作分**这一层抓不到
@@ -72,8 +85,10 @@ async function loadFrontendSource() {
       contents: `
 import * as eq from './exerciseQuality'
 import * as sm from './scoringModel'
+import * as data from '../data/exercises'
 export const __eq = eq
 export const __sm = sm
+export const __data = data
 `,
       resolveDir: join(ROOT, 'src', 'platform'),
       loader: 'ts',
@@ -94,23 +109,42 @@ export const __sm = sm
   } catch {
     /* 删除失败不影响校验结果 */
   }
-  return { eq: mod.__eq, sm: mod.__sm }
+  // `data` = `src/data/exercises.ts`（动作库）。§k 要拿**真实动作库**去验
+  // "每个动作声明的 metric 是不是真的能判出它来" —— 用副本等于自证。
+  return { eq: mod.__eq, sm: mod.__sm, data: mod.__data }
 }
 
 /**
- * 与源码逐行相同、**只把两处取整换成 `Math.round`** 的变体，用于证明
+ * 与**当前**源码逐行相同、**只把两处取整换成 `Math.round`** 的变体，用于证明
  * 「取整实现被换掉」能被本测试发现（见 §e 灵敏度自检）。它不参与任何被测断言，只是一把尺子。
+ *
+ * 🔴 **必须跟着幅度口径一起改**：本函数是"照抄实现、只换取整"，
+ * 若它还停留在旧口径（`exerciseActivity` 绝对偏离），那么它对**每一条**用例都会
+ * 给出不同结论 —— §e 会永远报"灵敏度良好"，而它其实只是在证明"两个不同的算法不一样"。
+ * 那条自检会变成**假绿**：取整被换掉照样通过。v1.7.0 改口径时重写了这一段。
  */
 function makeMathRoundVariant(sm, eq) {
   const r1 = (x) => Math.round(x * 10) / 10 // ← 唯一差异之一
   return (frames, spec) => {
     const kind = spec?.kind ?? 'hold'
+    const metric =
+      spec?.metric != null && (spec.metric === eq.METRIC_ANY || eq.METRIC_FIELD[spec.metric] !== undefined)
+        ? spec.metric
+        : eq.METRIC_ANY
     const durationMs = spec?.duration_ms != null ? Number(spec.duration_ms) : 0
     const minCycles = spec?.min_cycles != null ? spec.min_cycles : kind === 'cyclic' ? eq.DEFAULT_MIN_CYCLES : 0
     if (frames.length === 0) {
       return { grade: 'idle', hint: eq.HINT_IDLE, peak_activity: 0, held_ms: 0, hold_ratio: 0, cycles: 0 }
     }
-    const acts = frames.map((f) => r1(sm.exerciseActivity(f.head_angle, f.shoulder_diff, f.spine_angle)))
+    const metrics = metric === eq.METRIC_ANY ? Object.keys(eq.METRIC_FIELD) : [metric]
+    const series = metrics.map((m) => {
+      const field = eq.METRIC_FIELD[m]
+      const thr = eq.METRIC_THRESHOLD[m]
+      let base = Infinity
+      for (const f of frames) if (f[field] < base) base = f[field]
+      return frames.map((f) => (f[field] - base) / thr)
+    })
+    const acts = frames.map((_, i) => r1(Math.max(...series.map((s) => s[i]))))
     let peak = acts[0]
     for (let i = 1; i < acts.length; i++) if (acts[i] > peak) peak = acts[i]
     let heldMs = 0
@@ -168,7 +202,7 @@ async function main() {
     process.exit(2)
   }
 
-  const { eq, sm } = await loadFrontendSource()
+  const { eq, sm, data } = await loadFrontendSource()
   const replayOnly = process.argv.includes('--replay')
   let failed = false
 
@@ -210,6 +244,62 @@ async function main() {
   }
   if (constFail > 0) failed = true
   console.log(`\n常量比对（Python ↔ 前端真实源码）：${constChecked} 项${constFail ? ` 有 ${constFail} 项差异` : '全部一致'}`)
+
+  // ---- a2) 幅度口径的映射表（metric → 帧字段 / 静息阈值）逐键相等 ----
+  // 单排一段而不是塞进上面：它是**映射**（`!==` 比不了），而且这一层最容易
+  // "一端改了另一端没改" —— 症状是"同一个动作在手机与电脑上看的是不同部位"，极难查。
+  const sameMap = (a, b) =>
+    a && b && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k])
+  const mapPayload = payload.metrics ?? {}
+  const mapBad = []
+  if (!sameMap(mapPayload.field, eq.METRIC_FIELD)) {
+    mapBad.push(`field：python=${JSON.stringify(mapPayload.field)} ts=${JSON.stringify(eq.METRIC_FIELD)}`)
+  }
+  if (!sameMap(mapPayload.threshold, eq.METRIC_THRESHOLD)) {
+    mapBad.push(`threshold：python=${JSON.stringify(mapPayload.threshold)} ts=${JSON.stringify(eq.METRIC_THRESHOLD)}`)
+  }
+  if (!sameMap(mapPayload.names, { head: eq.METRIC_HEAD, shoulder: eq.METRIC_SHOULDER, spine: eq.METRIC_SPINE, any: eq.METRIC_ANY })) {
+    mapBad.push(`名字常量：python=${JSON.stringify(mapPayload.names)}`)
+  }
+  // 阈值必须与"静息提醒线"是同一批常量（不许在这里另立一套刻度）
+  for (const [m, field] of Object.entries(eq.METRIC_FIELD)) {
+    const restThresholds = {
+      head_angle: sm.HEAD_TILT_THRESHOLD,
+      shoulder_diff: sm.SHOULDER_DIFF_THRESHOLD,
+      spine_angle: sm.SPINE_ANGLE_THRESHOLD,
+    }
+    if (eq.METRIC_THRESHOLD[m] !== restThresholds[field]) {
+      mapBad.push(`${m} 的阈值 ${eq.METRIC_THRESHOLD[m]} ≠ 静息线 ${restThresholds[field]}（${field}）`)
+    }
+  }
+  if (mapBad.length > 0) {
+    console.error('✗ 幅度口径映射表两端不一致：')
+    for (const x of mapBad) console.error(`    ${x}`)
+    failed = true
+  } else {
+    console.log(
+      `✓ 幅度口径映射表一致：metric → (帧字段, 静息阈值) 三键两端相同，且阈值就是静息提醒线` +
+        `（head ${eq.METRIC_THRESHOLD[eq.METRIC_HEAD]} / shoulder ${eq.METRIC_THRESHOLD[eq.METRIC_SHOULDER]} / spine ${eq.METRIC_THRESHOLD[eq.METRIC_SPINE]}）`,
+    )
+  }
+
+  // ---- a3) 明细文本版本：当前版本 + 仍能解析的历史版本 ----
+  const versions = payload.action_scores_versions ?? {}
+  if (versions.current !== eq.ACTION_SCORES_VERSION) {
+    console.error(`✗ 明细版本不一致：python=${versions.current} ts=${eq.ACTION_SCORES_VERSION}`)
+    failed = true
+  } else if (
+    JSON.stringify(versions.legacy ?? []) !== JSON.stringify([...(eq.ACTION_SCORES_LEGACY_VERSIONS ?? [])])
+  ) {
+    console.error(
+      `✗ 可解析的历史版本不一致：python=${JSON.stringify(versions.legacy)} ts=${JSON.stringify(eq.ACTION_SCORES_LEGACY_VERSIONS)}`,
+    )
+    failed = true
+  } else {
+    console.log(
+      `✓ 明细文本版本一致：当前 v${eq.ACTION_SCORES_VERSION}，仍可解析的历史版本 v${(eq.ACTION_SCORES_LEGACY_VERSIONS ?? []).join('、v') || '(无)'}（后者要标成「旧口径」）`,
+    )
+  }
 
   // ---- b) 样本文件一致性 ----
   // 载荷里的样本是从文件读出来生成的；这里再读一遍文件，确保两者没漂移
@@ -389,13 +479,16 @@ async function main() {
   }
 
   // d3) 数据中断不计入保持时长（同一组帧，只有间隔不同）
+  //     ⚠️ 期望值是 2000 而不是 3000：新口径下第 0 帧是**基线**（范围 0，未达 onset），
+  //        它能贡献的是 i=1→2 与 i=2→3 两个区间。这里断言的是"两个 1000ms 间距被计入、
+  //        两个 2000ms 间距被排除"，不是某个绝对数 —— 绝对数跟着用例的帧数走。
   const gapOk = gotOf('中断·间隔 1000ms（计入）')
   const gapBad = gotOf('中断·间隔 2000ms（不计入）')
-  if (!gapOk || !gapBad || gapOk.held_ms !== 3000 || gapBad.held_ms !== 0) {
-    console.error(`✗ 数据中断未被正确排除：1000ms 间隔 held=${gapOk?.held_ms}（应 3000），2000ms 间隔 held=${gapBad?.held_ms}（应 0）`)
+  if (!gapOk || !gapBad || gapOk.held_ms !== 2000 || gapBad.held_ms !== 0) {
+    console.error(`✗ 数据中断未被正确排除：1000ms 间隔 held=${gapOk?.held_ms}（应 2000），2000ms 间隔 held=${gapBad?.held_ms}（应 0）`)
     hardFail++
   } else {
-    console.log('✓ 数据中断（间隔 > MAX_FRAME_GAP_MS）不计入保持时长：3000ms → 0ms')
+    console.log('✓ 数据中断（间隔 > MAX_FRAME_GAP_MS）不计入保持时长：2000ms → 0ms')
   }
 
   // d4) 非正间隔被排除（重复时间戳）
@@ -487,12 +580,15 @@ async function main() {
   //      反例长什么样：幅度满分但没保持住，用户看到 99 分，界面却说「保持住，别急着放下」。
   //      用**真实判定**铺网格（不是构造 verdict）：要证的是"端到端成立"，
   //      而不是"公式自己跟自己自洽"。
-  const holdSpec = { kind: eq.KIND_HOLD, duration_ms: 10000, min_cycles: 0 }
-  const cycSpec = { kind: eq.KIND_CYCLIC, duration_ms: 3000, min_cycles: 3 }
+  const holdSpec = { kind: eq.KIND_HOLD, duration_ms: 10000, min_cycles: 0, metric: eq.METRIC_HEAD }
+  const cycSpec = { kind: eq.KIND_CYCLIC, duration_ms: 3000, min_cycles: 3, metric: eq.METRIC_HEAD }
+  // 🔴 第 0 帧**必须是基线**（head=0）：新口径下"幅度"是活动**范围**，
+  //    如果整段都是 peakHead（没有回落到基线的帧），范围就是 0 —— 网格会全部退化成
+  //    idle，核心不变量变成"0 分且未完成"，恒真，等于没有断言。v1.7.0 改口径时踩到过。
   const holdFrames = (peakHead, heldFrames) => {
     const out = []
     for (let i = 0; i < 21; i++) {
-      out.push({ t: i * 500, head_angle: i < heldFrames ? peakHead : 0, shoulder_diff: 0, spine_angle: 0 })
+      out.push({ t: i * 500, head_angle: i >= 1 && i <= heldFrames ? peakHead : 0, shoulder_diff: 0, spine_angle: 0 })
     }
     return out
   }
@@ -605,26 +701,174 @@ async function main() {
     ['空串', ''],
     ['不是 JSON', 'neckguardian'],
     ['是数组不是对象', '[1,2,3]'],
-    ['版本不认识', '{"v":2,"items":[]}'],
+    ['版本不认识（将来版本的文本）', '{"v":3,"items":[]}'],
+    ['版本是字符串（不做隐式转换）', '{"v":"2","items":[]}'],
     ['版本缺失', '{"items":[]}'],
-    ['items 不是数组', '{"v":1,"items":{}}'],
-    ['条目不是对象', '{"v":1,"items":[42]}'],
-    ['条目缺 grade', '{"v":1,"items":[{"id":"a","score":80}]}'],
-    ['grade 不是已知结论', '{"v":1,"items":[{"id":"a","score":80,"grade":"great"}]}'],
-    ['score 是字符串（不做隐式转换）', '{"v":1,"items":[{"id":"a","score":"80","grade":"completed"}]}'],
-    ['id 为空串', '{"v":1,"items":[{"id":"","score":80,"grade":"completed"}]}'],
+    ['items 不是数组', '{"v":2,"items":{}}'],
+    ['条目不是对象', '{"v":2,"items":[42]}'],
+    ['条目缺 grade', '{"v":2,"items":[{"id":"a","score":80}]}'],
+    ['grade 不是已知结论', '{"v":2,"items":[{"id":"a","score":80,"grade":"great"}]}'],
+    ['score 是字符串（不做隐式转换）', '{"v":2,"items":[{"id":"a","score":"80","grade":"completed"}]}'],
+    ['id 为空串', '{"v":2,"items":[{"id":"","score":80,"grade":"completed"}]}'],
   ]
   for (const [label, input] of badInputs) {
     if (eq.parseActionScores(input) !== null) {
       rtBad.push(`坏值未被拒绝：${label} → 应返回 null`)
     }
   }
+
+  // 🔴 v1 的文本**不是**坏值：结构合法，只是分数用了旧口径（绝对偏离）。
+  //    丢掉它 = 抹掉用户的历史成绩；照常显示而不标注 = 让用户拿两把尺子量出来的
+  //    数字互相比。所以它必须能解析出来，并且**让调用方看到 legacy**。
+  const legacyText = '{"v":1,"items":[{"id":"neck-flex-left","score":84,"grade":"completed"}]}'
+  const legacyParsed = eq.parseActionScoresDetailed(legacyText)
+  if (legacyParsed === null) {
+    rtBad.push('v1（旧口径）文本被当成坏值拒绝了 —— 老用户的历史成绩会凭空消失')
+  } else if (legacyParsed.legacy !== true || legacyParsed.version !== 1) {
+    rtBad.push(`v1 文本解析出来但没标成 legacy：${JSON.stringify(legacyParsed)}`)
+  } else if (legacyParsed.items.length !== 1 || legacyParsed.items[0].score !== 84) {
+    rtBad.push(`v1 文本的明细没还原出来：${JSON.stringify(legacyParsed.items)}`)
+  } else if (eq.parseActionScores(legacyText)?.length !== 1) {
+    rtBad.push('只要明细的那个接口（parseActionScores）没能读出 v1 的文本')
+  }
+  // 反向对照：当前版本**不许**被标成 legacy（不然"旧口径"这个标签就成了装饰）
+  const currentParsed = eq.parseActionScoresDetailed(payload.action_scores_cases[1].expected)
+  if (currentParsed === null || currentParsed.legacy !== false) {
+    rtBad.push(`当前版本（v${eq.ACTION_SCORES_VERSION}）被标成了 legacy：${JSON.stringify(currentParsed)}`)
+  }
+
   if (rtBad.length > 0) {
     console.error(`✗ 明细解析端不合格 ${rtBad.length} 处：`)
-    for (const x of rtBad.slice(0, 6)) console.error(`    ${x}`)
+    for (const x of rtBad.slice(0, 8)) console.error(`    ${x}`)
     hardFail++
   } else {
-    console.log(`✓ 明细解析：跨语言往返 ${payload.action_scores_cases.length} 条全部还原、${badInputs.length} 类坏值全部拒绝`)
+    console.log(
+      `✓ 明细解析：跨语言往返 ${payload.action_scores_cases.length} 条全部还原、` +
+        `${badInputs.length} 类坏值全部拒绝、v1 旧口径能解析且被标出（当前版本不标）`,
+    )
+  }
+
+  // ---- k) 🔴 v1.7.0 改幅度口径的两条反例（本层的全部意义）----
+  //
+  // 前两层（c / c2）证的是"两端算得一样"，**证不了"这个算法对不对"**。
+  // 这一层证的是**结论本身**：下面这些场景在旧口径下都是错的，
+  // 且期望值是**这里写死的语义**（不是拿 Python 的输出比 —— 那是自证）。
+  //
+  // 旧口径 = `exercise_activity()`（三轴绝对偏离取最大）。两个实测缺陷：
+  //   ① 高低肩 6% 的人做「颈部左侧屈」时头没动 → 旧口径判完成、84 分；
+  //   ② 习惯性脊柱倾斜 12° 的人全程不动 → 旧口径判完成、82 分。
+  // 两条的共同后果：**姿势越差越容易"自动过关"**。
+  const kBad = []
+
+  // k1) 只动**别的**维度，不许算这个动作做到位
+  const onlyShoulder = byName('metric·head：肩高差再大也不算头部动作')
+  const swapped = byName('metric·shoulder：同一串帧换看肩部就是真动作')
+  if (!onlyShoulder || !swapped) {
+    kBad.push('载荷里缺少 metric 对照用例 —— 这一层没东西可验')
+  } else if (onlyShoulder.expected.grade === eq.GRADE_COMPLETED || onlyShoulder.expected_score >= eq.EXERCISE_PASS_SCORE) {
+    kBad.push(
+      `「肩高差从 0% 摆到 12%、头一动不动」被判成做到了「头部侧屈」（grade=${onlyShoulder.expected.grade} score=${onlyShoulder.expected_score}）` +
+        ' —— 那等于让别的部位冒充这个动作的幅度',
+    )
+  } else if (swapped.expected.grade !== eq.GRADE_COMPLETED) {
+    kBad.push(`同一串帧换成「看肩部」却没判完成（grade=${swapped.expected.grade}）—— metric 没起作用`)
+  } else {
+    console.log(
+      `✓ 反例① 只动别的维度不算数：同一串帧看 head → ${onlyShoulder.expected.grade}（${onlyShoulder.expected_score} 分），` +
+        `看 shoulder → ${swapped.expected.grade}（${swapped.expected_score} 分）`,
+    )
+  }
+
+  // k2) 基线本身就超标 + 全程不动 → 必须没动、0 分
+  const tiltedStill = byName('metric·spine：基线歪 12° 但全程不动 → 没动')
+  if (!tiltedStill) {
+    kBad.push('载荷里缺少"基线超标但不动"的用例')
+  } else if (tiltedStill.expected.grade !== eq.GRADE_IDLE || tiltedStill.expected_score !== eq.IDLE_SCORE) {
+    kBad.push(
+      `「脊柱习惯性歪 12°、全程不动」被判成 ${tiltedStill.expected.grade}（${tiltedStill.expected_score} 分）` +
+        ` —— 应当 ${eq.GRADE_IDLE} / ${eq.IDLE_SCORE} 分。旧口径下这里是 82 分：姿势越差越容易自动过关`,
+    )
+  } else {
+    console.log(`✓ 反例② 基线超标不等于做到了：脊柱歪 12° 全程不动 → ${tiltedStill.expected.grade} / ${tiltedStill.expected_score} 分`)
+  }
+
+  // k3) **动作库驱动**：对每个 `measurable` 动作，用真实 `exercises.ts` 的声明去验
+  //     "只让它声明的量摆动"必须判完成、"只让别的量摆动"必须不判完成。
+  //     这一条证的是**动作库的 metric 声明是对的**，而不是"某个函数自己跟自己自洽"。
+  const AXES = [eq.METRIC_HEAD, eq.METRIC_SHOULDER, eq.METRIC_SPINE]
+  const peakOf = {
+    head: sm.HEAD_TILT_THRESHOLD * 2,
+    shoulder: sm.SHOULDER_DIFF_THRESHOLD * 2,
+    spine: sm.SPINE_ANGLE_THRESHOLD * 2,
+  }
+  const frameOn = (t, axes) => {
+    const f = { t, head_angle: 0, shoulder_diff: 0, spine_angle: 0 }
+    for (const a of axes) f[eq.METRIC_FIELD[a]] = peakOf[a]
+    return f
+  }
+  const seriesOn = (axes, kind, durationMs, minCycles) => {
+    if (kind === eq.KIND_CYCLIC) {
+      const out = []
+      let t = 0
+      const n = Math.max(1, minCycles)
+      for (let i = 0; i < n; i++) {
+        out.push(frameOn(t, axes))
+        t += 500
+        out.push(frameOn(t, []))
+        t += 500
+      }
+      return out
+    }
+    const n = Math.max(1, Math.round(durationMs / 500))
+    const out = [frameOn(0, [])]
+    for (let i = 1; i <= n; i++) out.push(frameOn(i * 500, axes))
+    return out
+  }
+  const library = (data?.EXERCISES ?? []).filter((e) => e.measurable)
+  if (library.length === 0) {
+    kBad.push('从 exerciseQuality 侧读不到动作库里的 measurable 动作（bundle 出问题了？）—— 这一层会空转')
+  }
+  let kAnySkipped = 0
+  for (const e of library) {
+    const spec = { kind: e.kind, metric: e.metric, duration_ms: e.duration * 1000, min_cycles: e.min_cycles }
+    const declared = e.metric === eq.METRIC_ANY ? AXES : [e.metric]
+    const pos = eq.judgeExercise(seriesOn(declared, e.kind, e.duration * 1000, e.min_cycles), spec)
+    if (pos.grade !== eq.GRADE_COMPLETED) {
+      kBad.push(
+        `「${e.name}」按它**声明**的 metric=${e.metric} 做足了幅度，却没判完成（grade=${pos.grade}, peak=${pos.peak_activity}）` +
+          ' —— 要么声明错了 metric，要么阈值/口径有问题',
+      )
+      continue
+    }
+    if (e.metric === eq.METRIC_ANY) {
+      // `any` 的定义就是"哪个量动得多算哪个"，所以"只动别的量"它本来就该算数 ——
+      // 跳过反向检查，但要**报出跳过数**，免得这条检查悄悄变成空转。
+      kAnySkipped++
+      continue
+    }
+    const others = AXES.filter((a) => a !== e.metric)
+    const neg = eq.judgeExercise(seriesOn(others, e.kind, e.duration * 1000, e.min_cycles), spec)
+    if (neg.grade === eq.GRADE_COMPLETED) {
+      kBad.push(
+        `「${e.name}」只看 ${e.metric}，但"只动 ${others.join('/')}"也被判成完成（grade=${neg.grade}）` +
+          ' —— 这个动作的分数在看别的部位',
+      )
+    }
+  }
+
+  if (kBad.length > 0) {
+    // 🔴 每条反例**各自带 `✗`**：变异脚本判定"是否被抓住"靠的是
+    //    「预期关键词出现在**某条 ✗ 行**里」。如果三条反例共用一个 ✗ 头部行、
+    //    明细行不带 ✗，那么"k1 被触发"和"k2 被触发"在判据上**无法区分** ——
+    //    k1/k2/k3 三条断言就会退化成"整体有牙"，而不是**逐条**有牙。
+    console.error(`✗ k) 幅度口径反例不成立 ${kBad.length} 处：`)
+    for (const x of kBad) console.error(`✗   ${x}`)
+    hardFail++
+  } else if (library.length > 0) {
+    console.log(
+      `✓ 反例③ 动作库驱动：${library.length} 个可判定动作按**声明的 metric** 做足幅度都判完成，` +
+        `且"只动别的量"都不判完成（${kAnySkipped} 个 metric=any 的动作按定义跳过反向检查）`,
+    )
   }
 
   if (hardFail > 0) failed = true

@@ -30,7 +30,9 @@
  *     逐动作得分列表、零明细时成绩显示 `--`（不是 0）、7 个动作逐个如实标「未判定」、
  *     旧口径标签已消失；**再查落库**（走 IndexedDB 的用例才把记录留在同一个源上）：
  *     `action_scores` 的规范文本逐字节、`avg_score` 与明细同源，
- *     并在仪表盘历史里回读 —— 零明细显示 `--`、**迁移前的老记录照常显示分数且被标出「旧口径」**。
+ *     并在仪表盘历史里回读 —— 零明细显示 `--`、**迁移前的老记录照常显示分数且被标出「旧口径」**、
+ *     **v1 明细（形态合法但分数是旧口径）也照常显示并标出「旧口径」**（v1.7.0 新增的第四态，
+ *     与 NULL 那条走的是不同分支，各插一条分别验）。
  *     这是 S10「逐动作评分」唯一的用户可见出口，ROUTES 那种"页面渲染得出来"的断言覆盖不到它。
  *   - **新手引导**（首次打开时盖在界面上那层）：清掉标志重新加载 → 引导出现 →
  *     逐步点完 4 步（**每步标题都要变**；只验"遮罩出现了"会漏掉"卡在第 1 步不动"）→
@@ -1373,10 +1375,12 @@ async function main() {
           if (row) {
             // 🔴 写进去的必须是**规范文本**（紧凑无空格、键序固定）——
             // 它与 `serializeActionScores()` 的输出逐字节相同，导出/导入才能跨端互换。
-            // 零明细的规范文本恰好是 `{"v":1,"items":[]}`：
-            // **不是** `{"v":1,"items":[]}` 之外的任何形态（多一个空格就红）。
+            // 零明细的规范文本恰好是 `{"v":2,"items":[]}`：
+            // **不是** `{"v":2,"items":[]}` 之外的任何形态（多一个空格就红）。
+            // 🔴 版本号必须在**两处**同时改（这里 + `exerciseQuality.ACTION_SCORES_VERSION`）：
+            // 它是"落库字节"与"源码常量"之间唯一的交叉校验点，漏改一处这里就红。
             run.check(
-              row.action_scores === '{"v":1,"items":[]}',
+              row.action_scores === '{"v":2,"items":[]}',
               `${where} 落库的 action_scores 是规范文本（零明细）`,
               `实际：${JSON.stringify(row.action_scores)}`,
             )
@@ -1416,6 +1420,28 @@ async function main() {
                  return true;
                })()`)
 
+            // 再插一条 **v1 明细**记录（v1.7.0 新增的「第四态」）：形态与当前完全相同、
+            // 能正常解析，只是分数按**旧口径**算的。它和上面那条 NULL 记录**不是同一条
+            // 代码路径**（一个进 `parsed === null`、一个进 `parsed.legacy`），所以必须各插一条。
+            // 少了它，"v1 明细不会被误当成坏值丢掉、也没有被当成新口径"这两件事就没人验。
+            await evaluate(cdp, sessionId, `(async () => {
+                 const db = await new Promise((res, rej) => {
+                   const r = indexedDB.open('neckguardian');
+                   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+                 });
+                 await new Promise((res, rej) => {
+                   const tx = db.transaction('activity_log', 'readwrite');
+                   tx.objectStore('activity_log').put({
+                     timestamp: new Date(Date.now() - 7200e3).toISOString(),
+                     activity_type: 'exercise', exercise_count: 7, duration_sec: 82, avg_score: 88,
+                     action_scores: '{"v":1,"items":[{"id":"neck-left-flex","score":88,"grade":"completed"}]}',
+                   });
+                   tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+                 });
+                 db.close();
+                 return true;
+               })()`)
+
             await evaluate(cdp, sessionId, `(() => {
                  const a = document.querySelector('a[href="#/dashboard"]'); if (a) a.click(); return true;
                })()`)
@@ -1423,9 +1449,12 @@ async function main() {
               timeout: 6000,
               label: `${where} 历史列表里出现刚记下的活动`,
             })
+            // 滤出**分数徽章那个 `div`**（四种 explain 各一种前缀）。注意旧口径徽章是个
+            // `<span title>`，不在 `div[title]` 里，所以这里每个历史行只会命中**一个**元素
+            // （就是分数那个），`texts` 的长度 = 可见历史行数。
             const hist = await evaluate(cdp, sessionId, `(() => {
                  const badges = [...document.querySelectorAll('div[title]')]
-                   .filter(d => /本次动作成绩|旧记录|没有可判定的动作/.test(d.getAttribute('title') || ''));
+                   .filter(d => /本次动作成绩|旧记录|旧口径|没有可判定的动作/.test(d.getAttribute('title') || ''));
                  return {
                    n: badges.length,
                    texts: badges.map(d => d.textContent.trim()),
@@ -1435,7 +1464,7 @@ async function main() {
             const texts = (hist.ok && hist.value && hist.value.texts) || []
             run.check(
               texts.length > 0,
-              `${where} 历史行带上了可解释的 title（新记录/旧记录/无判定三态之一）`,
+              `${where} 历史行带上了可解释的 title（新记录/旧记录/旧口径明细/无判定 四态之一）`,
               '一行都没匹配到 —— ActivityRow 的分支没生效',
             )
             // 零明细的那条记录在历史里**必须**是 `--`：写 0 会被读成"得了 0 分"。
@@ -1452,6 +1481,15 @@ async function main() {
               `实际：${JSON.stringify(texts)}`,
             )
             run.check(hist.ok && hist.value && hist.value.legacyTagged === true, `${where} 老记录被标出「旧口径」`, '没有可区分的标注')
+            // 🔴 第四态（v1.7.0 新增）：明细**形态**合法、分数是**旧口径** ——
+            // 必须照常显示分数并标「旧口径」。它和上面的 NULL 记录走的是**不同分支**
+            // （`parsed.legacy` vs `parsed === null`），所以必须单插一条来证：
+            // 少了它，"v1 明细没被当坏值丢掉、也没被当成新口径"这件事就没人验。
+            run.check(
+              texts.includes('88分'),
+              `${where} v1 明细（旧口径）照常显示分数`,
+              `实际：${JSON.stringify(texts)}`,
+            )
           }
         }
       } catch (e) {

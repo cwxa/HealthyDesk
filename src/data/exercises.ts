@@ -18,6 +18,8 @@
  * ## 关于 `target`（问题维度）—— 一条如实记录的能力缺口
  *
  * `target` 与 `scorer` 的三个指标维度一一对应（头部倾斜 / 肩高差 / 脊柱倾斜）。
+ * v1.7.0 起它**不再只用于文案** —— 它还是 `metric` 的默认值，也就是
+ * 「这个动作的分数看哪个量」。
  * 按物理含义映射后，**脊柱维度只有 1 个动作**（头部后缩），低于 S7 文档里
  * 「每维度 ≥ 2 个」的预期。原因不是映射偷懒，而是：
  *
@@ -42,12 +44,34 @@
  * ——正是 S2 要消灭的那类缺陷。所以这类动作不参与完成度判定，界面照常给静态要领。
  * ⚠️ 这张表是按指标定义推出来的，**尚未用真机数据校准**（本项目目前没有真机验证手段）。
  *
+ * ## 关于 `metric`（v1.7.0 新增：**这个动作的分数看哪个量**）
+ *
+ * 判定与打分只看**一个**姿态量的「活动范围」（见 `platform/exerciseQuality.ts`
+ * 的文件头：为什么"绝对偏离"会奖励驼背的人、为什么"三项取最大"会让肩高差冒充
+ * 头部侧屈的幅度）。规则只有两条：
+ *
+ *   1. **默认 = `target`**：动作针对哪个维度，就用那个维度的量来评它。
+ *      颈部侧屈 → `head`（必然改变耳线倾角，这是这个动作的定义域）。
+ *   2. **`any` 是显式的例外，必须写在这里并说明理由**：有些动作是**双侧对称**的，
+ *      单一量不保证有变化，用 `any`（哪个量动得最多算哪个）表示"这个动作没法用
+ *      单一量衡量"。同时它仍然**不奖励静止** —— 范围口径下不动就是 0。
+ *
+ * ⚠️ **`肩部环绕` 用 `any` 是一条未校准的取舍**：规范做法里双肩同时后画，
+ * 三个量都可能基本不变（肩高差是左右之差，对称动作不为所动）。
+ * 但"幅度尽量大"的真人执行几乎必然带动躯干/头部，且它目前是**唯一可判定的
+ * 往复类动作**（改成 `measurable: false` 会让往复那一整条链路在生产里变成死代码）。
+ * 所以先给最宽容且不含"看错部位"语义的 `any`，并把它列进真机台账待验证：
+ * **若真机上发现它总是判"幅度不够"，就该改为 `measurable: false`**。
+ *
+ * 守卫（`scripts/verify-exercises.mjs`）钉住这张映射表，并断言
+ * 「`metric` 要么等于 `target`，要么是显式的 `any`」——不许悄悄改成别的维度。
+ *
  * ## 关于 `contraindications` / `keyPoints`
  *
  * 一般性安全提醒，**不构成医疗建议**。S7 先声明，S8（要领展开与语音播报）与
  * S9（安全约束与疼痛反馈）会消费它们；当前界面只用 `hint`。
  */
-import type { ExerciseKind } from '../platform/exerciseQuality'
+import type { ExerciseKind, ExerciseMetric } from '../platform/exerciseQuality'
 
 /** 动作针对的问题维度，与 `scorer` 的三档 issues 对应。 */
 export type ExerciseTarget = 'head' | 'shoulder' | 'spine'
@@ -94,6 +118,11 @@ export interface Exercise {
   shortName: string
   /** 针对的问题维度。 */
   target: ExerciseTarget
+  /**
+   * **这个动作的幅度看哪个量**（见文件头 `metric` 说明）。
+   * 默认应等于 `target`；`'any'` 是显式例外，只给"单一量测不到"的对称动作。
+   */
+  metric: ExerciseMetric
   /** 强度档。 */
   intensity: ExerciseIntensity
   /** 标称时长（秒）—— 排期与完成度判定的分母都用它。 */
@@ -123,6 +152,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '颈部左侧屈',
     shortName: '左侧屈',
     target: 'head',
+    metric: 'head',
     intensity: 'low',
     duration: 12,
     durationRange: [10, 20],
@@ -141,6 +171,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '颈部右侧屈',
     shortName: '右侧屈',
     target: 'head',
+    metric: 'head',
     intensity: 'low',
     duration: 12,
     durationRange: [10, 20],
@@ -159,6 +190,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '颈部左转',
     shortName: '转颈',
     target: 'head',
+    metric: 'head',
     intensity: 'low',
     duration: 12,
     durationRange: [10, 20],
@@ -180,6 +212,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '颈部右转',
     shortName: '转颈',
     target: 'head',
+    metric: 'head',
     intensity: 'low',
     duration: 12,
     durationRange: [10, 20],
@@ -201,6 +234,8 @@ export const EXERCISES: readonly Exercise[] = [
     name: '肩部环绕',
     shortName: '肩环绕',
     target: 'shoulder',
+    // 🔴 显式例外（文件头有完整理由）：双侧对称动作，三个量都不保证有变化。
+    metric: 'any',
     intensity: 'medium',
     duration: 12,
     durationRange: [10, 20],
@@ -222,6 +257,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '扩胸运动',
     shortName: '扩胸',
     target: 'shoulder',
+    metric: 'shoulder',
     intensity: 'medium',
     duration: 12,
     durationRange: [10, 20],
@@ -243,6 +279,7 @@ export const EXERCISES: readonly Exercise[] = [
     name: '头部后缩',
     shortName: '头部后缩',
     target: 'spine',
+    metric: 'spine',
     intensity: 'low',
     duration: 10,
     durationRange: [8, 15],

@@ -9,7 +9,7 @@ S1 给评分分了静息/运动双通道之后，界面能显示「动作达成�
 
 本模块把那串帧折成**三分类结论**，并把三个可解释的量一并返回：
 
-    peak_activity  峰值活动量      —— 幅度够不够
+    peak_activity  峰值活动量（= 活动范围）—— 幅度够不够
     held_ms        达标状态累计时长 —— 保持住了没有
     cycles         往复动作有效循环 —— 次数够不够
 
@@ -21,13 +21,30 @@ S1 给评分分了静息/运动双通道之后，界面能显示「动作达成�
 
 ## 口径（单点定义）
 
-- **活动量**复用 `scorer.exercise_activity()`（三项相对各自静息阈值的倍数取最大），
-  于是「活动量 1.0」与 S1 **同义**：偏离已达静息态提醒线 = 确实动起来了。
-  复用它还有一个额外好处 —— **它天生是归一化的**（除以各自阈值），因此不受摄像头
-  距离与用户体型影响，正好回应 S2 设计里那条「设备差异会显著影响幅度判定」的风险。
+- 🔴 **活动量 = 「活动范围」，不是「偏离有多大」**（v1.7.0 改的口径，原因见下一节）：
+  取**该动作针对的那个姿态量**（`spec.metric`），算出它在这一段里的
+  `最大值 − 最小值`，再除以该量的**静息阈值**（5.0° / 4% / 10.0°）—— 于是
+  「活动量 1.0」的含义是**这个部位真的动了整整一个提醒线那么多**。
+  除以阈值带来两个好处：与 S1 的阈值体系同源（不另立一套"典型活动幅度"），
+  且天生归一化，不受摄像头距离与用户体型影响（正好回应 S2 设计里那条
+  「设备差异会显著影响幅度判定」的风险）。
+- **为什么不能沿用「绝对偏离」**：静息阈值是**绝对**的（"偏离超过 5° 就该提醒你"），
+  直接拿它当动作幅度会同时错两头 —— 实测（`judge_exercise` + `score_exercise`）：
+  **一个习惯性脊柱倾斜 12° 的人，全程一动不动会被判「完成」、拿 82 分；
+  一个高低肩 6% 的人做「颈部左侧屈」时头完全没动，也能拿 84 分；
+  而姿态良好的人同样一动不动只拿 0 分。** 也就是**姿势越差越容易"自动过关"**。
+  改口径还有一个必须一起修的点：旧实现**三项取最大值**，于是"肩高差很大"
+  可以冒充"头部侧屈的幅度" —— 那等于**这个动作的评分在看别的部位**。
+  `metric` 就是为此而生：每个动作只用它自己针对的量打分。
+  ⚠️ 改口径的副作用：**动作分数值会变**，历史记录的分数与新记录不可比 ——
+  所以 `ACTION_SCORES_VERSION` 从 1 升到 2，显示端会把老明细标成「旧口径」
+  （与 v1.6.3 对"没有明细的老记录"的处理同一思路）。
 - 每帧活动量先经 `round_1` 再做**一切**比较。这不是美化输出，而是本项目的硬规矩：
   **用户看到的数字与系统判定必须同源**。S1 刚踩过这个坑 —— `raw = 59.94` 取整成
   60（正好是达标线）却提示「幅度不足」，自相矛盾。所以判定用的必须是取整后的值。
+- ⚠️ **至少要两帧**才谈得上"范围"：只有一帧时 `max − min = 0`，与"一帧都没有"
+  同样按 `idle` 处理。这是口径的直接推论（**不能**退回"用绝对偏离顶上"，
+  那等于在角落里把刚修掉的缺陷放回来），且只影响"这一段几乎没有采到数据"的情形。
 - `held_ms` = Σ(t[i+1] − t[i])，只累加 `activity[i] >= ACTIVITY_ONSET` 的区间
   （左端点取值，标准左黎曼和）。相邻间隔大于 `MAX_FRAME_GAP_MS` 视为**数据中断**、
   不计入 —— 掉帧或用户走出画面时，不该把那一段空白算成「保持得很好」；
@@ -47,11 +64,15 @@ S1 给评分分了静息/运动双通道之后，界面能显示「动作达成�
 import json
 import logging
 
+from config import (  # noqa: E402
+    HEAD_TILT_THRESHOLD,
+    SHOULDER_DIFF_THRESHOLD,
+    SPINE_ANGLE_THRESHOLD,
+)
 from services.rounding import round_1, round_int
 from services.scorer import (  # noqa: E402
     EXERCISE_ACTIVITY_START,
     SCORE_MAX,
-    exercise_activity,
     exercise_score_from_activity,
 )
 
@@ -65,6 +86,30 @@ GRADE_IDLE = "idle"
 # ---- 动作类型 ----
 KIND_HOLD = "hold"      # 保持类（屈、伸、缩）：看「幅度 + 保持时长」
 KIND_CYCLIC = "cyclic"  # 往复类（环绕、扩胸）：看「幅度 + 有效次数」
+
+# ---- 幅度看哪个量（`spec.metric`）----
+# 名字与 `src/data/exercises.ts` 的 `ExerciseMetric` 一一对应。
+METRIC_HEAD = "head"
+METRIC_SHOULDER = "shoulder"
+METRIC_SPINE = "spine"
+#: 兜底：三个量各自算范围后取最大。**生产路径不应依赖它** —— 每个动作都该声明
+#: 自己用哪个量（`exercises.ts :: metric`）。它存在的意义是：万一调用方漏传，
+#: 退化成"哪个部位动得最多算哪个"，而不是退回"绝对偏离"那条已知有缺陷的老路。
+METRIC_ANY = "any"
+
+#: metric → 姿态帧里的字段名（**运行时值**，进对拍体系；类型在前端运行时不存在）。
+METRIC_FIELD = {
+    METRIC_HEAD: "head_angle",
+    METRIC_SHOULDER: "shoulder_diff",
+    METRIC_SPINE: "spine_angle",
+}
+
+#: metric → 该量的静息阈值。与 `scorer` 用的是同一批常量（"一个提醒线"只有一处定义）。
+METRIC_THRESHOLD = {
+    METRIC_HEAD: HEAD_TILT_THRESHOLD,
+    METRIC_SHOULDER: SHOULDER_DIFF_THRESHOLD,
+    METRIC_SPINE: SPINE_ANGLE_THRESHOLD,
+}
 
 # ---- 具名常量（全部进对拍体系，不许散落成魔法数字）----
 ACTIVITY_IDLE_MAX = 0.25        # 峰值活动量低于此值 = 全程没动
@@ -90,16 +135,39 @@ HINT_CYCLES = "再多做几次"
 HINT_COMPLETED = "很好，保持住"
 
 
-def _activities(frames) -> list:
-    """逐帧活动量，统一经 `round_1` —— 之后所有比较都基于它（见模块文档「同源」）。"""
-    return [
-        round_1(
-            exercise_activity(
-                float(f["head_angle"]), float(f["shoulder_diff"]), float(f["spine_angle"])
-            )
-        )
-        for f in frames
-    ]
+def _amplitudes(frames, metric) -> list:
+    """逐帧「活动量」= 该动作针对的量 · 相对它在**这一段里的最低位**的偏移 ÷ 该量的静息阈值。
+
+    ## 为什么是"相对最低位"而不是"绝对偏离"
+
+    见模块文档：绝对偏离会把"用户本来就驼背"算成"动作幅度"，于是姿势越差越容易
+    自动过关（实测 82 分）。减去本段的最低值之后，这个量衡量的是
+    **用户自己动了多少** —— 与他的基线无关。
+
+    ## 为什么"这一段里"的最低值可以被当作基线
+
+    用户在这 10–12 秒里总会有接近自己中立位的时刻（动作起势、换向、回位）。
+    取最低位而不是外部传入的基线，一是**纯函数**（不需要额外输入，两端好对拍、
+    移动端也不用新采一段静息姿态），二是**不会冤枉正在做动作的人**：
+    只要他真的动了，范围就 > 0；而"全程保持不动"与"全程保持在一个拉伸位"
+    是不同的两件事——后者依然是"动了"（范围 = 从起势到保持位的距离）。
+
+    ## 取整只有一处
+
+    与旧实现位置相同：先算 raw，最后统一 `round_1` 一次。逐帧取整再比较是本项目
+    的硬规矩（用户看到的数字与判定必须同源），但**不能**先把每轴各自取整再取 max ——
+    那会与"先取 max 再取整"分叉，多出一个取整点。
+    """
+    metrics = list(METRIC_FIELD) if metric == METRIC_ANY else [metric]
+    series = []
+    for m in metrics:
+        field = METRIC_FIELD[m]
+        thr = float(METRIC_THRESHOLD[m])
+        vals = [float(f[field]) for f in frames]
+        base = min(vals)
+        # `- base` 之后必然 ≥ 0（base 就是最小值），所以不必再 max(0, …)
+        series.append([(v - base) / thr for v in vals])
+    return [round_1(max(s[i] for s in series)) for i in range(len(frames))]
 
 
 def judge_exercise(frames, spec=None) -> dict:
@@ -111,6 +179,8 @@ def judge_exercise(frames, spec=None) -> dict:
                 **没有姿态的帧不应进入序列** —— 缺口会被算到前一帧的区间上，
                 因此上游只推入 `type == "pose"` 的帧。
         spec: ``{"kind": "hold" | "cyclic", "duration_ms": 标称时长,
+                "metric": 幅度看哪个量（"head" / "shoulder" / "spine" / "any"，
+                          见 `METRIC_*`；缺省 `any` 只是兜底，生产路径必须显式给）,
                 "min_cycles": 往复类的最小循环数（可选）}``。缺省为保持类、不限时长。
 
     Returns:
@@ -121,10 +191,16 @@ def judge_exercise(frames, spec=None) -> dict:
     """
     spec = spec or {}
     kind = spec.get("kind") or KIND_HOLD
+    metric = spec.get("metric") or METRIC_ANY
     duration_ms = float(spec.get("duration_ms") or 0)
     min_cycles = spec.get("min_cycles")
     if min_cycles is None:
         min_cycles = DEFAULT_MIN_CYCLES if kind == KIND_CYCLIC else 0
+    if metric not in METRIC_FIELD and metric != METRIC_ANY:
+        # 非法值回落 `any`（比"猜一个维度"安全）：`any` 只会更宽容，不会给出
+        # 一个"看错部位"的结论。与 kind 的非法值回落保持类同一思路。
+        logger.warning("未知 metric=%r，回落 %s", metric, METRIC_ANY)
+        metric = METRIC_ANY
 
     frames = list(frames)
     if not frames:
@@ -138,7 +214,7 @@ def judge_exercise(frames, spec=None) -> dict:
             "cycles": 0,
         }
 
-    acts = _activities(frames)
+    acts = _amplitudes(frames, metric)
     peak = max(acts)
 
     held_ms = 0
@@ -177,8 +253,9 @@ def judge_exercise(frames, spec=None) -> dict:
         grade, hint = GRADE_COMPLETED, HINT_COMPLETED
 
     logger.debug(
-        "Exercise quality grade=%s | peak=%.1f held=%dms ratio=%.1f cycles=%d (n=%d, kind=%s)",
-        grade, peak, held_ms, hold_ratio, cycles, len(frames), kind,
+        "Exercise quality grade=%s | peak=%.1f(范围) held=%dms ratio=%.1f cycles=%d "
+        "(n=%d, kind=%s, metric=%s)",
+        grade, peak, held_ms, hold_ratio, cycles, len(frames), kind, metric,
     )
     return {
         "grade": grade,
@@ -197,8 +274,10 @@ def score_exercise(verdict, spec=None) -> int:
     动作分 = 幅度分量 × ``SCORE_WEIGHT_AMPLITUDE`` + 到位程度分量 × ``SCORE_WEIGHT_EFFORT``
 
     - **幅度分量** = ``exercise_score_from_activity(peak_activity)``：与实时运动态评分
-      **同一个映射**（达标线 60、活动量 4 倍阈值即满分），所以「实时看着 90 分」与
+      **同一张映射**（达标线 60、活动量 4 倍阈值即满分），所以「实时看着 90 分」与
       「这个动作幅度分 90」说的是同一件事。
+      ⚠️ 但两边的**输入**不是同一个量：这里传的是「活动范围」（见 `_amplitudes`），
+      实时那一帧传的是「当前偏离」。共用映射是为了让刻度一致，不是为了让数值相等。
     - **到位程度分量**：保持类 = ``min(1, hold_ratio / HOLD_TARGET_RATIO) × 100``；
       往复类 = ``min(1, cycles / min_cycles) × 100``。
 
@@ -306,7 +385,16 @@ def session_score_of(items) -> int:
 # ---------------------------------------------------------------------------
 
 #: 明细文本的格式版本。将来改形态时靠它区分老数据，**别靠猜结构**。
-ACTION_SCORES_VERSION = 1
+#:
+#: 🔴 v1 → v2 不是"形态"变了（字段完全相同），而是**分数的口径变了**：
+#: v1.7.0 把幅度从"绝对偏离、三项取最大"改成了"该动作针对的量的活动范围"，
+#: 于是同一个动作的分数在 v1 与 v2 下**不是同一把尺子**。
+#: 形态不变却要升版本，正是为了这件事：显示端必须能把老明细标成「旧口径」，
+#: 否则用户会拿两个不可比的数字互相比较（那正是"展示了不能证明的数字"）。
+ACTION_SCORES_VERSION = 2
+
+#: 仍然**能解析**的历史版本（显示端要标注口径，但不必显示成 `--`）。
+ACTION_SCORES_LEGACY_VERSIONS = (1,)
 
 
 def serialize_action_scores(items) -> str:

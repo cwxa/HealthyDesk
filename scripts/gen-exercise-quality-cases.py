@@ -23,6 +23,7 @@ BACKEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backen
 sys.path.insert(0, BACKEND)
 
 from services.exercise_quality import (  # noqa: E402
+    ACTION_SCORES_LEGACY_VERSIONS,
     ACTION_SCORES_VERSION,
     ACTIVITY_IDLE_MAX,
     ACTIVITY_ONSET,
@@ -42,6 +43,12 @@ from services.exercise_quality import (  # noqa: E402
     KIND_CYCLIC,
     KIND_HOLD,
     MAX_FRAME_GAP_MS,
+    METRIC_ANY,
+    METRIC_FIELD,
+    METRIC_HEAD,
+    METRIC_SHOULDER,
+    METRIC_SPINE,
+    METRIC_THRESHOLD,
     SCORE_WEIGHT_AMPLITUDE,
     SCORE_WEIGHT_EFFORT,
     UNMET_MAX_SCORE,
@@ -64,7 +71,7 @@ SAMPLE_FILES = [
 
 
 def frame(t, head, shoulder=0.0, spine=0.0):
-    """默认把肩 / 脊柱设为 0（完全端正），这样活动量就**只由 head 决定** ——
+    """默认把肩 / 脊柱设为 0（完全端正），这样 head 通道上的用例就**只由 head 决定** ——
     否则 4.0/10 = 0.4 的脊柱底线会盖过想在头部通道上测的那些边界。"""
     return {"t": t, "head_angle": head, "shoulder_diff": shoulder, "spine_angle": spine}
 
@@ -72,6 +79,17 @@ def frame(t, head, shoulder=0.0, spine=0.0):
 def grid(values, step=500, start=0):
     """把一串 head 值铺成等间隔帧序列。"""
     return [frame(start + i * step, v) for i, v in enumerate(values)]
+
+
+def swing(values, step=500, start=0):
+    """**基线帧 + 摆动序列**：第一帧是"中立位"（head=0），之后按 values 铺开。
+
+    🔴 v1.7.0 起「幅度」是**活动范围**（`max − min`），所以每条与幅度有关的用例
+    都必须显式给出"从哪动到哪"。常量序列的范围是 0 —— 那等于**没动**，
+    守卫会把它判成 idle。这正是"改口径要连用例一起改"的原因：
+    旧用例里大量 `grid([10.0] * n)` 在旧口径下是"幅度 2.0"，在新口径下是"一动不动"。
+    """
+    return grid([0.0] + list(values), step=step, start=start)
 
 
 def build_cases():
@@ -91,86 +109,155 @@ def build_cases():
             "expected_score": score_exercise(verdict, spec),
         })
 
-    hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0}
-    cyclic3 = {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 3}
+    hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_HEAD}
+    cyclic3 = {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 3, "metric": METRIC_HEAD}
 
     # ---- 退化输入 ----
     add("空序列·保持类", [], hold, "一帧都没有 → 只能按「没动」处理，不能假装完成")
     add("空序列·往复类", [], cyclic3)
-    add("单帧·幅度到位", [frame(0, 10.0)], hold, "单帧没有区间 → 保持时长为 0")
-    add("单帧·幅度不足", [frame(0, 3.0)], hold)
+    add(
+        "单帧·无区间可算（范围 = 0）",
+        [frame(0, 10.0)],
+        hold,
+        "单帧算不出范围 → 与「一帧都没有」同样按没动处理。"
+        "⚠️ **不许**退回「用这一帧的绝对偏离顶上」—— 那等于在角落里把刚修掉的缺陷放回来",
+    )
     add("单帧·完全静止", [frame(0, 0.5, 0.4, 1.0)], hold)
-    add("缺省 spec", grid([10.0] * 5), {}, "不传 spec 时按保持类、标称时长 0 处理")
+    add("缺省 spec", swing([10.0] * 4), {}, "不传 spec 时按保持类、标称时长 0、metric=any 处理")
 
-    # ---- 幅度三段的边界 ----
+    # ---- 幅度三段的边界（head 阈值 5.0°，所以范围 1.0 ⇒ 活动量 0.2）----
     # 每帧活动量都过 round_1，所以「峰值恰好 0.25」不可达（0.25 落在两个可表示值之间）：
     #   0.25 → round_1 → 0.2（平局取偶）→ < ACTIVITY_IDLE_MAX → idle
     # 换言之有效边界是「取整后 ≤ 0.2 → idle，≥ 0.3 → 不算 idle」。
-    add("边界·取整后 0.2 即 idle 线之下", grid([1.0] * 25), hold, "0.2 < 0.25")
-    add("边界·取整后 0.3 已越过 idle 线", grid([1.5] * 25), hold, "0.3 > 0.25 → 判幅度不足")
+    add("边界·取整后 0.2 即 idle 线之下", swing([1.0] * 24), hold, "范围 1.0° → 0.2 < 0.25")
+    add("边界·取整后 0.3 已越过 idle 线", swing([1.5] * 24), hold, "范围 1.5° → 0.3 > 0.25 → 判幅度不足")
     # 有效活动起点（onset）：raw 0.998 会被 round_1 抬到 1.0，因此按「已达起点」处理
     # —— 这正是 S1 那条「显示的数字与判定必须同源」的延续。
-    add("边界·raw 0.998 取整成 1.0（记为已达起点）", grid([4.99] * 25), hold)
-    add("边界·raw 0.94 取整成 0.9（未达起点）", grid([4.7] * 25), hold)
-    add("边界·活动量恰等于 onset（含）", grid([5.0] * 25), hold, ">= 判定，恰好 1.0 要计入")
+    add("边界·raw 0.998 取整成 1.0（记为已达起点）", swing([4.99] * 24), hold)
+    add("边界·raw 0.94 取整成 0.9（未达起点）", swing([4.7] * 24), hold)
+    add("边界·活动量恰等于 onset（含）", swing([5.0] * 24), hold, ">= 判定，恰好 1.0 要计入")
 
     # ---- 保持比例 ----
     # ⚠️ 保持比例的分母是**标称时长**，分子是「达标区间的左黎曼和」。
     # 要让比例恰好落在某个值上，必须数清楚"有几个 500ms 区间达标"：
-    #   grid 铺 500ms/帧，第 i 帧的区间 = [t_i, t_{i+1})，因此 k 帧连续达标 = k 个区间。
+    #   swing 的第 0 帧是基线（一定低于 onset），所以达标区间从下标 1 开始数。
     add(
         "保持比例·恰好 0.6（达标）",
-        grid([10.0] * 12 + [0.0] * 9),
-        {"kind": KIND_HOLD, "duration_ms": 10000, "min_cycles": 0},
+        swing([10.0] * 12 + [0.0] * 9),
+        {"kind": KIND_HOLD, "duration_ms": 10000, "min_cycles": 0, "metric": METRIC_HEAD},
         "12 个区间 × 500ms = 6000ms / 10000ms = 0.6，恰好压在线上",
     )
     add(
         "保持比例·0.5（未达标）",
-        grid([10.0] * 10 + [0.0] * 11),
-        {"kind": KIND_HOLD, "duration_ms": 10000, "min_cycles": 0},
+        swing([10.0] * 10 + [0.0] * 11),
+        {"kind": KIND_HOLD, "duration_ms": 10000, "min_cycles": 0, "metric": METRIC_HEAD},
     )
     add(
         "比例·超过 1 时钳到 1",
-        grid([10.0] * 45),
+        swing([10.0] * 44),
         hold,
-        "采样跨度 22s > 标称 12s，比例会 >1，钳到 1 避免显示 183%",
+        "采样跨度 23s > 标称 12s，比例会 >1，钳到 1 避免显示 183%",
     )
-    add("保持比例·duration 为 0", grid([10.0] * 5), {"kind": KIND_HOLD, "duration_ms": 0, "min_cycles": 0})
+    add(
+        "保持比例·duration 为 0",
+        swing([10.0] * 4),
+        {"kind": KIND_HOLD, "duration_ms": 0, "min_cycles": 0, "metric": METRIC_HEAD},
+    )
 
     # ---- 数据中断（掉帧 / 走出画面）----
     # 两组帧的 head 完全相同，唯一差别是间隔：1000ms 计入、2000ms 不计入。
     # 守卫会硬断言两者的 held_ms 差出整数倍，证明「中断不算保持得好」真的生效。
-    add("中断·间隔 1000ms（计入）", [frame(t, 10.0) for t in (0, 1000, 2000, 3000)], hold)
-    add("中断·间隔 2000ms（不计入）", [frame(t, 10.0) for t in (0, 2000, 4000, 6000)], hold)
+    # ⚠️ 两组都必须带一帧基线（head=0），否则"范围 = 0"会把用例退化成 idle，
+    #    断言就变成"两个 0 相等"这种永远成立的废话。
+    add("中断·间隔 1000ms（计入）", [frame(t, 0.0 if i == 0 else 10.0) for i, t in enumerate((0, 1000, 2000, 3000))], hold)
+    add("中断·间隔 2000ms（不计入）", [frame(t, 0.0 if i == 0 else 10.0) for i, t in enumerate((0, 2000, 4000, 6000))], hold)
     # 非正间隔必须被排除（同一时间戳可能出现于补帧/重放）
-    add("异常·重复时间戳", [frame(0, 10.0), frame(0, 10.0), frame(500, 10.0), frame(500, 10.0), frame(1000, 10.0)], hold)
+    add(
+        "异常·重复时间戳",
+        [frame(0, 0.0), frame(0, 10.0), frame(500, 10.0), frame(500, 10.0), frame(1000, 10.0)],
+        hold,
+    )
 
     # ---- 往复计数（带滞回）----
+    # 滞回的两个阈值都相对**基线**（范围 0 处）而言：升到 onset 才算「到位」，
+    # 回落到 trough（= 0.4 × onset）才算「归位」。
     add("往复·恰好 3 次循环", grid([1.0, 10.0, 1.0, 10.0, 1.0, 10.0, 1.0]), cyclic3, "往复类不看保持比例")
     add("往复·只做了 2 次", grid([1.0, 10.0, 1.0, 10.0, 1.0]), cyclic3)
-    add("往复·在起点附近抖动（滞回防重复计数）", grid([5.0, 6.0, 5.0, 7.0, 5.0]), {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1})
-    add("往复·恰好回落到 trough（算一次归位）", grid([2.0, 10.0, 2.0]), {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1})
-    add("往复·回落到 trough 之上（不算归位）", grid([2.5, 10.0, 2.5]), {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1})
+    add(
+        "往复·在起点附近抖动（滞回防重复计数）",
+        grid([0.0, 10.0, 6.0, 10.0, 6.0]),
+        {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1, "metric": METRIC_HEAD},
+        "上升后一直停在 onset 之上（活动量 1.2 > 1.0），没有归位 → 不得计成多次循环",
+    )
+    add(
+        "往复·恰好回落到 trough（算一次归位）",
+        grid([0.0, 10.0, 2.0, 10.0, 6.0]),
+        {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1, "metric": METRIC_HEAD},
+        "trough = 0.4 × onset：回落恰好落在 0.4 上要算一次归位",
+    )
+    add(
+        "往复·回落到 trough 之上（不算归位）",
+        grid([2.5, 10.0, 6.0, 10.0]),
+        {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 1, "metric": METRIC_HEAD},
+        "最低只回到活动量 0.7（> 0.4）→ 一次都没归位",
+    )
+
+    # ---- metric：只看这个动作针对的量（v1.7.0 的核心）----
+    # 同一串帧、只换 metric，必须给出**不同**结论 —— 这一组就是"评分有没有看错部位"
+    # 的可证伪证据。帧序列：头一动不动（恒 1.0°），肩高差从 0% 摆到 12%。
+    only_shoulder_moves = [frame(0, 1.0, 0.0)] + [frame(500 + i * 500, 1.0, 12.0) for i in range(23)]
+    add(
+        "metric·head：肩高差再大也不算头部动作",
+        only_shoulder_moves,
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_HEAD},
+        "旧口径（三项取最大）会把肩高差当成「头部侧屈的幅度」→ 判完成；新口径必须判没动",
+    )
+    add(
+        "metric·shoulder：同一串帧换看肩部就是真动作",
+        only_shoulder_moves,
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_SHOULDER},
+        "范围 12% > 阈值 4% → 幅度 3.0，且保持到位",
+    )
+    add(
+        "metric·any：兜底口径下取活动范围最大的那一个量",
+        only_shoulder_moves,
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_ANY},
+        "与 metric=shoulder 同结论（head 没动，肩部动了）",
+    )
+    add(
+        "metric·非法值回落 any",
+        only_shoulder_moves,
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": "elbow"},
+        "未知 metric 不许「猜一个维度」，回落 any（只会更宽容，不会看错部位）",
+    )
+    # 脊柱通道：基线本来就歪的人，只要不动，范围仍是 0
+    tilted_still = [frame(i * 500, 1.0, 1.0, 12.0) for i in range(24)]
+    add(
+        "metric·spine：基线歪 12° 但全程不动 → 没动",
+        tilted_still,
+        {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_SPINE},
+        "旧口径下这就是 82 分（姿势越差越容易「自动过关」）；新口径必须 0 分",
+    )
 
     # ---- 取整平局点：把 pyRound1 与 Math.round 拉到不同答案 ----
     # 逐帧活动量 raw = 1.25（→×10 = 12.5）：本项目口径取偶得 1.2，Math.round 得 1.3。
     # raw = 0.25（→2.5）更狠：本项目得 0.2（idle），Math.round 得 0.3（幅度不足）——
     # 连**结论**都会不同。
     # 没有这类用例，「逐帧取整被换成 Math.round」这件事守卫是发现不了的。
-    add("取整平局点·逐帧 raw 0.25（结论也会不同）", grid([1.25] * 25), hold)
-    add("取整平局点·逐帧 raw 0.75", grid([3.75] * 25), hold)
-    add("取整平局点·逐帧 raw 1.25", grid([6.25] * 25), hold)
+    add("取整平局点·逐帧 raw 0.25（结论也会不同）", swing([1.25] * 24), hold)
+    add("取整平局点·逐帧 raw 0.75", swing([3.75] * 24), hold)
+    add("取整平局点·逐帧 raw 1.25", swing([6.25] * 24), hold)
     # 保持比例 raw = 0.25（2.5）：本项目得 0.2，Math.round 得 0.3
     add(
         "取整平局点·保持比例 0.25",
-        [frame(t, 10.0) for t in (0, 500, 1000, 1500)] + [frame(t, 0.0) for t in (2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000)],
-        {"kind": KIND_HOLD, "duration_ms": 8000, "min_cycles": 0},
+        swing([10.0] * 4 + [0.0] * 17),
+        {"kind": KIND_HOLD, "duration_ms": 8000, "min_cycles": 0, "metric": METRIC_HEAD},
         "4 个区间 × 500ms = 2000ms / 8000ms = 0.25",
     )
 
     # ---- 浮点长链 ----
-    add("多小数位序列", grid([3.33, 2.77, 4.44, 3.11, 5.55, 4.55, 2.22, 1.99] * 3), hold)
-    add("长序列（45 帧）", grid([4.05] * 45), hold)
+    add("多小数位序列", swing([3.33, 2.77, 4.44, 3.11, 5.55, 4.55, 2.22, 1.99] * 3), hold)
+    add("长序列（46 帧）", swing([4.05] * 45), hold)
 
     return cases
 
@@ -186,8 +273,8 @@ def build_score_cases():
     守卫会把每条 ``expected_score`` 与前端 `scoreExercise()` 的结果逐条比对，
     并额外断言那条核心不变量（见 `verify-exercise-quality.mjs` 的 h 段）。
     """
-    hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0}
-    cyclic3 = {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 3}
+    hold = {"kind": KIND_HOLD, "duration_ms": 12000, "min_cycles": 0, "metric": METRIC_HEAD}
+    cyclic3 = {"kind": KIND_CYCLIC, "duration_ms": 3000, "min_cycles": 3, "metric": METRIC_HEAD}
 
     def verdict(grade, peak, hold_ratio=0.0, cycles=0):
         return {
@@ -275,7 +362,9 @@ def build_action_scores_cases():
       生产里的 id 都是 ASCII slug，所以这个坑只有在"有人给动作库加了个中文 id /
       有人把 id 改成显示名"时才会炸 —— 那时它会先在这里红，而不是在用户互换文件时。
     - **引号与反斜杠**：转义规则两端不同就抓得到。
-    - **空列 / 边界分（0 与 100）**：`{"v":1,"items":[]}` 与 0 分是两件事，形态必须钉住。
+    - **空列 / 边界分（0 与 100）**：`{"v":2,"items":[]}` 与 0 分是两件事，形态必须钉住。
+      ⚠️ 版本号从 1 升到 2 是因为**分数口径变了**（幅度从"绝对偏离"改成"活动范围"），
+      形态没变 —— 显示端要靠这个号把老明细标成「旧口径」。
     - **一串完整明细**：钉住项**顺序**不被重排（Python 的 dict 与 JS 的对象都保证插入序，
       但"保证"是要有证据的）。
 
@@ -436,6 +525,24 @@ def main():
             "IDLE_SCORE": IDLE_SCORE,
             # 逐动作明细文本的格式版本
             "ACTION_SCORES_VERSION": ACTION_SCORES_VERSION,
+        },
+        # 幅度口径的映射表：守卫会拿前端**运行时的** METRIC_FIELD / METRIC_THRESHOLD 逐键比。
+        # 单排在 constants 之外，因为它们是映射（`!==` 比不了），而且这一层最容易"一端改了
+        # 另一端没改" —— 而症状是"同一个动作在手机与电脑上看的是不同部位"，非常难查。
+        "metrics": {
+            "field": METRIC_FIELD,
+            "threshold": METRIC_THRESHOLD,
+            "names": {
+                "head": METRIC_HEAD,
+                "shoulder": METRIC_SHOULDER,
+                "spine": METRIC_SPINE,
+                "any": METRIC_ANY,
+            },
+        },
+        # 明细文本的版本：当前版本 + 仍能解析的历史版本（后者要被标成「旧口径」）
+        "action_scores_versions": {
+            "current": ACTION_SCORES_VERSION,
+            "legacy": list(ACTION_SCORES_LEGACY_VERSIONS),
         },
         # 样本文件清单（守卫据此按同一顺序回放）
         "sample_files": SAMPLE_FILES,

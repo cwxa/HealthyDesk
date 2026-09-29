@@ -12,9 +12,16 @@ export interface ExerciseState {
   current: number
   timeLeft: number
   /**
-   * 实时动作达成度（0–100），来自**运动态评分通道**。
+   * 实时动作达成度（0–100）。
    * 刻意不叫 `poseScore`：活动期间用户本来就应该把头摆到非中立位，
    * 拿静息姿态分去衡量运动中的人会得出"姿态异常"的反向结论。
+   *
+   * 🔴 v1.7.0 起：**有逐动作判定时，它与 `qualityHint` 同源** ——
+   * 同一个滚动窗口 verdict、同一个 `scoreExercise`（也就是与逐动作成绩同一个函数），
+   * 因此徽章与提示不可能互相打脸，且徽章同样满足「≥ 80 ⟺ 判完成」（未达标钳到 79 以下）。
+   * 只有当判定取不到时（动作的指标测不到 / 窗口帧不足）才回落到**运动态评分通道**
+   * （`_exercise_score`，三项取最大的绝对偏离）；那时 `qualityHint` 也是空的，
+   * 所以仍然不会出现"徽章说好、提示说没动"的组合。
    */
   activityScore: number
   hasPose: boolean

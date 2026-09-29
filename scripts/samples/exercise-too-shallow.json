@@ -1,10 +1,10 @@
 {
   "name": "too-shallow",
-  "description": "幅度不足：动了，但头部侧屈只到 3°（活动量 0.6，达到 idle 线却没到有效活动线 1.0）—— 全程维持也只能判「幅度不够」",
-  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0 },
+  "description": "幅度不足：动了，但头部只从端正位侧屈到 3°（活动**范围** 3°，除以 5° 阈值 = 活动量 0.6，越过 idle 线却没到有效活动线 1.0）—— 全程维持也只能判「幅度不够」",
+  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0, "metric": "head" },
   "expected_grade": "insufficient",
   "frames": [
-    { "t": 0, "head_angle": 3.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },
+    { "t": 0, "head_angle": 0.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },
     { "t": 500, "head_angle": 3.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },
     { "t": 1000, "head_angle": 3.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },
     { "t": 1500, "head_angle": 3.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },

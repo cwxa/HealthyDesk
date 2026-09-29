@@ -437,7 +437,15 @@ export default function NeckActivity() {
       const mine = frames.filter((f) => f.action === i)
       if (mine.length === 0) continue
       judged++
-      const spec = { kind: e.kind, duration_ms: e.duration * 1000, min_cycles: e.min_cycles }
+      // 🔴 `metric` 必须跟着动作走：它是"这个动作的幅度看哪个量"，
+      //    漏传会回落成 `any`（哪个部位动得最多算哪个）—— 那就等于
+      //    让"肩高差很大"冒充"头部侧屈做到位"。见 `exercises.ts` 的说明。
+      const spec = {
+        kind: e.kind,
+        metric: e.metric,
+        duration_ms: e.duration * 1000,
+        min_cycles: e.min_cycles,
+      }
       const verdict = judgeExercise(mine, spec)
       if (verdict.grade === 'completed') completed++
       // 「动过但没到位」要单独计数：收尾文案靠它区分"没动"与"幅度不够"
@@ -559,7 +567,23 @@ export default function NeckActivity() {
    * 卡在"再多做几次"的误报上。5 秒对保持类同样成立（0.6 的保持线 = 需要保持 3 秒）。
    */
   const GUIDE_WINDOW_MS = 5000
-  const liveQuality: { grade: ExerciseGrade; hint: string } | null = (() => {
+  /**
+   * 实时引导的结论 + **实时徽章**，都从这**同一个 verdict** 出来。
+   *
+   * 🔴 为什么徽章也必须走它（v1.7.0 修）：徽章与提示是同一屏上并排显示的两个东西。
+   * 徽章原先取的是**运动态通道**（`_exercise_score`，三项取最大的绝对偏离），
+   * 而提示取的是本动作声明的那个量的**活动范围**。两者在新口径下会**互相打脸**：
+   * 一个驼背的人在「头部后缩」里一动不动，运动态通道仍会因脊柱绝对偏离 12° 给 72 分，
+   * 而提示说"没检测到动作" —— 正是本项目反复修的那类「文案与数字两套口径」。
+   *
+   * 这里改用 `scoreExercise`（**与逐动作成绩同一个函数**）算这一帧的实时分，于是：
+   *   ① 徽章与提示同源，不可能矛盾；
+   *   ② 徽章顺带满足「分数 ≥ 80 ⟺ 判完成」那条核心不变量（未达标一律钳到 79 分以下）。
+   *
+   * ⚠️ 取不到判定时（动作的指标测不到 / 窗口不足两帧）返回 `null`，徽章回落到运动态通道 ——
+   * 那种情况下**提示也是空的**，所以同样不会自相矛盾。
+   */
+  const liveQuality: { grade: ExerciseGrade; hint: string; score: number } | null = (() => {
     if (mode !== 'exercise') return null
     // 指标测不到的动作不给判定 —— 见 ExercisePanel 里 `measurable` 的说明
     if (!exercises[exCurrent].measurable) return null
@@ -569,21 +593,25 @@ export default function NeckActivity() {
     const win = frames.filter((f) => f.action === exCurrent && f.t > end - GUIDE_WINDOW_MS)
     if (win.length < 2) return null
     const e = exercises[exCurrent]
-    const v = judgeExercise(win, {
+    const spec = {
       kind: e.kind,
+      // 与整场判定同一个量 —— 实时提示与新口径的成绩必须看同一个部位
+      metric: e.metric,
       duration_ms: GUIDE_WINDOW_MS,
       // 窗口里只要求看到一次有效归位，整场判定才用动作自己的 min_cycles
       min_cycles: e.kind === 'cyclic' ? 1 : 0,
-    })
-    return { grade: v.grade, hint: v.hint }
+    }
+    const v = judgeExercise(win, spec)
+    // 用**同一个 spec** 算分：徽章说的就是"如果现在结束，这个动作大概得多少分"
+    return { grade: v.grade, hint: v.hint, score: scoreExercise(v, spec) }
   })()
 
   const exState: ExerciseState = {
     phase: mode === 'done' ? 'done' : 'active',
     current: exCurrent,
     timeLeft: exTimeLeft,
-    // 活动期间这个分来自**运动态通道**（动作达成度），不是静息姿态分
-    activityScore: score,
+    // 有逐动作判定时用它的实时分（与提示同源）；否则回落到**运动态通道**（不是静息姿态分）
+    activityScore: liveQuality?.score ?? score,
     hasPose: latestResult?.type === 'pose',
     totalDur,
     progress,

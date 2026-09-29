@@ -1,7 +1,7 @@
 {
   "name": "neck-left-flex",
-  "description": "颈部左侧屈：正常完成 —— 幅度到位（头部侧屈 10°，活动量 2.0）且保持约 87% 时长",
-  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0 },
+  "description": "颈部左侧屈：正常完成 —— 头部从端正位侧屈到 10°（活动**范围** 10°，除以 5° 阈值 = 活动量 2.0）并保持约 87% 标称时长",
+  "spec": { "kind": "hold", "duration_ms": 12000, "min_cycles": 0, "metric": "head" },
   "expected_grade": "completed",
   "frames": [
     { "t": 0, "head_angle": 0.0, "shoulder_diff": 1.0, "spine_angle": 4.0 },

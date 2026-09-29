@@ -151,6 +151,46 @@ const TARGETS = ['head', 'head', 'head', 'head', 'shoulder', 'shoulder', 'spine'
 /** 文档里写的"每维度 ≥2"目标（低于它要显式告警，见文件尾）。 */
 const TARGET_MIN = 2
 
+/**
+ * `metric` 映射（v1.7.0 新增）—— **这个动作的幅度看哪个姿态量**。
+ *
+ * 为什么单独钉住：改错它**不会报错**，只会让用户看到
+ * 「我明明做了却说不算数」或「我明明没做却算我做到了」。而这两种症状在界面上
+ * 长得一模一样（都是一个数字）。守卫
+ * `verify-exercise-quality.mjs` §k 会用这 7 个动作的声明去跑真判定，
+ * 这里则钉住"声明本身没被偷偷改过"。
+ */
+const METRICS = ['head', 'head', 'head', 'head', 'any', 'shoulder', 'spine']
+/** 合法取值：三个姿态量 + `any`（显式例外，只给"单一量测不到"的对称动作）。 */
+const METRIC_VALUES = ['head', 'shoulder', 'spine', 'any']
+
+/**
+ * 🔴 **消费者必须把 `metric` 传进判定**（v1.7.0）。
+ *
+ * 漏传不会报错：判定会回落到 `metric: 'any'`（哪个部位动得最多算哪个），
+ * 于是「肩高差很大」又能冒充「头部侧屈做到位」—— 正是这次要消灭的那类缺陷，
+ * 只是从"每条都错"变成"只在特定姿势组合下错"，更难发现。
+ * 所以这里数一下：调用 `judgeExercise(` 的地方，必须逐处带上 `metric`。
+ */
+const METRIC_WIRING = { file: 'src/pages/NeckActivity.tsx', call: 'judgeExercise(', wiring: 'metric: e.metric' }
+
+/**
+ * 🔴 **实时徽章必须与实时提示同源**（v1.7.0）。
+ *
+ * 活动进行中，界面上并排显示着「实时动作达成度」徽章与一句引导提示。两者过去来自
+ * **不同的量**：徽章取运动态通道（三项取最大的**绝对偏离**），提示取本动作声明的那个量的
+ * **活动范围**。新口径下这会互相打脸 —— 驼背的人一动不动的「头部后缩」，
+ * 徽章因脊柱绝对偏离 12° 给 72 分，提示却说"没检测到动作"。
+ *
+ * 所以钉两件事：① 实时分来自 `scoreExercise(`（与逐动作成绩同一个函数）；
+ * ② 给 `activityScore` 赋的是逐动作判定优先、运动态通道兜底的那条表达式。
+ */
+const LIVE_SCORE_WIRING = {
+  file: 'src/pages/NeckActivity.tsx',
+  scored: 'scoreExercise(v, spec)',
+  assign: 'activityScore: liveQuality?.score ?? score',
+}
+
 // ─────────────────────────────────────────────────────────────
 // 工具
 // ─────────────────────────────────────────────────────────────
@@ -272,6 +312,14 @@ async function main() {
 
     if (!(e.target in seenTargets)) fail(`${at} 的 target 非法：${names(e.target)}（应为 head/shoulder/spine）`)
     else seenTargets[e.target]++
+
+    if (!METRIC_VALUES.includes(e.metric)) {
+      fail(`${at} 的 metric 非法：${names(e.metric)}（应为 ${METRIC_VALUES.join(' / ')}）`)
+    } else if (e.metric !== 'any' && e.metric !== e.target) {
+      // 唯一允许偏离 target 的情形是显式的 `any`（双侧对称动作，单一量测不到）。
+      // 拿别的维度给这个动作打分 = 让用户"做了 A 却给 B 记分"，属于静默错判。
+      fail(`${at} 的 metric=${e.metric} 与 target=${e.target} 不一致，且不是显式的 'any'`)
+    }
 
     if (!['low', 'medium'].includes(e.intensity)) fail(`${at} 的 intensity 非法：${names(e.intensity)}`)
 
@@ -412,6 +460,15 @@ async function main() {
     else if (n < TARGET_MIN) warn(`维度 ${dim} 只有 ${n} 个动作，低于 S7 文档写的「每维度 ≥ ${TARGET_MIN}」（已知缺口，留给 S8 扩库）`)
   }
 
+  // ── D2. `metric` 映射（v1.7.0：这个动作的幅度看哪个量）────────
+  const metricsGot = list.map((e) => e.metric)
+  if (!deepEqual(metricsGot, METRICS)) {
+    fail(`D2. metric 映射变了：\n    快照 ${JSON.stringify(METRICS)}\n    现在 ${JSON.stringify(metricsGot)}`)
+  } else {
+    const anyCount = metricsGot.filter((m) => m === 'any').length
+    ok(`D2. 幅度口径映射与快照一致（${list.length} 项；其中 ${anyCount} 个显式用 'any'，其余与 target 一致）`)
+  }
+
   if (!requireStripper()) return finish(list.length)
 
   // ── E. 源码守卫：动作名只能存在于数据文件里 ────────────────
@@ -488,6 +545,45 @@ async function main() {
   }
   if (consumerHits === 0) {
     ok(`G. 消费者（${CONSUMERS.length} 个）全部从 ${DATA_REL} 取动作`)
+  }
+
+  // ── H. 消费者必须把 `metric` 传进判定（v1.7.0）────────────
+  // 与 B/C 段同一处境：漏传**不会报错**，只会悄悄退回 `any`
+  // （"哪个部位动得最多算哪个"），于是缺陷从"每条都错"变成"某些姿势组合下错"。
+  // 判据用记数配对而不是"出现过"：`judgeExercise(` 有 2 处（整场判定 + 实时窗口），
+  // 漏了任何一处都必须红。
+  {
+    const raw = readFileSync(join(ROOT, METRIC_WIRING.file), 'utf8')
+    const calls = count(raw, METRIC_WIRING.call)
+    const wired = count(raw, METRIC_WIRING.wiring)
+    if (calls === 0) {
+      fail(`H. ${METRIC_WIRING.file} 里找不到 ${METRIC_WIRING.call} —— 调用点被搬走了？这条守卫会空转`)
+    } else if (wired !== calls) {
+      fail(
+        `H. ${METRIC_WIRING.file} 有 ${calls} 处 ${METRIC_WIRING.call}，但只有 ${wired} 处带了 ${METRIC_WIRING.wiring}` +
+          ' —— 漏传的动作会回落成 any，让"别的部位动得多"冒充这个动作的幅度',
+      )
+    } else {
+      ok(`H. 消费者把动作声明的 metric 传进了判定（${wired}/${calls} 处调用逐处带上）`)
+    }
+  }
+
+  // ── I. 实时徽章与实时提示同源（v1.7.0）────────────────────
+  // 徽章与提示是**同一屏并排**的两个东西。若徽章回到运动态通道（三项取最大的绝对偏离），
+  // 它们会在"基线本身就超标"的姿势上互相打脸（徽章 72 分 / 提示说没动）。
+  {
+    const raw = readFileSync(join(ROOT, LIVE_SCORE_WIRING.file), 'utf8')
+    const scored = count(raw, LIVE_SCORE_WIRING.scored)
+    const assigned = count(raw, LIVE_SCORE_WIRING.assign)
+    if (scored === 0 || assigned === 0) {
+      fail(
+        `I. 实时徽章没有与逐动作判定同源：${LIVE_SCORE_WIRING.file} 里 ` +
+          `${LIVE_SCORE_WIRING.scored} ×${scored}、${LIVE_SCORE_WIRING.assign} ×${assigned}` +
+          ' —— 徽章会退回运动态通道（三项取最大的绝对偏离），与旁边的提示互相打脸',
+      )
+    } else {
+      ok('I. 实时徽章与实时提示同源（同一个窗口 verdict、同一个 scoreExercise）')
+    }
   }
 
   finish(list.length)

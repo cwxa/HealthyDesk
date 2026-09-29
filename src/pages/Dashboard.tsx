@@ -7,7 +7,7 @@ import ScoreGauge from '../components/ScoreGauge'
 import TrendChart from '../components/TrendChart'
 import AIAnalysisPanel from '../components/AIAnalysisPanel'
 import type { ActivityRecord, WeeklyReport as WeeklyReportType } from '../types'
-import { parseActionScores } from '../platform/exerciseQuality'
+import { parseActionScoresDetailed } from '../platform/exerciseQuality'
 import { TrendingUpIcon, ActivityIcon, BarChart2Icon, CheckIcon, MonitorIcon, ClockIcon, NeckIcon, FlameIcon } from '../components/icons'
 
 interface Summary {
@@ -203,23 +203,29 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   const isToday = new Date().toDateString() === time.toDateString()
   const timeDisplay = isToday ? `今天 ${time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : timeStr
 
-  // 🔴 活动分有**三态**，显示必须分开（判据见 `exerciseQuality.parseActionScores`）：
+  // 🔴 活动分有**四态**，显示必须分开（判据见 `exerciseQuality.parseActionScoresDetailed`）：
   //   `null`           → 老记录：写它的时候还没有逐动作明细，数字来自**改动前的旧口径**
   //                      （静息分 / 逐帧达成度），与现在的成绩**不可比** → 标出来，别假装能比
-  //   `[]`             → 判过了但一个动作都没判出来（摄像头没拍到人）→ 显示 `--`
+  //   `legacy` (v1)    → 有明细，但分数是 v1.7.0 **之前**的算法（幅度按绝对偏离算）——
+  //                      同样不可比，也必须标出来（这是 v1.7.0 新增的那一态）
+  //   `items: []`      → 判过了但一个动作都没判出来（摄像头没拍到人）→ 显示 `--`
   //                      （写 0 会被读成"得了 0 分"，而 0 分是可达的：全程没动）
   //   `items.length>0` → 本次动作成绩，与收尾页的「逐动作得分」同源
-  const items = parseActionScores(activity.action_scores)
-  const legacy = items === null
+  const parsed = parseActionScoresDetailed(activity.action_scores)
+  const legacy = parsed === null || parsed.legacy
+  const items = parsed === null ? null : parsed.items
   const noVerdict = items !== null && items.length === 0
   const shown = noVerdict ? '--' : `${activity.avg_score}分`
   let explain: string
-  if (items === null) {
+  if (parsed === null) {
     explain = '旧记录：当时这个分数用的是改动前的算法，与现在的「本次动作成绩」不可比'
-  } else if (items.length === 0) {
+  } else if (parsed.legacy) {
+    explain =
+      '旧口径：这条记录的逐动作分数按 v1.7.0 之前的算法（幅度看的是"偏离有多大"而不是"动了多大范围"），与现在的分数不可比'
+  } else if (items!.length === 0) {
     explain = '本次活动没有可判定的动作（摄像头没拍到人？），因此没有成绩'
   } else {
-    explain = `本次动作成绩：${items.length} 个动作，分别 ${items.map((it) => it.score).join(' / ')}`
+    explain = `本次动作成绩：${items!.length} 个动作，分别 ${items!.map((it) => it.score).join(' / ')}`
   }
 
   const scoreColor = noVerdict
@@ -250,7 +256,7 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {legacy && (
           <span
-            title="该记录写入时还没有逐动作明细，分数来自旧算法"
+            title={explain}
             style={{ fontSize: 10, color: '#999', border: '1px solid #e0e0e0', borderRadius: 4, padding: '1px 4px' }}
           >
             旧口径
