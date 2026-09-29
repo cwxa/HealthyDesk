@@ -981,17 +981,32 @@ jobs:
           want=$(ls dist-release | wc -l | tr -d ' ')
           echo "期望资产数 = $want（dist-release 里的文件，含 SHA256SUMS.txt）"
 
-          got=-1
+          # 只在"还没追平"时重试；`got` 一旦 ≥ want 就不再等（最终一致性只会让数量增长）。
+          got=0
           for i in $(seq 1 12); do
             got=$(gh release view "$TAG" --json assets --jq '.assets | length')
             echo "第 ${i} 次回读：assets=$got / 期望=$want"
-            [ "$got" = "$want" ] && break
+            if [ "$got" -ge "$want" ]; then break; fi
             sleep 10
           done
-          if [ "$got" != "$want" ]; then
-            echo "::error::资产数与期望不符（实际 $got，期望 $want）—— 差 120 秒仍未追平，不是延迟问题"
+
+          if [ "$got" -lt "$want" ]; then
+            echo "::error::资产数不足（实际 $got < 期望 $want）—— 等了 120 秒仍未追平，不是延迟问题"
+            echo "::error::线上实际资产："
             gh release view "$TAG" --json assets --jq '.assets[].name' || true
-            echo "::error::本地产物清单："
+            echo "::error::本地产物："
+            ls -la dist-release/ || true
+            exit 1
+          fi
+          # 🔴 数量**多出来**是另一种问题，不能和"少传了"混成一条报错：
+          #    多半是**上一次构建留下、这次已不再产出**的旧资产（改了产物名就会这样）。
+          #    留着它的后果是实打实的：README 的下载区写着"在 Assets 里找这个文件名"，
+          #    而 Assets 里躺着两个候选。所以这里**故意判失败**，让人去删，而不是静默放过。
+          if [ "$got" -gt "$want" ]; then
+            echo "::error::线上资产比本次产出的还多（实际 $got > 期望 $want）—— 多半是上次构建遗留的旧资产"
+            echo "::error::请逐个确认后删除：gh release delete-asset <tag> <name>"
+            gh release view "$TAG" --json assets --jq '.assets[].name' || true
+            echo "::error::本地产物："
             ls -la dist-release/ || true
             exit 1
           fi
