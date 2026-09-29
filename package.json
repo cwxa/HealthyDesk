@@ -20,7 +20,8 @@
     "verify:schema": "node scripts/verify-schema.mjs",
     "verify:readme": "node scripts/verify-readme.mjs",
     "verify:ci": "node scripts/verify-ci.mjs",
-    "verify:all": "npm run verify:parity && npm run verify:exercises && npm run verify:schema && npm run verify:readme && npm run verify:ci && node scripts/set-version.js --check",
+    "verify:fake-camera": "node scripts/fake-camera/replay.mjs",
+    "verify:all": "npm run verify:parity && npm run verify:exercises && npm run verify:schema && npm run verify:readme && npm run verify:ci && npm run verify:fake-camera && node scripts/set-version.js --check",
     "set-version": "node scripts/set-version.js",
 
     "build": "npm run build:desktop",

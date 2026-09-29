@@ -792,7 +792,8 @@ curl -fsS http://127.0.0.1:18920/api/health
 > ⚠️ **验不到的部分**：引导与提醒弹窗的互斥（无头环境里没有提醒会弹）、
 > `localStorage` 写不进去时的降级（隐私模式）—— 都只在真机上看得出来。
 > v1.7.0 再加一条：**实时徽章与实时提示同源**（无头环境**没有帧** ⇒ `liveQuality` 恒为 `null`
-> ⇒ 这里只走到"回落到运动态通道"那条分支；有帧时的行为只能真机验）。
+> ⇒ 这里只走到"回落到运动态通道"那条分支；有帧时的行为只能真机验 ——
+> 造帧的办法见 §9.9，但它**还没接进本冒烟**）。
 
 ```bash
 npm run build:web                                  # 冒烟跑的是 dist
@@ -812,6 +813,8 @@ node scripts/verify-ui-smoke.mjs --dump             # 守卫失败时打印页�
 **它不覆盖什么**（别读成"UI 已经验过了"）：摄像头与姿态推理（无头环境没有摄像头，
 且 plain `vite build` 的 dist 里没有 MediaPipe 的 wasm/模型）、样式与视觉回归、
 真机 WebView 行为 —— 后者见 [device-matrix.md](device-matrix.md)。
+> ⚠️ 「摄像头」这一条**已有了一条已验证的路**（Y4M 假摄像头注入无头 Chrome，
+> 见 §9.9），但**尚未接线进本冒烟** —— 所以现在仍然一句都不许说"有帧时的行为验过了"。
 
 **守卫的有效性用变异测试证明**（路线图需求 1 的验收硬条件）。
 `.buildenv/mutate-ui-smoke.py` 植入 4 种回归并要求冒烟**退出码非 0 且原因指向正确那一处**：
@@ -849,3 +852,49 @@ python .buildenv/mutate-ui-done.py U7 U8      # 只跑子集，日志另存一�
 ⚠️ 本机单条命令有时长上限，整轮 8 条（每条都要重新构建）**跑不完会被 SIGTERM 打断**。
 所以脚本装了信号处理器（收到就把源码写回原字节），并且**收尾自检是"整文件与运行前逐字节相同"**
 —— 上一版没做这两件事，实测留下过一处没还原的变异，而我只抽查了另外三个锚点，**没发现**。
+
+### 9.9 假摄像头案例（`scripts/fake-camera/`）
+
+**它填的坑是 §9.8 里最贵的那条「不覆盖」**：无头环境没有摄像头 ⇒ 有帧时的链路
+（实时徽章 / `localQuality`）在自动化里从来没验过，只在真机人工看过。
+
+**做法**：先造一份**可控的摄像头输入**（6 帧 640×480 画面素材 + 7 个案例序列），
+再让**真实现**跑出期望判定并存成 fixture（`scenarios.json`）。细节与全部实测数字见
+[`scripts/fake-camera/README.md`](../scripts/fake-camera/README.md)。
+
+```bash
+.buildenv/Scripts/python.exe scripts/fake-camera/build-frames.py   # 重测素材 + 重放 7 个案例并对登记值（需 mediapipe）
+npm run verify:fake-camera                                        # 同一 fixture 喂给 TS 实现，双端六字段对拍（纯 node，已进 CI）
+python scripts/fake-camera/make-y4m.py --case=completed --out=/tmp/c.y4m   # 生成假摄像头供片盘
+```
+
+**为什么它值得进 CI 而多数 fixture 不值得**：断言只用**已落盘**的逐帧序列，
+所以那条 node 守卫**不需要 mediapipe**；只有"重新生成案例"才要。分工写在 README 里。
+
+**两条实测结论（写进文档，别只在代码里）**：
+
+1. 🔴 **`PoseDetector` 的跟踪模式在「完全静止的人」身上会漂**：60 秒内 `head_angle`
+   0.84° → 4.91°（≈0.07°/s，不收敛）。后果是 `ACTIVITY_IDLE_MAX = 0.25` 对
+   「检到人的静止画面」**不可达** —— 真人一动不动会被判 `insufficient`/「幅度还不够」，
+   **不是** `idle`；但 **伪造不出 `completed`**（最坏 `peak_activity = 0.400`，只有
+   `ACTIVITY_ONSET = 1.0` 的 40%）。这条已作为**语义偏差**登记在 fixture 里。
+2. 🔴 **同一张图在不同重采样路径下 `head_angle` 差 1.3°**（1024×768 直送 2.27° vs
+   640×480 + q70 0.97°）⇒ fixture 的期望角度是**预测值**；真要拿去断言 app 侧读数，
+   **必须先复核余量**（哪几条有翻转风险，README 的余量表里逐条列了）。
+
+**注入浏览器已实测可行**（本机 Chrome / 无头 / CDP + 真实时间）：`<video>` 拿到 640×480、
+8 秒推进 39 帧 ≈ 5fps，正好等于桌面端 `setInterval(captureAndSend, 200)`。开关是
+`--use-fake-ui-for-media-stream --use-fake-device-for-media-stream
+--use-file-for-fake-video-capture=<a.y4m>`。
+
+两个坑（**踩过，别重踩**）：
+
+- Y4M 头的色度标记必须是 `C420mpeg2`，帧率写 `F5:1`，且要和 fixture 的 `capture` 一致；
+- 🔴 **不能靠 `--dump-dom --virtual-time-budget` 读结果**：虚拟时间会被**未决的媒体请求**
+  挂住（`getUserMedia()` 的 Promise 既不 resolve 也不 reject）⇒ dump 出来永远是初始状态。
+  实测第一版打印 `0:start`，**看上去像「y4m 不行」，其实探针根本没跑**。必须连 CDP 用真实等待。
+
+**还没接线进 `verify:ui`**（如实记录）：需要临时把 `dist/mediapipe/{wasm,models}` 补进
+dist 的**临时副本**（plain `vite build` 没有它们，`?platform=android` 现在会 404），
+且每案例 12 秒真实时间 ⇒ 要决定是进 CI（变慢）还是本地/发布前跑。
+

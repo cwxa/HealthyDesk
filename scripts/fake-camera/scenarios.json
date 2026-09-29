@@ -1,0 +1,2527 @@
+{
+  "_comment": "由 scripts/fake-camera/build-frames.py 生成；校验模式会重测/重放并逐项比对。",
+  "capture": {
+    "width": 640,
+    "height": 480,
+    "frame_interval_ms": 200,
+    "note": "200ms = 桌面端 setInterval(captureAndSend, 200)，恰好等于 MIN_POSE_MS ⇒ 桌面路径下时间支撑过滤是惰性的（真正的短命段只出现在移动端 rAF 高帧率）"
+  },
+  "thresholds": {
+    "HEAD_TILT_THRESHOLD": 5.0,
+    "ACTIVITY_ONSET": 1.0,
+    "ACTIVITY_IDLE_MAX": 0.25,
+    "HOLD_TARGET_RATIO": 0.6,
+    "DEFAULT_MIN_CYCLES": 3
+  },
+  "reading_semantics": {
+    "head_angle_solo": "每帧新建检测器单独喂 5 次的读数，与喂帧顺序无关 —— 只用于素材准入",
+    "head_angle_range": "在该案例的序列上下文里实测的读数区间，**随喂帧顺序变**",
+    "warning": "两组数不可混用。实测同一张 03-head-tilt-strong.jpg：单独喂 8.51°，先喂过正坐帧再喂 5.70°（差 2.81°）—— static_image_mode=False 是跟踪模式，有跨帧状态。"
+  },
+  "findings": {
+    "what": "PoseDetector(static_image_mode=False) 在完全静止的人身上会缓慢漂移",
+    "measured": {
+      "frames": 300,
+      "seconds": 60.0,
+      "head_angle_at_frame_25": 0.84,
+      "head_angle_last_frame": 4.91,
+      "converged": false,
+      "approx_deg_per_sec": 0.07,
+      "worst_peak_activity_over_all_12s_windows": 0.4,
+      "windows_scanned": 241
+    },
+    "consequences": [
+      "ACTIVITY_IDLE_MAX=0.25 在「检到人的静止画面」上不可达 ⇒ 真人一动不动判 insufficient/「幅度还不够，再大一点」，不是 idle。idle 实际只在「一帧都没有 / 少于两帧」时出现。",
+      "但伪造不出 completed：0.400 只有 ACTIVITY_ONSET=1.0 的 40%。",
+      "漂移不收敛：活动时长若显著变长，窗口内范围跟着涨（按 0.07°/s 推算约 70 秒摸到 5.0° 阈值）。当前动作库最长 20 秒（S8 durationRange 上限）⇒ 漂移约 1.4°、peak≈0.28，**眼下安全**。真要改 ACTIVITY_IDLE_MAX 或加漂移补偿，属评分域变更，要单独升 ACTION_SCORES_VERSION，不在本脚本范围。"
+    ]
+  },
+  "frames": [
+    {
+      "file": "00-no-person.jpg",
+      "detected": false,
+      "head_angle": null,
+      "head_is_real": false,
+      "shoulder_is_real": false,
+      "shoulder_diff": null,
+      "spine_angle": null,
+      "visibility": null,
+      "dx_ear": null,
+      "dx_shoulder": null,
+      "expect_detected": false,
+      "desc": "程序生成的空房间（无自然人像）—— **负样本**：BlazePose 对无人画面返回 None ⇒ 帧不入序列 ⇒ 判定必须回 idle。它不花 credits。"
+    },
+    {
+      "file": "01-upright.jpg",
+      "detected": true,
+      "head_angle": 0.97,
+      "shoulder_diff": 3.48,
+      "spine_angle": 0.35,
+      "visibility": 0.996,
+      "head_is_real": true,
+      "shoulder_is_real": true,
+      "dx_ear": 0.2644,
+      "dx_shoulder": 0.6834,
+      "expect_detected": true,
+      "desc": "正坐面对摄像头、双肩水平（静息基线帧）"
+    },
+    {
+      "file": "02-head-tilt-mild.jpg",
+      "detected": true,
+      "head_angle": 9.69,
+      "shoulder_diff": 6.62,
+      "spine_angle": 1.52,
+      "visibility": 0.966,
+      "head_is_real": true,
+      "shoulder_is_real": true,
+      "dx_ear": 0.2734,
+      "dx_shoulder": 0.6847,
+      "expect_detected": true,
+      "desc": "头向左侧倾（图像模型收到 18° 指令，实际远不到）"
+    },
+    {
+      "file": "03-head-tilt-strong.jpg",
+      "detected": true,
+      "head_angle": 8.51,
+      "shoulder_diff": 6.56,
+      "spine_angle": 0.85,
+      "visibility": 0.991,
+      "head_is_real": true,
+      "shoulder_is_real": true,
+      "dx_ear": 0.2672,
+      "dx_shoulder": 0.6875,
+      "expect_detected": true,
+      "desc": "头向左侧倾（图像模型收到 5° 指令，实际反而更大 —— 模型不服从角度指令）"
+    },
+    {
+      "file": "04-near-upright-3deg.jpg",
+      "detected": true,
+      "head_angle": 5.32,
+      "shoulder_diff": 1.8,
+      "spine_angle": 0.25,
+      "visibility": 0.991,
+      "head_is_real": true,
+      "shoulder_is_real": true,
+      "dx_ear": 0.2958,
+      "dx_shoulder": 0.7236,
+      "expect_detected": true,
+      "desc": "由 01 旋转 +3° 派生（solo 读数 0.97° → 5.47°）"
+    },
+    {
+      "file": "05-near-upright-5deg.jpg",
+      "detected": true,
+      "head_angle": 8.31,
+      "shoulder_diff": 0.97,
+      "spine_angle": 0.06,
+      "visibility": 0.972,
+      "head_is_real": true,
+      "shoulder_is_real": true,
+      "dx_ear": 0.3077,
+      "dx_shoulder": 0.7477,
+      "expect_detected": true,
+      "desc": "由 01 旋转 +5° 派生（solo 读数 0.97° → 7.90°）"
+    }
+  ],
+  "cases": [
+    {
+      "id": "completed",
+      "title": "颈部左侧屈 · 做足并保持",
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "metric": "head"
+      },
+      "sequence": "01-upright x10 02-head-tilt-mild x5 03-head-tilt-strong x45",
+      "frames": 60,
+      "why": "起势 2s 后在拉伸位保持到结束（占比 ≥ 0.6），活动范围远超静息阈值 5.0°",
+      "semantics": "as-designed",
+      "expect_grade": "completed",
+      "expect_hint": "很好，保持住",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        0.88,
+        10.54
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 1.31,
+          "shoulder_diff": 4.62,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 200,
+          "head_angle": 1.18,
+          "shoulder_diff": 4.2,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 400,
+          "head_angle": 1.1,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.45
+        },
+        {
+          "t": 600,
+          "head_angle": 1.03,
+          "shoulder_diff": 3.62,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 800,
+          "head_angle": 0.97,
+          "shoulder_diff": 3.48,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1000,
+          "head_angle": 0.94,
+          "shoulder_diff": 3.42,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1200,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.37,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1400,
+          "head_angle": 0.9,
+          "shoulder_diff": 3.34,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1600,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.31,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1800,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.28,
+          "spine_angle": 0.36
+        },
+        {
+          "t": 2000,
+          "head_angle": 3.31,
+          "shoulder_diff": 3.98,
+          "spine_angle": 0.74
+        },
+        {
+          "t": 2200,
+          "head_angle": 5.81,
+          "shoulder_diff": 4.36,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 2400,
+          "head_angle": 7.15,
+          "shoulder_diff": 5.11,
+          "spine_angle": 1.15
+        },
+        {
+          "t": 2600,
+          "head_angle": 8.02,
+          "shoulder_diff": 5.69,
+          "spine_angle": 1.26
+        },
+        {
+          "t": 2800,
+          "head_angle": 8.55,
+          "shoulder_diff": 5.83,
+          "spine_angle": 1.3
+        },
+        {
+          "t": 3000,
+          "head_angle": 9.0,
+          "shoulder_diff": 5.83,
+          "spine_angle": 1.17
+        },
+        {
+          "t": 3200,
+          "head_angle": 9.34,
+          "shoulder_diff": 5.82,
+          "spine_angle": 1.1
+        },
+        {
+          "t": 3400,
+          "head_angle": 9.57,
+          "shoulder_diff": 5.82,
+          "spine_angle": 1.05
+        },
+        {
+          "t": 3600,
+          "head_angle": 9.74,
+          "shoulder_diff": 5.81,
+          "spine_angle": 1.03
+        },
+        {
+          "t": 3800,
+          "head_angle": 9.88,
+          "shoulder_diff": 5.8,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 4000,
+          "head_angle": 9.98,
+          "shoulder_diff": 5.79,
+          "spine_angle": 0.99
+        },
+        {
+          "t": 4200,
+          "head_angle": 10.04,
+          "shoulder_diff": 5.78,
+          "spine_angle": 0.99
+        },
+        {
+          "t": 4400,
+          "head_angle": 10.08,
+          "shoulder_diff": 5.77,
+          "spine_angle": 0.98
+        },
+        {
+          "t": 4600,
+          "head_angle": 10.11,
+          "shoulder_diff": 5.75,
+          "spine_angle": 0.97
+        },
+        {
+          "t": 4800,
+          "head_angle": 10.14,
+          "shoulder_diff": 5.73,
+          "spine_angle": 0.96
+        },
+        {
+          "t": 5000,
+          "head_angle": 10.16,
+          "shoulder_diff": 5.7,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 5200,
+          "head_angle": 10.17,
+          "shoulder_diff": 5.67,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 5400,
+          "head_angle": 10.17,
+          "shoulder_diff": 5.65,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 5600,
+          "head_angle": 10.18,
+          "shoulder_diff": 5.63,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 5800,
+          "head_angle": 10.2,
+          "shoulder_diff": 5.61,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 6000,
+          "head_angle": 10.21,
+          "shoulder_diff": 5.59,
+          "spine_angle": 0.93
+        },
+        {
+          "t": 6200,
+          "head_angle": 10.23,
+          "shoulder_diff": 5.58,
+          "spine_angle": 0.93
+        },
+        {
+          "t": 6400,
+          "head_angle": 10.25,
+          "shoulder_diff": 5.57,
+          "spine_angle": 0.92
+        },
+        {
+          "t": 6600,
+          "head_angle": 10.27,
+          "shoulder_diff": 5.55,
+          "spine_angle": 0.92
+        },
+        {
+          "t": 6800,
+          "head_angle": 10.28,
+          "shoulder_diff": 5.54,
+          "spine_angle": 0.93
+        },
+        {
+          "t": 7000,
+          "head_angle": 10.3,
+          "shoulder_diff": 5.53,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 7200,
+          "head_angle": 10.33,
+          "shoulder_diff": 5.5,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 7400,
+          "head_angle": 10.35,
+          "shoulder_diff": 5.48,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 7600,
+          "head_angle": 10.36,
+          "shoulder_diff": 5.46,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 7800,
+          "head_angle": 10.38,
+          "shoulder_diff": 5.44,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 8000,
+          "head_angle": 10.39,
+          "shoulder_diff": 5.43,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 8200,
+          "head_angle": 10.4,
+          "shoulder_diff": 5.41,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 8400,
+          "head_angle": 10.41,
+          "shoulder_diff": 5.4,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 8600,
+          "head_angle": 10.41,
+          "shoulder_diff": 5.39,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 8800,
+          "head_angle": 10.42,
+          "shoulder_diff": 5.38,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 9000,
+          "head_angle": 10.43,
+          "shoulder_diff": 5.37,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 9200,
+          "head_angle": 10.44,
+          "shoulder_diff": 5.36,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 9400,
+          "head_angle": 10.45,
+          "shoulder_diff": 5.35,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 9600,
+          "head_angle": 10.46,
+          "shoulder_diff": 5.34,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 9800,
+          "head_angle": 10.47,
+          "shoulder_diff": 5.33,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 10000,
+          "head_angle": 10.48,
+          "shoulder_diff": 5.32,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 10200,
+          "head_angle": 10.48,
+          "shoulder_diff": 5.32,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 10400,
+          "head_angle": 10.49,
+          "shoulder_diff": 5.31,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 10600,
+          "head_angle": 10.5,
+          "shoulder_diff": 5.3,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 10800,
+          "head_angle": 10.51,
+          "shoulder_diff": 5.3,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 11000,
+          "head_angle": 10.52,
+          "shoulder_diff": 5.29,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 11200,
+          "head_angle": 10.52,
+          "shoulder_diff": 5.28,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 11400,
+          "head_angle": 10.53,
+          "shoulder_diff": 5.28,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 11600,
+          "head_angle": 10.53,
+          "shoulder_diff": 5.27,
+          "spine_angle": 0.94
+        },
+        {
+          "t": 11800,
+          "head_angle": 10.54,
+          "shoulder_diff": 5.27,
+          "spine_angle": 0.94
+        }
+      ],
+      "verdict": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 1.9,
+        "held_ms": 9600,
+        "hold_ratio": 0.8,
+        "cycles": 0
+      },
+      "match": true
+    },
+    {
+      "id": "insufficient-amplitude",
+      "title": "颈部左侧屈 · 只轻轻歪了一下（幅度不够）",
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "metric": "head"
+      },
+      "sequence": "(04-near-upright-3deg x5 05-near-upright-5deg x5) x6",
+      "frames": 60,
+      "why": "在两张「轻微倾斜」帧之间来回，活动范围只有阈值的约一半 —— 落在「不是没动（>0.25）」与「还不够到位（<1.0）」之间的夹缝里",
+      "semantics": "as-designed",
+      "expect_grade": "insufficient",
+      "expect_hint": "幅度还不够，再大一点",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        5.32,
+        9.05
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 6.28,
+          "shoulder_diff": 0.06,
+          "spine_angle": 0.12
+        },
+        {
+          "t": 200,
+          "head_angle": 5.71,
+          "shoulder_diff": 0.5,
+          "spine_angle": 0.12
+        },
+        {
+          "t": 400,
+          "head_angle": 5.41,
+          "shoulder_diff": 1.1,
+          "spine_angle": 0.15
+        },
+        {
+          "t": 600,
+          "head_angle": 5.33,
+          "shoulder_diff": 1.48,
+          "spine_angle": 0.2
+        },
+        {
+          "t": 800,
+          "head_angle": 5.32,
+          "shoulder_diff": 1.8,
+          "spine_angle": 0.25
+        },
+        {
+          "t": 1000,
+          "head_angle": 6.78,
+          "shoulder_diff": 1.22,
+          "spine_angle": 1.08
+        },
+        {
+          "t": 1200,
+          "head_angle": 7.95,
+          "shoulder_diff": 0.26,
+          "spine_angle": 1.55
+        },
+        {
+          "t": 1400,
+          "head_angle": 8.72,
+          "shoulder_diff": 1.55,
+          "spine_angle": 1.46
+        },
+        {
+          "t": 1600,
+          "head_angle": 8.95,
+          "shoulder_diff": 3.06,
+          "spine_angle": 1.28
+        },
+        {
+          "t": 1800,
+          "head_angle": 9.05,
+          "shoulder_diff": 3.43,
+          "spine_angle": 1.24
+        },
+        {
+          "t": 2000,
+          "head_angle": 8.48,
+          "shoulder_diff": 3.45,
+          "spine_angle": 0.98
+        },
+        {
+          "t": 2200,
+          "head_angle": 8.3,
+          "shoulder_diff": 3.64,
+          "spine_angle": 0.92
+        },
+        {
+          "t": 2400,
+          "head_angle": 8.12,
+          "shoulder_diff": 3.63,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 2600,
+          "head_angle": 7.8,
+          "shoulder_diff": 3.56,
+          "spine_angle": 0.62
+        },
+        {
+          "t": 2800,
+          "head_angle": 7.61,
+          "shoulder_diff": 3.37,
+          "spine_angle": 0.52
+        },
+        {
+          "t": 3000,
+          "head_angle": 7.98,
+          "shoulder_diff": 4.52,
+          "spine_angle": 0.5
+        },
+        {
+          "t": 3200,
+          "head_angle": 8.2,
+          "shoulder_diff": 4.89,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 3400,
+          "head_angle": 8.28,
+          "shoulder_diff": 4.99,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 3600,
+          "head_angle": 8.32,
+          "shoulder_diff": 4.96,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 3800,
+          "head_angle": 8.34,
+          "shoulder_diff": 4.87,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 4000,
+          "head_angle": 8.23,
+          "shoulder_diff": 4.03,
+          "spine_angle": 0.31
+        },
+        {
+          "t": 4200,
+          "head_angle": 8.07,
+          "shoulder_diff": 3.44,
+          "spine_angle": 0.17
+        },
+        {
+          "t": 4400,
+          "head_angle": 7.95,
+          "shoulder_diff": 3.22,
+          "spine_angle": 0.16
+        },
+        {
+          "t": 4600,
+          "head_angle": 7.85,
+          "shoulder_diff": 3.12,
+          "spine_angle": 0.22
+        },
+        {
+          "t": 4800,
+          "head_angle": 7.76,
+          "shoulder_diff": 3.05,
+          "spine_angle": 0.27
+        },
+        {
+          "t": 5000,
+          "head_angle": 8.05,
+          "shoulder_diff": 3.97,
+          "spine_angle": 0.38
+        },
+        {
+          "t": 5200,
+          "head_angle": 8.25,
+          "shoulder_diff": 4.47,
+          "spine_angle": 0.52
+        },
+        {
+          "t": 5400,
+          "head_angle": 8.35,
+          "shoulder_diff": 4.41,
+          "spine_angle": 0.53
+        },
+        {
+          "t": 5600,
+          "head_angle": 8.44,
+          "shoulder_diff": 4.36,
+          "spine_angle": 0.55
+        },
+        {
+          "t": 5800,
+          "head_angle": 8.5,
+          "shoulder_diff": 4.32,
+          "spine_angle": 0.55
+        },
+        {
+          "t": 6000,
+          "head_angle": 8.3,
+          "shoulder_diff": 3.63,
+          "spine_angle": 0.24
+        },
+        {
+          "t": 6200,
+          "head_angle": 8.15,
+          "shoulder_diff": 3.01,
+          "spine_angle": 0.15
+        },
+        {
+          "t": 6400,
+          "head_angle": 8.04,
+          "shoulder_diff": 2.76,
+          "spine_angle": 0.16
+        },
+        {
+          "t": 6600,
+          "head_angle": 7.95,
+          "shoulder_diff": 2.61,
+          "spine_angle": 0.19
+        },
+        {
+          "t": 6800,
+          "head_angle": 7.87,
+          "shoulder_diff": 2.6,
+          "spine_angle": 0.25
+        },
+        {
+          "t": 7000,
+          "head_angle": 8.21,
+          "shoulder_diff": 3.76,
+          "spine_angle": 0.5
+        },
+        {
+          "t": 7200,
+          "head_angle": 8.38,
+          "shoulder_diff": 4.26,
+          "spine_angle": 0.6
+        },
+        {
+          "t": 7400,
+          "head_angle": 8.49,
+          "shoulder_diff": 4.19,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 7600,
+          "head_angle": 8.56,
+          "shoulder_diff": 4.16,
+          "spine_angle": 0.62
+        },
+        {
+          "t": 7800,
+          "head_angle": 8.6,
+          "shoulder_diff": 4.15,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 8000,
+          "head_angle": 8.42,
+          "shoulder_diff": 3.32,
+          "spine_angle": 0.31
+        },
+        {
+          "t": 8200,
+          "head_angle": 8.28,
+          "shoulder_diff": 2.69,
+          "spine_angle": 0.17
+        },
+        {
+          "t": 8400,
+          "head_angle": 8.17,
+          "shoulder_diff": 2.36,
+          "spine_angle": 0.17
+        },
+        {
+          "t": 8600,
+          "head_angle": 8.1,
+          "shoulder_diff": 2.26,
+          "spine_angle": 0.2
+        },
+        {
+          "t": 8800,
+          "head_angle": 8.03,
+          "shoulder_diff": 2.23,
+          "spine_angle": 0.27
+        },
+        {
+          "t": 9000,
+          "head_angle": 8.36,
+          "shoulder_diff": 3.46,
+          "spine_angle": 0.51
+        },
+        {
+          "t": 9200,
+          "head_angle": 8.53,
+          "shoulder_diff": 4.0,
+          "spine_angle": 0.64
+        },
+        {
+          "t": 9400,
+          "head_angle": 8.63,
+          "shoulder_diff": 4.03,
+          "spine_angle": 0.66
+        },
+        {
+          "t": 9600,
+          "head_angle": 8.71,
+          "shoulder_diff": 4.11,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 9800,
+          "head_angle": 8.78,
+          "shoulder_diff": 4.18,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 10000,
+          "head_angle": 8.51,
+          "shoulder_diff": 3.2,
+          "spine_angle": 0.38
+        },
+        {
+          "t": 10200,
+          "head_angle": 8.35,
+          "shoulder_diff": 2.58,
+          "spine_angle": 0.16
+        },
+        {
+          "t": 10400,
+          "head_angle": 8.25,
+          "shoulder_diff": 2.23,
+          "spine_angle": 0.16
+        },
+        {
+          "t": 10600,
+          "head_angle": 8.16,
+          "shoulder_diff": 2.07,
+          "spine_angle": 0.18
+        },
+        {
+          "t": 10800,
+          "head_angle": 8.1,
+          "shoulder_diff": 1.99,
+          "spine_angle": 0.23
+        },
+        {
+          "t": 11000,
+          "head_angle": 8.43,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.45
+        },
+        {
+          "t": 11200,
+          "head_angle": 8.64,
+          "shoulder_diff": 3.56,
+          "spine_angle": 0.6
+        },
+        {
+          "t": 11400,
+          "head_angle": 8.73,
+          "shoulder_diff": 3.88,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 11600,
+          "head_angle": 8.78,
+          "shoulder_diff": 4.16,
+          "spine_angle": 0.7
+        },
+        {
+          "t": 11800,
+          "head_angle": 8.82,
+          "shoulder_diff": 4.38,
+          "spine_angle": 0.72
+        }
+      ],
+      "verdict": {
+        "grade": "insufficient",
+        "hint": "幅度还不够，再大一点",
+        "peak_activity": 0.7,
+        "held_ms": 0,
+        "hold_ratio": 0.0,
+        "cycles": 0
+      },
+      "match": true
+    },
+    {
+      "id": "insufficient-hold",
+      "title": "颈部左侧屈 · 幅度够但没保持（另一条缺口）",
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "metric": "head"
+      },
+      "sequence": "(01-upright 04-near-upright-3deg 02-head-tilt-mild 02-head-tilt-mild) x15",
+      "frames": 60,
+      "why": "峰值活动量 1.2 ≥ 1（幅度过关，余量 +0.2），但每轮只在拉伸位停 400ms ⇒ 达标时长占比只有 0.2 < 0.6（余量 −0.4）。**与上一条同 grade 但 hint 不同**，专门盯「两条缺口别混」。⚠️ 这版序列是**按余量挑的**：原来的 `(01 04 05) x20` peak 只有 1.1（只比 onset 高 0.5°），而同一张图在不同重采样路径下能差 1.3° ⇒ 在浏览器路径下有翻成「幅度还不够」的风险。见 README 的余量表",
+      "semantics": "as-designed",
+      "expect_grade": "insufficient",
+      "expect_hint": "保持住，别急着放下",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        0.02,
+        5.79
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 1.31,
+          "shoulder_diff": 4.62,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 200,
+          "head_angle": 3.37,
+          "shoulder_diff": 0.77,
+          "spine_angle": 0.81
+        },
+        {
+          "t": 400,
+          "head_angle": 2.43,
+          "shoulder_diff": 0.49,
+          "spine_angle": 0.67
+        },
+        {
+          "t": 600,
+          "head_angle": 5.22,
+          "shoulder_diff": 1.79,
+          "spine_angle": 0.91
+        },
+        {
+          "t": 800,
+          "head_angle": 3.57,
+          "shoulder_diff": 2.36,
+          "spine_angle": 0.82
+        },
+        {
+          "t": 1000,
+          "head_angle": 0.71,
+          "shoulder_diff": 0.6,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 1200,
+          "head_angle": 3.44,
+          "shoulder_diff": 0.66,
+          "spine_angle": 0.04
+        },
+        {
+          "t": 1400,
+          "head_angle": 5.67,
+          "shoulder_diff": 1.48,
+          "spine_angle": 0.56
+        },
+        {
+          "t": 1600,
+          "head_angle": 4.53,
+          "shoulder_diff": 1.86,
+          "spine_angle": 0.64
+        },
+        {
+          "t": 1800,
+          "head_angle": 0.6,
+          "shoulder_diff": 0.68,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 2000,
+          "head_angle": 2.81,
+          "shoulder_diff": 0.5,
+          "spine_angle": 0.49
+        },
+        {
+          "t": 2200,
+          "head_angle": 4.66,
+          "shoulder_diff": 1.59,
+          "spine_angle": 0.86
+        },
+        {
+          "t": 2400,
+          "head_angle": 3.09,
+          "shoulder_diff": 1.77,
+          "spine_angle": 0.98
+        },
+        {
+          "t": 2600,
+          "head_angle": 1.14,
+          "shoulder_diff": 1.44,
+          "spine_angle": 0.47
+        },
+        {
+          "t": 2800,
+          "head_angle": 1.5,
+          "shoulder_diff": 0.2,
+          "spine_angle": 0.38
+        },
+        {
+          "t": 3000,
+          "head_angle": 3.25,
+          "shoulder_diff": 1.1,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 3200,
+          "head_angle": 1.9,
+          "shoulder_diff": 1.87,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 3400,
+          "head_angle": 1.28,
+          "shoulder_diff": 0.32,
+          "spine_angle": 0.64
+        },
+        {
+          "t": 3600,
+          "head_angle": 2.52,
+          "shoulder_diff": 1.65,
+          "spine_angle": 0.47
+        },
+        {
+          "t": 3800,
+          "head_angle": 4.86,
+          "shoulder_diff": 3.14,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 4000,
+          "head_angle": 3.07,
+          "shoulder_diff": 3.35,
+          "spine_angle": 0.89
+        },
+        {
+          "t": 4200,
+          "head_angle": 0.2,
+          "shoulder_diff": 1.76,
+          "spine_angle": 0.0
+        },
+        {
+          "t": 4400,
+          "head_angle": 3.69,
+          "shoulder_diff": 3.17,
+          "spine_angle": 0.55
+        },
+        {
+          "t": 4600,
+          "head_angle": 5.74,
+          "shoulder_diff": 3.81,
+          "spine_angle": 1.06
+        },
+        {
+          "t": 4800,
+          "head_angle": 3.78,
+          "shoulder_diff": 4.05,
+          "spine_angle": 1.15
+        },
+        {
+          "t": 5000,
+          "head_angle": 0.4,
+          "shoulder_diff": 1.75,
+          "spine_angle": 0.13
+        },
+        {
+          "t": 5200,
+          "head_angle": 3.8,
+          "shoulder_diff": 3.16,
+          "spine_angle": 0.55
+        },
+        {
+          "t": 5400,
+          "head_angle": 5.79,
+          "shoulder_diff": 3.55,
+          "spine_angle": 0.85
+        },
+        {
+          "t": 5600,
+          "head_angle": 3.82,
+          "shoulder_diff": 3.84,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 5800,
+          "head_angle": 0.41,
+          "shoulder_diff": 1.75,
+          "spine_angle": 0.02
+        },
+        {
+          "t": 6000,
+          "head_angle": 3.72,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.54
+        },
+        {
+          "t": 6200,
+          "head_angle": 5.57,
+          "shoulder_diff": 3.61,
+          "spine_angle": 0.87
+        },
+        {
+          "t": 6400,
+          "head_angle": 3.49,
+          "shoulder_diff": 3.85,
+          "spine_angle": 1.0
+        },
+        {
+          "t": 6600,
+          "head_angle": 0.11,
+          "shoulder_diff": 1.97,
+          "spine_angle": 0.04
+        },
+        {
+          "t": 6800,
+          "head_angle": 3.56,
+          "shoulder_diff": 3.33,
+          "spine_angle": 0.56
+        },
+        {
+          "t": 7000,
+          "head_angle": 5.41,
+          "shoulder_diff": 3.68,
+          "spine_angle": 0.85
+        },
+        {
+          "t": 7200,
+          "head_angle": 3.28,
+          "shoulder_diff": 3.76,
+          "spine_angle": 0.97
+        },
+        {
+          "t": 7400,
+          "head_angle": 0.07,
+          "shoulder_diff": 1.95,
+          "spine_angle": 0.11
+        },
+        {
+          "t": 7600,
+          "head_angle": 3.46,
+          "shoulder_diff": 3.41,
+          "spine_angle": 0.64
+        },
+        {
+          "t": 7800,
+          "head_angle": 5.33,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.87
+        },
+        {
+          "t": 8000,
+          "head_angle": 3.05,
+          "shoulder_diff": 3.89,
+          "spine_angle": 1.06
+        },
+        {
+          "t": 8200,
+          "head_angle": 0.17,
+          "shoulder_diff": 2.1,
+          "spine_angle": 0.19
+        },
+        {
+          "t": 8400,
+          "head_angle": 3.38,
+          "shoulder_diff": 3.13,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 8600,
+          "head_angle": 5.24,
+          "shoulder_diff": 3.73,
+          "spine_angle": 0.82
+        },
+        {
+          "t": 8800,
+          "head_angle": 3.03,
+          "shoulder_diff": 3.79,
+          "spine_angle": 1.0
+        },
+        {
+          "t": 9000,
+          "head_angle": 0.02,
+          "shoulder_diff": 1.88,
+          "spine_angle": 0.19
+        },
+        {
+          "t": 9200,
+          "head_angle": 3.22,
+          "shoulder_diff": 2.91,
+          "spine_angle": 0.52
+        },
+        {
+          "t": 9400,
+          "head_angle": 4.97,
+          "shoulder_diff": 3.54,
+          "spine_angle": 0.73
+        },
+        {
+          "t": 9600,
+          "head_angle": 2.17,
+          "shoulder_diff": 3.57,
+          "spine_angle": 0.77
+        },
+        {
+          "t": 9800,
+          "head_angle": 1.46,
+          "shoulder_diff": 1.71,
+          "spine_angle": 0.11
+        },
+        {
+          "t": 10000,
+          "head_angle": 2.43,
+          "shoulder_diff": 2.52,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 10200,
+          "head_angle": 4.89,
+          "shoulder_diff": 3.04,
+          "spine_angle": 1.23
+        },
+        {
+          "t": 10400,
+          "head_angle": 3.29,
+          "shoulder_diff": 3.33,
+          "spine_angle": 1.28
+        },
+        {
+          "t": 10600,
+          "head_angle": 0.65,
+          "shoulder_diff": 0.3,
+          "spine_angle": 0.3
+        },
+        {
+          "t": 10800,
+          "head_angle": 2.65,
+          "shoulder_diff": 1.61,
+          "spine_angle": 0.6
+        },
+        {
+          "t": 11000,
+          "head_angle": 4.48,
+          "shoulder_diff": 2.22,
+          "spine_angle": 1.16
+        },
+        {
+          "t": 11200,
+          "head_angle": 3.52,
+          "shoulder_diff": 2.59,
+          "spine_angle": 1.22
+        },
+        {
+          "t": 11400,
+          "head_angle": 1.61,
+          "shoulder_diff": 0.55,
+          "spine_angle": 0.54
+        },
+        {
+          "t": 11600,
+          "head_angle": 2.62,
+          "shoulder_diff": 0.7,
+          "spine_angle": 0.46
+        },
+        {
+          "t": 11800,
+          "head_angle": 4.63,
+          "shoulder_diff": 2.08,
+          "spine_angle": 0.99
+        }
+      ],
+      "verdict": {
+        "grade": "insufficient",
+        "hint": "保持住，别急着放下",
+        "peak_activity": 1.2,
+        "held_ms": 2200,
+        "hold_ratio": 0.2,
+        "cycles": 11
+      },
+      "match": true
+    },
+    {
+      "id": "cyclic-completed",
+      "title": "肩部环绕 · 往复次数够（往复类分支）",
+      "spec": {
+        "kind": "cyclic",
+        "duration_ms": 12000,
+        "metric": "any",
+        "min_cycles": 3
+      },
+      "sequence": "01-upright x8 02-head-tilt-mild x6 (01-upright x4 02-head-tilt-mild x4) x5 01-upright x6",
+      "frames": 60,
+      "why": "前 14 帧是**暖机段**（跟踪模式要喂几帧才给出真实角度，见文件头第 3 条），之后在静息位与拉伸位之间来回 5 轮 —— 合计 6 次 ≥ min_cycles=3。**往复类走的是另一条分支**（只看 cycles，不看 hold_ratio），本 fixture 此前完全没有覆盖它 —— 补上",
+      "semantics": "as-designed",
+      "expect_grade": "completed",
+      "expect_hint": "很好，保持住",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        0.05,
+        8.73
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 1.31,
+          "shoulder_diff": 4.62,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 200,
+          "head_angle": 1.18,
+          "shoulder_diff": 4.2,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 400,
+          "head_angle": 1.1,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.45
+        },
+        {
+          "t": 600,
+          "head_angle": 1.03,
+          "shoulder_diff": 3.62,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 800,
+          "head_angle": 0.97,
+          "shoulder_diff": 3.48,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1000,
+          "head_angle": 0.94,
+          "shoulder_diff": 3.42,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1200,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.37,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1400,
+          "head_angle": 0.9,
+          "shoulder_diff": 3.34,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1600,
+          "head_angle": 3.37,
+          "shoulder_diff": 4.05,
+          "spine_angle": 0.66
+        },
+        {
+          "t": 1800,
+          "head_angle": 5.81,
+          "shoulder_diff": 4.46,
+          "spine_angle": 0.9
+        },
+        {
+          "t": 2000,
+          "head_angle": 7.17,
+          "shoulder_diff": 5.1,
+          "spine_angle": 1.16
+        },
+        {
+          "t": 2200,
+          "head_angle": 8.08,
+          "shoulder_diff": 5.72,
+          "spine_angle": 1.25
+        },
+        {
+          "t": 2400,
+          "head_angle": 8.6,
+          "shoulder_diff": 5.91,
+          "spine_angle": 1.3
+        },
+        {
+          "t": 2600,
+          "head_angle": 8.73,
+          "shoulder_diff": 5.83,
+          "spine_angle": 1.29
+        },
+        {
+          "t": 2800,
+          "head_angle": 4.8,
+          "shoulder_diff": 5.26,
+          "spine_angle": 0.99
+        },
+        {
+          "t": 3000,
+          "head_angle": 2.43,
+          "shoulder_diff": 5.09,
+          "spine_angle": 0.9
+        },
+        {
+          "t": 3200,
+          "head_angle": 0.99,
+          "shoulder_diff": 5.02,
+          "spine_angle": 0.89
+        },
+        {
+          "t": 3400,
+          "head_angle": 0.05,
+          "shoulder_diff": 4.99,
+          "spine_angle": 0.86
+        },
+        {
+          "t": 3600,
+          "head_angle": 3.27,
+          "shoulder_diff": 5.14,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 3800,
+          "head_angle": 5.01,
+          "shoulder_diff": 5.11,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 4000,
+          "head_angle": 6.15,
+          "shoulder_diff": 5.1,
+          "spine_angle": 1.03
+        },
+        {
+          "t": 4200,
+          "head_angle": 6.85,
+          "shoulder_diff": 5.1,
+          "spine_angle": 1.04
+        },
+        {
+          "t": 4400,
+          "head_angle": 3.91,
+          "shoulder_diff": 4.55,
+          "spine_angle": 0.82
+        },
+        {
+          "t": 4600,
+          "head_angle": 2.18,
+          "shoulder_diff": 4.28,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 4800,
+          "head_angle": 1.1,
+          "shoulder_diff": 4.13,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 5000,
+          "head_angle": 0.4,
+          "shoulder_diff": 4.08,
+          "spine_angle": 0.56
+        },
+        {
+          "t": 5200,
+          "head_angle": 3.23,
+          "shoulder_diff": 4.37,
+          "spine_angle": 0.87
+        },
+        {
+          "t": 5400,
+          "head_angle": 5.07,
+          "shoulder_diff": 4.43,
+          "spine_angle": 1.0
+        },
+        {
+          "t": 5600,
+          "head_angle": 6.4,
+          "shoulder_diff": 4.5,
+          "spine_angle": 1.07
+        },
+        {
+          "t": 5800,
+          "head_angle": 7.21,
+          "shoulder_diff": 4.57,
+          "spine_angle": 1.08
+        },
+        {
+          "t": 6000,
+          "head_angle": 3.82,
+          "shoulder_diff": 4.31,
+          "spine_angle": 0.9
+        },
+        {
+          "t": 6200,
+          "head_angle": 1.82,
+          "shoulder_diff": 4.06,
+          "spine_angle": 0.71
+        },
+        {
+          "t": 6400,
+          "head_angle": 0.56,
+          "shoulder_diff": 3.89,
+          "spine_angle": 0.62
+        },
+        {
+          "t": 6600,
+          "head_angle": 0.22,
+          "shoulder_diff": 3.66,
+          "spine_angle": 0.46
+        },
+        {
+          "t": 6800,
+          "head_angle": 3.28,
+          "shoulder_diff": 3.78,
+          "spine_angle": 0.67
+        },
+        {
+          "t": 7000,
+          "head_angle": 5.37,
+          "shoulder_diff": 3.89,
+          "spine_angle": 0.81
+        },
+        {
+          "t": 7200,
+          "head_angle": 6.87,
+          "shoulder_diff": 3.98,
+          "spine_angle": 0.9
+        },
+        {
+          "t": 7400,
+          "head_angle": 7.73,
+          "shoulder_diff": 4.04,
+          "spine_angle": 0.95
+        },
+        {
+          "t": 7600,
+          "head_angle": 4.13,
+          "shoulder_diff": 3.9,
+          "spine_angle": 0.85
+        },
+        {
+          "t": 7800,
+          "head_angle": 2.05,
+          "shoulder_diff": 3.66,
+          "spine_angle": 0.73
+        },
+        {
+          "t": 8000,
+          "head_angle": 0.76,
+          "shoulder_diff": 3.41,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 8200,
+          "head_angle": 0.08,
+          "shoulder_diff": 3.11,
+          "spine_angle": 0.43
+        },
+        {
+          "t": 8400,
+          "head_angle": 3.78,
+          "shoulder_diff": 3.2,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 8600,
+          "head_angle": 5.91,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.67
+        },
+        {
+          "t": 8800,
+          "head_angle": 7.14,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.69
+        },
+        {
+          "t": 9000,
+          "head_angle": 7.95,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.75
+        },
+        {
+          "t": 9200,
+          "head_angle": 4.36,
+          "shoulder_diff": 3.03,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 9400,
+          "head_angle": 2.35,
+          "shoulder_diff": 2.77,
+          "spine_angle": 0.49
+        },
+        {
+          "t": 9600,
+          "head_angle": 1.1,
+          "shoulder_diff": 2.51,
+          "spine_angle": 0.42
+        },
+        {
+          "t": 9800,
+          "head_angle": 0.32,
+          "shoulder_diff": 2.33,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 10000,
+          "head_angle": 3.7,
+          "shoulder_diff": 2.44,
+          "spine_angle": 0.48
+        },
+        {
+          "t": 10200,
+          "head_angle": 5.63,
+          "shoulder_diff": 2.51,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 10400,
+          "head_angle": 6.83,
+          "shoulder_diff": 2.55,
+          "spine_angle": 0.6
+        },
+        {
+          "t": 10600,
+          "head_angle": 7.58,
+          "shoulder_diff": 2.57,
+          "spine_angle": 0.62
+        },
+        {
+          "t": 10800,
+          "head_angle": 4.15,
+          "shoulder_diff": 2.31,
+          "spine_angle": 0.42
+        },
+        {
+          "t": 11000,
+          "head_angle": 2.26,
+          "shoulder_diff": 2.25,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 11200,
+          "head_angle": 1.09,
+          "shoulder_diff": 2.2,
+          "spine_angle": 0.34
+        },
+        {
+          "t": 11400,
+          "head_angle": 0.39,
+          "shoulder_diff": 2.14,
+          "spine_angle": 0.3
+        },
+        {
+          "t": 11600,
+          "head_angle": 0.05,
+          "shoulder_diff": 2.08,
+          "spine_angle": 0.29
+        },
+        {
+          "t": 11800,
+          "head_angle": 0.38,
+          "shoulder_diff": 2.01,
+          "spine_angle": 0.28
+        }
+      ],
+      "verdict": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 1.7,
+        "held_ms": 4200,
+        "hold_ratio": 0.4,
+        "cycles": 4
+      },
+      "match": true
+    },
+    {
+      "id": "cyclic-too-few",
+      "title": "肩部环绕 · 幅度够但只做了 2 次（第三条缺口）",
+      "spec": {
+        "kind": "cyclic",
+        "duration_ms": 12000,
+        "metric": "any",
+        "min_cycles": 3
+      },
+      "sequence": "01-upright x10 03-head-tilt-strong x20 01-upright x10 03-head-tilt-strong x20",
+      "frames": 60,
+      "why": "幅度足够（peak ≥ 1）且**保持时长也够**，唯一不合格的是次数 2 < 3 —— 这条是「hold_ratio 这个尺度在往复类上不生效」的唯一证据",
+      "semantics": "as-designed",
+      "expect_grade": "insufficient",
+      "expect_hint": "再多做几次",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        0.12,
+        10.6
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 1.31,
+          "shoulder_diff": 4.62,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 200,
+          "head_angle": 1.18,
+          "shoulder_diff": 4.2,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 400,
+          "head_angle": 1.1,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.45
+        },
+        {
+          "t": 600,
+          "head_angle": 1.03,
+          "shoulder_diff": 3.62,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 800,
+          "head_angle": 0.97,
+          "shoulder_diff": 3.48,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1000,
+          "head_angle": 0.94,
+          "shoulder_diff": 3.42,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1200,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.37,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1400,
+          "head_angle": 0.9,
+          "shoulder_diff": 3.34,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1600,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.31,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1800,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.28,
+          "spine_angle": 0.36
+        },
+        {
+          "t": 2000,
+          "head_angle": 2.24,
+          "shoulder_diff": 3.69,
+          "spine_angle": 0.92
+        },
+        {
+          "t": 2200,
+          "head_angle": 3.82,
+          "shoulder_diff": 4.3,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 2400,
+          "head_angle": 4.71,
+          "shoulder_diff": 4.64,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 2600,
+          "head_angle": 5.21,
+          "shoulder_diff": 4.97,
+          "spine_angle": 1.04
+        },
+        {
+          "t": 2800,
+          "head_angle": 5.78,
+          "shoulder_diff": 5.48,
+          "spine_angle": 1.09
+        },
+        {
+          "t": 3000,
+          "head_angle": 6.59,
+          "shoulder_diff": 5.79,
+          "spine_angle": 1.09
+        },
+        {
+          "t": 3200,
+          "head_angle": 7.29,
+          "shoulder_diff": 5.83,
+          "spine_angle": 1.08
+        },
+        {
+          "t": 3400,
+          "head_angle": 7.79,
+          "shoulder_diff": 5.9,
+          "spine_angle": 1.08
+        },
+        {
+          "t": 3600,
+          "head_angle": 8.15,
+          "shoulder_diff": 5.93,
+          "spine_angle": 1.07
+        },
+        {
+          "t": 3800,
+          "head_angle": 8.43,
+          "shoulder_diff": 5.94,
+          "spine_angle": 1.07
+        },
+        {
+          "t": 4000,
+          "head_angle": 8.68,
+          "shoulder_diff": 5.94,
+          "spine_angle": 1.06
+        },
+        {
+          "t": 4200,
+          "head_angle": 8.87,
+          "shoulder_diff": 5.93,
+          "spine_angle": 1.04
+        },
+        {
+          "t": 4400,
+          "head_angle": 9.05,
+          "shoulder_diff": 5.92,
+          "spine_angle": 1.03
+        },
+        {
+          "t": 4600,
+          "head_angle": 9.2,
+          "shoulder_diff": 5.91,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 4800,
+          "head_angle": 9.3,
+          "shoulder_diff": 5.91,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 5000,
+          "head_angle": 9.38,
+          "shoulder_diff": 5.9,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 5200,
+          "head_angle": 9.45,
+          "shoulder_diff": 5.89,
+          "spine_angle": 1.02
+        },
+        {
+          "t": 5400,
+          "head_angle": 9.51,
+          "shoulder_diff": 5.87,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 5600,
+          "head_angle": 9.55,
+          "shoulder_diff": 5.84,
+          "spine_angle": 1.01
+        },
+        {
+          "t": 5800,
+          "head_angle": 9.6,
+          "shoulder_diff": 5.82,
+          "spine_angle": 1.0
+        },
+        {
+          "t": 6000,
+          "head_angle": 4.92,
+          "shoulder_diff": 5.42,
+          "spine_angle": 0.86
+        },
+        {
+          "t": 6200,
+          "head_angle": 2.36,
+          "shoulder_diff": 5.09,
+          "spine_angle": 0.75
+        },
+        {
+          "t": 6400,
+          "head_angle": 0.85,
+          "shoulder_diff": 4.88,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 6600,
+          "head_angle": 0.12,
+          "shoulder_diff": 4.59,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 6800,
+          "head_angle": 0.79,
+          "shoulder_diff": 4.34,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 7000,
+          "head_angle": 1.23,
+          "shoulder_diff": 4.13,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 7200,
+          "head_angle": 1.56,
+          "shoulder_diff": 3.96,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 7400,
+          "head_angle": 1.82,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 7600,
+          "head_angle": 2.01,
+          "shoulder_diff": 3.66,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 7800,
+          "head_angle": 2.17,
+          "shoulder_diff": 3.55,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 8000,
+          "head_angle": 2.73,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.66
+        },
+        {
+          "t": 8200,
+          "head_angle": 5.57,
+          "shoulder_diff": 3.92,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 8400,
+          "head_angle": 7.38,
+          "shoulder_diff": 3.99,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 8600,
+          "head_angle": 8.44,
+          "shoulder_diff": 4.0,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 8800,
+          "head_angle": 9.12,
+          "shoulder_diff": 3.96,
+          "spine_angle": 0.66
+        },
+        {
+          "t": 9000,
+          "head_angle": 9.52,
+          "shoulder_diff": 3.91,
+          "spine_angle": 0.64
+        },
+        {
+          "t": 9200,
+          "head_angle": 9.81,
+          "shoulder_diff": 3.88,
+          "spine_angle": 0.63
+        },
+        {
+          "t": 9400,
+          "head_angle": 10.02,
+          "shoulder_diff": 3.83,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 9600,
+          "head_angle": 10.18,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.6
+        },
+        {
+          "t": 9800,
+          "head_angle": 10.34,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 10000,
+          "head_angle": 10.43,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.56
+        },
+        {
+          "t": 10200,
+          "head_angle": 10.5,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.55
+        },
+        {
+          "t": 10400,
+          "head_angle": 10.53,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.54
+        },
+        {
+          "t": 10600,
+          "head_angle": 10.55,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.53
+        },
+        {
+          "t": 10800,
+          "head_angle": 10.57,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.51
+        },
+        {
+          "t": 11000,
+          "head_angle": 10.58,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.49
+        },
+        {
+          "t": 11200,
+          "head_angle": 10.58,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.48
+        },
+        {
+          "t": 11400,
+          "head_angle": 10.59,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.46
+        },
+        {
+          "t": 11600,
+          "head_angle": 10.6,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.44
+        },
+        {
+          "t": 11800,
+          "head_angle": 10.6,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.42
+        }
+      ],
+      "verdict": {
+        "grade": "insufficient",
+        "hint": "再多做几次",
+        "peak_activity": 2.1,
+        "held_ms": 7200,
+        "hold_ratio": 0.6,
+        "cycles": 1
+      },
+      "match": true
+    },
+    {
+      "id": "still-person-12s",
+      "title": "真人坐在镜头前·一动不动 12 秒（已知语义偏差）",
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "metric": "head"
+      },
+      "sequence": "01-upright x60",
+      "frames": 60,
+      "why": "60 帧同一张正坐帧 ⇒ 真值「没动」，但读数被跟踪器漂移推到 peak≈0.3–0.4",
+      "semantics": "known-deviation",
+      "finding": "按设计意图这里**应当**是 idle（人没动），实测是 insufficient。原因不是判定逻辑写错，而是上游：PoseDetector 的跟踪模式在完全静止的人身上0.07°/s 地漂（60s 内 0.84°→4.91° 且不收敛），12 秒窗口内伪造出 ≈0.4 的「活动范围」，越过了 ACTIVITY_IDLE_MAX=0.25 却够不到 ACTIVITY_ONSET=1.0。**危害有限**：它只能把「没动」说成「幅度还不够」，（两者都是「你需要多动一点」），伪造不出 completed —— 0.400 只有 onset 的 40%。登记这个案例是为了：① 钉住「漂移今长什么样」，它一变守卫就红；② 把「idle 对真人不可达」写成可查的账，而不是留成谜。",
+      "expect_grade": "insufficient",
+      "expect_hint": "幅度还不够，再大一点",
+      "planned_frames": 60,
+      "accepted_frames": 60,
+      "skipped_frames": 0,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        0.84,
+        2.45
+      ],
+      "series": [
+        {
+          "t": 0,
+          "head_angle": 1.31,
+          "shoulder_diff": 4.62,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 200,
+          "head_angle": 1.18,
+          "shoulder_diff": 4.2,
+          "spine_angle": 0.57
+        },
+        {
+          "t": 400,
+          "head_angle": 1.1,
+          "shoulder_diff": 3.8,
+          "spine_angle": 0.45
+        },
+        {
+          "t": 600,
+          "head_angle": 1.03,
+          "shoulder_diff": 3.62,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 800,
+          "head_angle": 0.97,
+          "shoulder_diff": 3.48,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1000,
+          "head_angle": 0.94,
+          "shoulder_diff": 3.42,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1200,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.37,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1400,
+          "head_angle": 0.9,
+          "shoulder_diff": 3.34,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1600,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.31,
+          "spine_angle": 0.35
+        },
+        {
+          "t": 1800,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.28,
+          "spine_angle": 0.36
+        },
+        {
+          "t": 2000,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.36
+        },
+        {
+          "t": 2200,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.37
+        },
+        {
+          "t": 2400,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.39
+        },
+        {
+          "t": 2600,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.41
+        },
+        {
+          "t": 2800,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.44
+        },
+        {
+          "t": 3000,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.46
+        },
+        {
+          "t": 3200,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.47
+        },
+        {
+          "t": 3400,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.48
+        },
+        {
+          "t": 3600,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.49
+        },
+        {
+          "t": 3800,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.51
+        },
+        {
+          "t": 4000,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.53
+        },
+        {
+          "t": 4200,
+          "head_angle": 0.88,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.56
+        },
+        {
+          "t": 4400,
+          "head_angle": 0.87,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.58
+        },
+        {
+          "t": 4600,
+          "head_angle": 0.85,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.59
+        },
+        {
+          "t": 4800,
+          "head_angle": 0.85,
+          "shoulder_diff": 3.23,
+          "spine_angle": 0.61
+        },
+        {
+          "t": 5000,
+          "head_angle": 0.84,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.63
+        },
+        {
+          "t": 5200,
+          "head_angle": 0.84,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.65
+        },
+        {
+          "t": 5400,
+          "head_angle": 0.85,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.66
+        },
+        {
+          "t": 5600,
+          "head_angle": 0.86,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.68
+        },
+        {
+          "t": 5800,
+          "head_angle": 0.87,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.69
+        },
+        {
+          "t": 6000,
+          "head_angle": 0.89,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.69
+        },
+        {
+          "t": 6200,
+          "head_angle": 0.91,
+          "shoulder_diff": 3.26,
+          "spine_angle": 0.7
+        },
+        {
+          "t": 6400,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.71
+        },
+        {
+          "t": 6600,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.71
+        },
+        {
+          "t": 6800,
+          "head_angle": 0.92,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 7000,
+          "head_angle": 0.93,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 7200,
+          "head_angle": 0.93,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 7400,
+          "head_angle": 0.95,
+          "shoulder_diff": 3.24,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 7600,
+          "head_angle": 0.99,
+          "shoulder_diff": 3.25,
+          "spine_angle": 0.72
+        },
+        {
+          "t": 7800,
+          "head_angle": 1.06,
+          "shoulder_diff": 3.27,
+          "spine_angle": 0.73
+        },
+        {
+          "t": 8000,
+          "head_angle": 1.19,
+          "shoulder_diff": 3.32,
+          "spine_angle": 0.73
+        },
+        {
+          "t": 8200,
+          "head_angle": 1.29,
+          "shoulder_diff": 3.38,
+          "spine_angle": 0.74
+        },
+        {
+          "t": 8400,
+          "head_angle": 1.42,
+          "shoulder_diff": 3.46,
+          "spine_angle": 0.77
+        },
+        {
+          "t": 8600,
+          "head_angle": 1.53,
+          "shoulder_diff": 3.53,
+          "spine_angle": 0.8
+        },
+        {
+          "t": 8800,
+          "head_angle": 1.61,
+          "shoulder_diff": 3.59,
+          "spine_angle": 0.8
+        },
+        {
+          "t": 9000,
+          "head_angle": 1.68,
+          "shoulder_diff": 3.67,
+          "spine_angle": 0.81
+        },
+        {
+          "t": 9200,
+          "head_angle": 1.74,
+          "shoulder_diff": 3.74,
+          "spine_angle": 0.81
+        },
+        {
+          "t": 9400,
+          "head_angle": 1.79,
+          "shoulder_diff": 3.81,
+          "spine_angle": 0.82
+        },
+        {
+          "t": 9600,
+          "head_angle": 1.83,
+          "shoulder_diff": 3.88,
+          "spine_angle": 0.82
+        },
+        {
+          "t": 9800,
+          "head_angle": 1.87,
+          "shoulder_diff": 3.93,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 10000,
+          "head_angle": 1.92,
+          "shoulder_diff": 3.98,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 10200,
+          "head_angle": 1.95,
+          "shoulder_diff": 4.02,
+          "spine_angle": 0.83
+        },
+        {
+          "t": 10400,
+          "head_angle": 1.99,
+          "shoulder_diff": 4.06,
+          "spine_angle": 0.84
+        },
+        {
+          "t": 10600,
+          "head_angle": 2.04,
+          "shoulder_diff": 4.09,
+          "spine_angle": 0.85
+        },
+        {
+          "t": 10800,
+          "head_angle": 2.1,
+          "shoulder_diff": 4.12,
+          "spine_angle": 0.86
+        },
+        {
+          "t": 11000,
+          "head_angle": 2.18,
+          "shoulder_diff": 4.17,
+          "spine_angle": 0.87
+        },
+        {
+          "t": 11200,
+          "head_angle": 2.25,
+          "shoulder_diff": 4.22,
+          "spine_angle": 0.88
+        },
+        {
+          "t": 11400,
+          "head_angle": 2.32,
+          "shoulder_diff": 4.26,
+          "spine_angle": 0.89
+        },
+        {
+          "t": 11600,
+          "head_angle": 2.39,
+          "shoulder_diff": 4.29,
+          "spine_angle": 0.89
+        },
+        {
+          "t": 11800,
+          "head_angle": 2.45,
+          "shoulder_diff": 4.31,
+          "spine_angle": 0.89
+        }
+      ],
+      "verdict": {
+        "grade": "insufficient",
+        "hint": "幅度还不够，再大一点",
+        "peak_activity": 0.3,
+        "held_ms": 0,
+        "hold_ratio": 0.0,
+        "cycles": 0
+      },
+      "match": true
+    },
+    {
+      "id": "no-pose",
+      "title": "摄像头对着空房间（真负样本）",
+      "spec": {
+        "kind": "hold",
+        "duration_ms": 12000,
+        "metric": "head"
+      },
+      "sequence": "00-no-person x60",
+      "frames": 60,
+      "why": "画面里没有人 ⇒ 60 帧全被检出为 None ⇒ 序列为空 ⇒ `judge_exercise([])` 必须回 idle。**这是本 fixture 里唯一的真负样本**：前一条（still-person）因为漂移拿不到 idle，真正的「整条链路坏了」信号只能靠这一条 —— 它若被判 completed，说明判定链在「没有数据」时捏造了结论",
+      "semantics": "as-designed",
+      "expect_grade": "idle",
+      "expect_hint": "没检测到动作，跟着引导慢慢做",
+      "planned_frames": 60,
+      "accepted_frames": 0,
+      "skipped_frames": 60,
+      "duration_ms": 12000,
+      "head_angle_range": [
+        null,
+        null
+      ],
+      "series": [],
+      "verdict": {
+        "grade": "idle",
+        "hint": "没检测到动作，跟着引导慢慢做",
+        "peak_activity": 0.0,
+        "held_ms": 0,
+        "hold_ratio": 0.0,
+        "cycles": 0
+      },
+      "match": true
+    }
+  ]
+}

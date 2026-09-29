@@ -184,6 +184,13 @@ jobs:
       - name: CI 工作流守卫
         run: npm run verify:ci
 
+      # 假摄像头案例（`scripts/fake-camera/`）：**真人照片派生**的逐帧序列两端对拍。
+      # 与 `verify:parity` 不重叠 —— 那边跑合成数值用例，这边跑 mediapipe 在真人照片上
+      # 实跑出来的序列（结论已落盘在 scenarios.json，所以**这一步不需要 mediapipe**，纯 node + esbuild）。
+      # 它同时钉住「改了阈值没重建案例」：fixture 里登记的阈值必须等于当前 TS 常量。
+      - name: 假摄像头案例对拍（真人素材 · 桌面端 vs 移动端）
+        run: npm run verify:fake-camera
+
       # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
       # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
       # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，
