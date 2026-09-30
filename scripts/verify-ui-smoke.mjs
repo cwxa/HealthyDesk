@@ -1331,11 +1331,19 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
 
     // 采样循环按**墙上时间**走（不是按次数）：单次采样要一次 CDP 往返，
     // 忙页上要 0.3–0.6 秒 —— 按次数走会把 10 秒的帧表采成 20 秒以上，时间轴整个错位。
+    //
+    // 🔴 退出要**提前**（`feed_ms − 一个步长 − 一个 click_slack`），不能等 `at >= feed_ms` 才停。
+    //    原因：`at` 是在**采样之前**测的，而每轮还要花掉 500ms 睡眠 + 一次 CDP 往返
+    //    ⇒ "采完再看 at" 会让路径变成 `clickAt = feed_ms + 步长 + 往返`。
+    //    实测在 CI runner 上顶破了 `click_slack`（`t+10745ms > 10600ms`，android / ios 各红一条，
+    //    2 项失败）—— **本机往返 8–408ms、CI runner 120–150ms 起步**，本地全绿推不出 CI 全绿。
+    //    提前停之后 `clickAt ≈ feed_ms − 步长 − slack + 往返`，往返要超过 1.5 秒才会红。
     const samples = []
+    const sampleStopAt = ui.feed_ms - SAMPLE_STEP_MS - ui.click_slack_ms
     for (;;) {
       if (samples.length) await sleep(SAMPLE_STEP_MS)
       const at = Date.now() - t0
-      if (at >= ui.feed_ms) break
+      if (at >= sampleStopAt) break
       const r = await evaluate(cdp, sessionId, GUIDANCE_PROBE)
       if (r.ok && r.value) {
         try {
@@ -1345,6 +1353,11 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         }
       }
     }
+
+    // 帧计数在**点「结束活动」之前**补读一次：上面为了给这一下留出往返余量提前停了采样，
+    // 若直接用最后一条采样里的计数，`rate`（分母是完整的 `feed_ms`）会低估约一个步长的量。
+    // ⚠️ 必须在 click **之前**读 —— 点下「结束活动」会立刻停止记录帧。
+    const tail = await evaluate(cdp, sessionId, `window.__ngFakeCam.pushed`)
 
     // 喂帧窗口一到就点「结束活动」。这一下会**立刻停止记录帧** ⇒ 记录窗口
     // 不会漫过动作计时器的 12 秒边界（漫过去的话后半段帧会被记到下一个动作上，
@@ -1366,12 +1379,12 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
     const stopAt = Date.now() - t0
 
     const last = samples[samples.length - 1] || {}
-    const pushed = last.pushed > 0 ? last.pushed : 0
+    const pushed = tail.ok && Number.isFinite(tail.value) && tail.value > 0 ? tail.value : last.pushed > 0 ? last.pushed : 0
     // 帧率 = 喂帧窗口内推出去的帧数 ÷ 喂帧窗口长度（窗口是定长的，见 `start(ms)`）。
     const rate = (pushed * 1000) / ui.feed_ms
     console.log(
       `    · 采样 ${samples.length} 次 / 喂帧 ${ui.feed_ms} ms，推送 ${pushed} 帧（${rate.toFixed(1)}/s）；` +
-        `点结束活动 t+${clickAt}ms（往返 ${clickAt - ui.feed_ms}ms，stop t+${stopAt}ms）`,
+        `点结束活动 t+${clickAt}ms（窗口结束前 ${ui.feed_ms - clickAt}ms 点的，stop t+${stopAt}ms）`,
     )
     console.log(
       `    · 时间轴 ${samples.map((s) => `${(s.at / 1000).toFixed(1)}s:${s.hint ? s.hint.slice(0, 2) : '--'}`).join(' ')}`,
