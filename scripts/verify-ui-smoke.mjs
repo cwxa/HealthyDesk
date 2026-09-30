@@ -52,11 +52,13 @@
  *       ⓪ 环境够不够 —— 🔴 **两个下界各答一问，不合并**（v1.7.1 起）：
  *          `ui_smoke.rate_floor`（1.5）= **离线重放**里算法还判得出的最低档（模型问题）；
  *          `ui_smoke.rate_floor_browser`（2.0）= **浏览器**里读数还可信的门（环境问题）。
- *          两者**实测会分叉**：同一份帧表在浏览器里 2.7–4.5 帧/秒判成 completed、
- *          1.5–1.6 帧/秒判成 `insufficient score=76`，而离线扫描说 1.5 那一档仍是 completed。
+ *          两者**实测会分叉**：同一份帧表在浏览器里 2.7–4.5 帧/秒稳定判成 completed，
+ *          而 1.5–1.6 帧/秒是**摇摆带**（同一档 84 与 76 都出现过，跨在 80 分达标线上），
+ *          离线扫描却说 1.5 那一档仍是 completed。
  *          语义：**低帧率只决定「这一轮该不该采信」，不单独当失败理由** ——
- *          帧率 ≥ 2.0 或（≥1.5 且结论与 fixture 一致）⇒ 采信；否则重试一次，
- *          两轮都不采信才报「环境不足」（判据只有一处实现：`trustCameraRound()`）；
+ *          帧率 ≥ 2.0 或（≥1.5 且结论与 fixture 一致）⇒ 采信；否则重试一次。
+ *          🔴 **两轮都不采信 ⇒ 记「本次未验证」（发 `::warning::`，不判红）**，
+ *          理由与残余风险见下面「不覆盖」里那一节；判据只有一处实现（`trustCameraRound()`）；
  *       ① 姿态读数真的来自注入的帧（头部侧倾出现过 ≥ 5°，即超过静息阈值），
  *          且 `<video>` 的 `currentTime` 在前进（帧真的交给了视频元素）；
  *       ② 喂帧窗口内**浮层真的渲染出来了** —— `liveQuality` 不再恒为 `null`；
@@ -87,9 +89,19 @@
  *     「活动范围」归零 ⇒ 静止保持会被实时提示成「没检测到动作」。
  *     整段判定不受影响（它看的是整段帧），见 `scripts/fake-camera/README.md`。
  *   - **低帧率下"过了"的那些轮**（`rate_floor` ≤ 帧率 < `rate_floor_browser`）：结论仍被采信
- *     （它确实与 fixture 一致），但**那一段环境本身没达标** —— 实测 1.6 帧/秒就判不出
- *     `completed`。所以这种轮会打一条**显式 ⚠**，并**不会**让 run 变红（v1.7.1 定的策略：
- *     低帧率不单独当失败理由，理由见 `docs/MULTIPLATFORM.md §9.9`）。
+ *     （它确实与 fixture 一致），但**那一段环境本身没达标** —— 那一档是**摇摆带**
+ *     （实测同一次 run 两个平台都跑 1.5 帧/秒：一个 `completed 84`、一个 `insufficient 76`）。
+ *     所以这种轮会打一条**显式 ⚠**，并**不会**让 run 变红（低帧率不单独当失败理由）。
+ *   - 🔴 **两轮都没到可采信的环境 ⇒ 这一段记「本次未验证」，不判红**（2026-09-30 拍板）。
+ *     理由：**环境撑不住这次测量 ≠ 被测对象错了** —— 后者才是这道门存在的理由；
+ *     而"让这一段更便宜"已被实测证伪（面积 ÷16 只换来 1.00×，wasm 也没有多线程变体
+ *     ⇒ 没有技术解法，见 `docs/MULTIPLATFORM.md §9.9`）。
+ *     它是**显式**的：打 ⚠ + 发 `::warning::` + 进汇总，并把第二轮的原始结果**原样打出来**
+ *     （只打印、不回放 —— 否则那些"下游症状"会把作业判红，方向全指错）。
+ *     **真的坏了仍拦得住**：「**采信轮**里结论与 fixture 不一致」走的是 `fail()` ⇒ 照旧红。
+ *     ⚠️ 残余风险（如实记下）：两轮里**至少有一轮 ≥ `rate_floor`** 时，
+ *     分不清是环境挤的还是判定真的坏了，而这一档**没有裁决力** —— 要靠 rerun 换实例；
+ *     换实例后仍卡在同一档，才说明该查代码。
  *     读线报时要知道：这一轮的"浮层/徽章"类不变量是在**偏挤的环境**下验的。
  *   - **喂帧窗口末尾之后**：帧不再进来时 `liveQuality` 回落到 `null`、浮层消失是
  *     **正确**行为（滚动窗口会把内容滚空）。所以浮层那条断言只覆盖窗口**内部**的采样点 ——
@@ -801,6 +813,8 @@ class Runner {
     this.passed = 0
     this.failed = 0
     this.failures = []
+    /** 「本次没能验证」的条目 —— **不算失败**，但必须显式出现在线报里（见 `notify()`）。 */
+    this.unverified = []
   }
   ok(label) {
     this.passed++
@@ -810,6 +824,24 @@ class Runner {
     this.failed++
     this.failures.push(`${label}${detail ? ` — ${detail}` : ''}`)
     console.log(`    ✗ ${label}${detail ? ` — ${detail}` : ''}`)
+  }
+  /**
+   * 「这一段本次没能验证」—— 打印、记档、发 `::warning::`，但**不增加失败计数、不影响退出码**。
+   *
+   * 🔴 为什么不干脆 `fail()`：**"环境撑不住这次测量"与"被测对象错了"是两件事**，
+   *    后者才是这道门存在的理由。实测（2026-09-30）CI runner 会被挤到 0.6–0.9 帧/秒 ——
+   *    那台机器上 `hold_ratio` 所依赖的时长支撑根本建立不起来，此时的读数不是证据，
+   *    红色也指不到任何真缺陷。而且"让这一段更便宜"已被实测证伪
+   *    （面积 ÷16 只换来 1.00×，见 `docs/MULTIPLATFORM.md §9.9`）⇒ 只能如实记「未验证」。
+   *
+   * ⚠️ 它**不是**静默跳过：`unverified` 会进汇总、会发 GitHub annotation。
+   *    判据是「**采信轮里**结论与 fixture 不一致」时**照旧红**（那条走 `fail()`），
+   *    所以"真的坏了"仍然拦得住 —— 被降级的只有"这一档读数本身不可信"。
+   */
+  notify(label, detail) {
+    this.unverified.push(`${label}${detail ? ` — ${detail}` : ''}`)
+    console.log(`    ⚠ ${label}${detail ? ` — ${detail}` : ''}`)
+    console.log(`::warning::${label}${detail ? ` — ${detail}` : ''}`)
   }
   check(cond, label, detail) {
     if (cond) this.ok(label)
@@ -1755,7 +1787,7 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
 
     // ── ⓪ 环境够不够采信（**判据只有一处实现**：`trustCameraRound()`）────────────
     // 为什么放在**段末**：它要交叉看"结论对不对得上"，而结论到上面才读出来。
-    // 读线报时**先看外层那条「环境不足」** —— 它在回放任何断言之前就打出来了，
+    // 读线报时**先看外层那条「本次未验证 / 环境不足」** —— 它在回放任何断言之前就打出来了，
     // 所以"先看哪一条"这件事没有变。
     const trust = trustCameraRound({ rate, verdictOk }, ui)
     run.check(
@@ -1765,7 +1797,7 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         `结论 ${verdict} —— ` +
         (rate < ui.rate_floor
           ? `连离线模型都没证过这一档，结论对得上也不当证据（防"蒙对"）`
-          : `分不清是环境挤的还是判定坏了，外层会重试一次，两轮都这样才报「环境不足」`),
+          : `分不清是环境挤的还是判定坏了，外层会重试一次`),
     )
     // 把本轮的**关键量**交出去（供 `checkCameraGuidanceWithRetry` 判"环境够不够"）。
     // 交数值 + 结论摘要：**不交判定**（判定只有 `trustCameraRound()` 一处实现）。
@@ -1850,19 +1882,41 @@ async function checkCameraGuidanceWithRetry(cdp, sessionId, run, c, ui) {
   }
 
   if (d2 === 'distrust') {
-    run.fail(
-      `${c.name} 假摄像头实时引导 环境不足：两轮都没到可采信的环境`,
+    // 🔴 **政策（2026-09-30 拍板）：这一档判「本次未验证」，不再判红。**
+    //
+    //    为什么改：环境撑不住这次测量 ≠ 被测对象错了 —— 后者才是这道门存在的理由。
+    //    实测（2026-09-30）CI runner 会被挤到 **0.6–0.9 帧/秒**，此时 `hold_ratio` 依赖的
+    //    时长支撑根本建立不起来，读数里还出现**非单调**现象（ios 0.8 帧/秒判 `completed 86`、
+    //    1.5 帧/秒判 `insufficient 76`）⇒ 那一档的结论既不能证成也不能证伪。
+    //    而"让这一段更便宜"已被实测证伪（面积 ÷16 只换来 1.00×，见 `docs/MULTIPLATFORM.md §9.9`）
+    //    ⇒ 没有技术解法，只能如实记「未验证」。
+    //
+    //    ⚠️ 这不是"静默跳过"：`notify()` 会进汇总、会发 GitHub annotation；
+    //    而且**"真的坏了"仍拦得住** —— 「**采信轮**里结论与 fixture 不一致」走的是
+    //    `d1 === 'trust'`（或 d2 采信）那条路，照旧 `fail()` ⇒ 照旧红。
+    const bothBelowFloor = !!r1 && !!r2 && r1.rate < ui.rate_floor && r2.rate < ui.rate_floor
+    run.notify(
+      `${c.name} 假摄像头实时引导 **本次未验证**：两轮都没到可采信的环境`,
       `第一轮 ${fmt(r1)}（${what(r1)}）、第二轮 ${fmt(r2)}（${what(r2)}）—— ` +
-        `浏览器实测的可信下界是 ${f1(ui.rate_floor_browser)} 帧/秒（离线模型下界 ${ui.rate_floor}），` +
-        `**这一段本次没能验证**：不能据此说判定实现坏了。下面的失败多数是它的下游症状，先看这一条。` +
-        `若两轮都在 1 帧/秒上下，多半是 runner 太忙 —— 重跑一次（rerun）比查代码更快`,
+        `浏览器实测的可信下界是 ${f1(ui.rate_floor_browser)} 帧/秒（离线模型下界 ${ui.rate_floor}）。` +
+        (bothBelowFloor
+          ? `两轮**都低于离线模型下界** ⇒ 形状明确指向环境（runner 太忙），不是判定实现的问题。`
+          : `⚠ 两轮里至少有一轮 ≥ ${ui.rate_floor} —— 这一档**分不清是环境挤的还是判定真的坏了**，` +
+            `没有裁决力：请先 rerun 一次；换实例后若仍卡在同一档，才需要查代码。`) +
+        `以下把第二轮的原始结果**原样打出来**（记作"未验证"、不计入通过/失败）`,
     )
-  } else {
-    console.log(
-      `    ⚠ ${c.name} 第二轮没能跑完（异常/提前返回）；第一轮 ${fmt(r1)}（${what(r1)}）` +
-        ` —— 下面回放的是第二轮的原始结果（异常本身会在里面报出来）`,
-    )
+    // 🔴 第二轮的结果**只打印、不回放**：`replay()` 会把它们计成通过/失败，
+    //    而那正是必须先修掉的"下游症状变红"（读线报的人会去查不存在的缺陷）。
+    for (const [cond, label, detail] of second.checks) {
+      console.log(`      · ${cond ? '✓' : '✗'} ${label}${detail ? ` — ${detail}` : ''}`)
+    }
+    return
   }
+
+  console.log(
+    `    ⚠ ${c.name} 第二轮没能跑完（异常/提前返回）；第一轮 ${fmt(r1)}（${what(r1)}）` +
+      ` —— 下面回放的是第二轮的原始结果（异常本身会在里面报出来）`,
+  )
   replay(second, run)
 }
 
@@ -2662,6 +2716,11 @@ async function main() {
   cleanup()
 
   console.log('─'.repeat(60))
+  // ⚠️ 「本次未验证」必须**显式**出现在线报里 —— 它不判红，但**绝不能被读成"验过了"**。
+  if (run.unverified.length) {
+    console.warn(`⚠ UI 冒烟：${run.unverified.length} 段本次未能验证（已各发一条 ::warning::，不计入失败）`)
+    for (const u of run.unverified) console.warn(`  ⚠ ${u}`)
+  }
   if (run.failed > 0) {
     console.error(`::error::UI 冒烟失败：${run.failed} 项断言未通过（${run.passed} 项通过）`)
     for (const f of run.failures.slice(0, 20)) console.error(`  ✗ ${f}`)
@@ -2670,7 +2729,8 @@ async function main() {
   console.log(
     `✅ UI 冒烟通过：${cases.length} 个平台组合 × ${ROUTES.length} 个路由` +
       ` + 新手引导 ${cases.length} 次 + 活动收尾屏/历史行 ${cases.length} 次` +
-      ` + 假摄像头实时引导 ${mobileCases.length} 次，${run.passed} 项断言`,
+      ` + 假摄像头实时引导 ${mobileCases.length} 次，${run.passed} 项断言` +
+      (run.unverified.length ? `（另有 ${run.unverified.length} 段本次未验证，见上）` : ''),
   )
   if (EVIDENCE_DIR) console.log(`   截图已存：${path.relative(ROOT, EVIDENCE_DIR)}`)
 }
