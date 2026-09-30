@@ -304,9 +304,36 @@ UI_SMOKE_FEED_MS = 10000
 #   · 2.0 = 实跑里真出现过的最低帧率（`.buildenv/probe-live-frames.mjs`）。
 #   · 5.0 = 实跑里的正常值。
 # 扫描把"帧率波动会不会翻结论"变成一条**离线可复算**的断言，而不是等 CI 里偶发一次红。
-# ⚠️ **下界必须与 `verify-ui-smoke.mjs` 允许的最低帧率一致** —— 消费端直接读
-#    `rate_floor`（= 这里的最小值）来断言，不自己另写一个数（下面有自检钉住）。
+# ⚠️ 消费端直接读 `rate_floor`（= 这里的最小值），不自己另写一个数（下面有自检钉住）。
+# 🔴 但**"离线扫描过的下界"与"浏览器里证过的下界"实测会分叉** ⇒ 浏览器那侧另有一个门
+#    （`UI_SMOKE_RATE_FLOOR_BROWSER`，下面），两个数各有各的问题，**别合并**。
 UI_SMOKE_RATES = (1.5, 2.0, 5.0)
+
+# 🔴 浏览器里"这一次的读数还可信吗"的下界（`verify:ui` 的**环境门**）。
+#
+# 它与 `rate_floor`（= 上面扫描的最低档 1.5）**不是同一个数，也不许合并** ——
+# 两者回答的是两个不同的问题：
+#   · `rate_floor`          ：离线重放里「算法还判得出 completed 吗」—— 模型问题
+#   · `rate_floor_browser`  ：浏览器里「这一次的读数还可信吗」—— 环境问题
+# 实测分叉（原始读数见 `docs/MULTIPLATFORM.md §9.9`）：同一份帧表在浏览器里
+# **2.7 / 2.9 / 4.2 / 4.5 帧/秒全判 completed**，而 **1.6 / 1.5 帧/秒判成
+# `insufficient score=76`**（CI run `36660895335`，rerun 两次都复现）。
+# 原因是浏览器里的读数来自 MediaPipe 的**逐帧跟踪**（`static_image_mode=False`）：
+# 帧隔得越久越要重新收敛、读数越低；而离线扫描只把同一串读数**重打时间戳**
+# （见 `rate_sweep()`），这一层它建模不出来。
+# ⇒ 2.0 落在"实测判得出的最低档（2.7）"与"实测判不出的最高档（1.6）"之间。
+UI_SMOKE_RATE_FLOOR_BROWSER = 2.0
+UI_SMOKE_RATE_FLOOR_BROWSER_WHY = (
+    "浏览器里读数的**可信下界**（= `verify:ui` 的「环境够不够」门）。"
+    "与 `rate_floor`（离线扫描最低档）分开登记，是因为实测分叉：同一份帧表在浏览器里"
+    "2.7–4.5 帧/秒判成 completed、1.5–1.6 帧/秒判成 insufficient score=76，"
+    "而离线扫描说 1.5 那一档仍是 completed（它只重打时间戳，建模不出"
+    "`static_image_mode=False` 的逐帧跟踪在长间隔下要重新收敛）。"
+    "语义：**低帧率只决定「这一轮该不该采信」，不单独当失败理由** —— "
+    "帧率低于它但结论仍与期望一致照样通过（只记一条 ⚠）；"
+    "低于它**且**判不出 expected 才重试一次，两轮如此才报「环境不足」。"
+    "低于 `rate_floor` 则连离线模型都没证过那一档，结论对得上也不采信。"
+)
 # 从 `feed_ms` 一到就开始点「结束活动」：点击会立刻停止记录帧，而 CDP 往返
 # （`Runtime.evaluate` + React 调度）在忙页上最多几百毫秒 —— 这段余量必须预先算出来，
 # 否则"帧越过了 12 秒边界"会以"收尾屏多了一个判过的动作"的形状出现（很难归因）。
@@ -675,6 +702,14 @@ def rate_sweep(series: list[dict], spec: dict) -> dict:
     建模方式：帧率 r ⇒ 每帧间隔 1000/r 毫秒；在 `feed_ms` 的墙上时间里只来得及喂
     `r × feed_ms / 1000` 帧。**读数不重测**（它们只取决于喂帧顺序，与时间戳无关），
     只换时间戳 —— 而"保持比例"恰恰只由时间戳决定。
+
+    🔴 **这条"读数与时间戳无关"只对离线重放成立，在浏览器里是假的。**
+    浏览器里的读数来自 MediaPipe 的**逐帧跟踪**（`static_image_mode=False`），
+    帧隔得越久越要重新收敛、读数越低 —— 而这一步扫描**建模不出来**。
+    实测：同一份帧表在浏览器里 1.5–1.6 帧/秒判成 `insufficient score=76`，
+    而这里说那一档是 `completed`（详见 `UI_SMOKE_RATE_FLOOR_BROWSER`）。
+    ⇒ 这一段的结论**只能**读成"离线模型在哪个帧率下还站得住"，
+    **不是**"浏览器里那个帧率一定判得出来"。后者由 `rate_floor_browser` 那个门回答。
     """
     out: dict[str, dict] = {}
     for r in UI_SMOKE_RATES:
@@ -697,7 +732,7 @@ def ui_smoke_block(blobs: dict[str, bytes]) -> dict:
     它不必再解析一遍 `sequence` —— 序列解析器只该有一份实现（`parse_sequence`），
     而且它已经坏过两次（见 docstring）。
 
-    ### 四条自检，每一条都"自己先坏掉才可能放过"
+    ### 五条自检，每一条都"自己先坏掉才可能放过"
 
     1. 帧数与声明一致 —— 解析器坏了要报成解析器的缺陷（同样的教训见 `simulate()`）。
     2. 起势帧必须恰好是最前面那几帧、且**只有**它们是非拉伸帧。基线帧一旦跑到中间
@@ -707,6 +742,8 @@ def ui_smoke_block(blobs: dict[str, bytes]) -> dict:
        变成"改完当场可复算"。
     4. 两个余量（幅度、保持）都要留够，不能"刚好过线" —— 浏览器路径的读数与这里
        差零点几度是常态（见文件头第 3 条），压线的表必然间歇性翻车。
+    5. 浏览器环境门（`UI_SMOKE_RATE_FLOOR_BROWSER`）必须落在
+       `(离线最低档, 离线最高档]` 之间 —— 见那段里写的两种坏法。
     """
     files = [f"{n}.jpg" for n in parse_sequence(UI_SMOKE_SEQUENCE)]
     lead = [f"{UI_SMOKE_ACTIVE}.jpg"] * (UI_SMOKE_FRAMES - UI_SMOKE_LEAD_IN)
@@ -756,6 +793,19 @@ def ui_smoke_block(blobs: dict[str, bytes]) -> dict:
               "（v1 就是栽在这上面）。")
 
     floor = min(UI_SMOKE_RATES)
+
+    # ── 两个下界的关系：环境门必须**比离线模型门更严、又不能严到到不了** ──────────
+    # 这条自检盯的是"改一个忘另一个"：把浏览器门调到 ≤ 离线门，它就不再表达任何东西
+    # （浏览器只会更苛刻，不会更宽松）；调到超过扫描的最高档，则每一轮 CI 都会报
+    # 「环境不足」—— 那等于把这段守卫静默关掉，而它恰恰是唯一能证明"有帧时实时引导
+    # 真的出来了"的东西。
+    if not (floor < UI_SMOKE_RATE_FLOOR_BROWSER <= max(UI_SMOKE_RATES)):
+        raise AssertionError(
+            f"浏览器环境门 {UI_SMOKE_RATE_FLOOR_BROWSER} 必须落在 "
+            f"({floor}, {max(UI_SMOKE_RATES)}] 之间 —— 低于/等于 {floor} 就是"
+            f"「比离线模型还宽松」，高于 {max(UI_SMOKE_RATES)} 就是「永远到不了」"
+            f"（每轮都会报环境不足 ⇒ 这段守卫被静默关掉）。")
+
     return {
         "why": UI_SMOKE_WHY,
         "sequence": UI_SMOKE_SEQUENCE,
@@ -765,14 +815,30 @@ def ui_smoke_block(blobs: dict[str, bytes]) -> dict:
         "feed_ms": UI_SMOKE_FEED_MS,
         "click_slack_ms": UI_SMOKE_CLICK_SLACK_MS,
         "action_duration_ms": action_ms,
-        # 🔴 消费端（`verify-ui-smoke.mjs`）直接用这个当下界去断言"帧率没被节流"，
-        # 不自己另写一个数 —— 否则"断言允许的帧率"与"扫描证明过的帧率"会分叉，
-        # 而那种分叉的表现是"守卫绿着但浏览器里已经判不出来了"。
+        # 🔴 两个下界，各答各的问（**别合并**，见 `UI_SMOKE_RATE_FLOOR_BROWSER`）：
+        #   · `rate_floor`         离线重放里算法还判得出的最低档 —— 模型问题
+        #   · `rate_floor_browser` 浏览器里读数还可信的门 —— 环境问题（实测会分叉）
         "rate_floor": floor,
+        "rate_floor_browser": UI_SMOKE_RATE_FLOOR_BROWSER,
+        "rate_floor_browser_why": UI_SMOKE_RATE_FLOOR_BROWSER_WHY,
         "rate_sweep": sweep,
         "margins": {"amplitude": round(amp_margin, 3), "hold": round(hold_margin, 3)},
         "frames": files,
     }
+
+
+def write_scenarios(doc: dict) -> None:
+    """把登记表写回 `scenarios.json`（**只有这一条写路径**）。
+
+    🔴 `newline="\n"` 不能省：Windows 上 `write_text` 默认做行尾转换，会把整份文件
+    写成 CRLF，而 `.gitattributes` 规定 `*.json` 一律存 LF ⇒ 本机文件与仓库对象
+    **字节不一致**，每次提交都带一条 `CRLF will be replaced by LF` 的警告。
+    本项目对"只有行尾不同"的差异特别敏感（按行处理源码的守卫在两端会静默分叉，
+    见铁律与 `.gitattributes` 里那段说明）—— 与其让下一个人去猜这条警告要不要管，
+    不如把写路径钉死，并且**只留一处**。
+    """
+    SCENARIOS.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8", newline="\n")
 
 
 def make_doc(solo: dict, cases: list[dict], ui: dict) -> dict:
@@ -872,6 +938,9 @@ def report(doc: dict, title: str) -> tuple[int, list[str]]:
         problems.append("UI 冒烟帧表在扫描的帧率下有判不成 completed 的（余量不足）")
     print(f"  余量：幅度 {mg['amplitude']:+.3f}（vs ACTIVITY_ONSET）"
           f" / 保持 {mg['hold']:+.3f}（vs HOLD_TARGET_RATIO）")
+    print(f"  两个帧率下界（**各有各的问题，别合并**）："
+          f"离线模型 {ui['rate_floor']} 帧/秒 ｜ 浏览器环境门 {ui['rate_floor_browser']} 帧/秒"
+          f"（实测分叉：浏览器 1.5–1.6 判成 insufficient）")
 
     grades = {c["verdict"]["grade"] for c in doc["cases"]}
     hints = {c["verdict"]["hint"] for c in doc["cases"]}
@@ -912,7 +981,7 @@ def build_from_src(src_dir: Path) -> int:
     solo = {n: measure_solo(b) for n, b in blobs.items()}
     cases = [simulate(c, blobs) for c in CASES]
     doc = make_doc(solo, cases, ui_smoke_block(blobs))
-    SCENARIOS.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_scenarios(doc)
     rc, _ = report(doc, "重建完成（已写入 frames/ 与 scenarios.json）")
     return rc
 
@@ -1016,9 +1085,9 @@ def verify() -> int:
     # 验的东西悄悄变样（少喂几帧、喂错素材、断言照样可能绿）。
     if doc.get("ui_smoke") != ui:
         problems.append(
-            "ui_smoke 段与重建结果不一致 —— 帧表 / 序列 / 喂帧时长 / 帧率扫描任一改动都要重跑 "
-            "--from-src=<原图目录>（没有原图时用 --rewrite，它有闸门）再提交"
-            "（它是 verify:ui 的输入，不是注释）")
+            "ui_smoke 段与重建结果不一致 —— 帧表 / 序列 / 喂帧时长 / 帧率扫描 / **字段增删**"
+            "任一改动都要重跑 --rewrite 再提交（它有闸门：只刷新这一段，判定结论一个字都动不了）。"
+            "（这一段是 verify:ui 的输入，不是注释；只有素材本身要改时才需要 --from-src=<原图目录>）")
 
     rc, _ = report(make_doc(solo, cases, ui), "校验（重测素材 + 重放案例）")
     if problems:
@@ -1055,7 +1124,7 @@ def rewrite() -> int:
         return 1
 
     new = make_doc(solo, cases, ui)
-    SCENARIOS.write_text(json.dumps(new, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_scenarios(new)
     if doc.get("ui_smoke") != ui:
         print("\n（ui_smoke 段已刷新）")
     report(new, "刷新完成（已写入 scenarios.json；判定结论一个字都没动）")

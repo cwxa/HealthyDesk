@@ -49,8 +49,14 @@
  *     于是「`getUserMedia` → 本地引擎（MediaPipe wasm）→ 帧序列 → `judgeExercise` →
  *     **实时引导浮层** + **实时动作达成度徽章**」这条链第一次有了自动化证据。
  *     断言只取**不变量**与**存在性**，不钉时间轴（见下）：
- *       ⓪ 帧率 ≥ `ui_smoke.rate_floor` —— 这个下界就是 fixture 里**离线扫描过的最低档**，
- *          两条路共用一个数（扫描证明过那一档仍判 completed，断言才敢允许它）；
+ *       ⓪ 环境够不够 —— 🔴 **两个下界各答一问，不合并**（v1.7.1 起）：
+ *          `ui_smoke.rate_floor`（1.5）= **离线重放**里算法还判得出的最低档（模型问题）；
+ *          `ui_smoke.rate_floor_browser`（2.0）= **浏览器**里读数还可信的门（环境问题）。
+ *          两者**实测会分叉**：同一份帧表在浏览器里 2.7–4.5 帧/秒判成 completed、
+ *          1.5–1.6 帧/秒判成 `insufficient score=76`，而离线扫描说 1.5 那一档仍是 completed。
+ *          语义：**低帧率只决定「这一轮该不该采信」，不单独当失败理由** ——
+ *          帧率 ≥ 2.0 或（≥1.5 且结论与 fixture 一致）⇒ 采信；否则重试一次，
+ *          两轮都不采信才报「环境不足」（判据只有一处实现：`trustCameraRound()`）；
  *       ① 姿态读数真的来自注入的帧（头部侧倾出现过 ≥ 5°，即超过静息阈值），
  *          且 `<video>` 的 `currentTime` 在前进（帧真的交给了视频元素）；
  *       ② 喂帧窗口内**浮层真的渲染出来了** —— `liveQuality` 不再恒为 `null`；
@@ -75,10 +81,16 @@
  *   - **时间轴的绝对值**：实时引导看的是**最近 5 秒**的滚动窗口，而帧的时间戳是
  *     `Date.now()`。所以"第几秒该出现哪句文案"依赖真实帧率 —— 断言只取不变量与
  *     存在性。「喂帧窗口有多长」是固定的（`ui_smoke.feed_ms`），但**窗口里有多少帧**
- *     取决于机器 —— 只由那条 `≥ rate_floor` 的帧率断言兜住，兜不住的是"哪一帧在什么时候"。
+ *     取决于机器 —— 只由 `trustCameraRound()` 那套判据兜住（先看帧率够不够，再交叉看
+ *     "结论对不对得上"），兜不住的是"哪一帧在什么时候"。
  *     ⚠️ 另有一个**已知现象**（不是缺陷、也未被断死）：起势帧滚出 5 秒窗口后
  *     「活动范围」归零 ⇒ 静止保持会被实时提示成「没检测到动作」。
  *     整段判定不受影响（它看的是整段帧），见 `scripts/fake-camera/README.md`。
+ *   - **低帧率下"过了"的那些轮**（`rate_floor` ≤ 帧率 < `rate_floor_browser`）：结论仍被采信
+ *     （它确实与 fixture 一致），但**那一段环境本身没达标** —— 实测 1.6 帧/秒就判不出
+ *     `completed`。所以这种轮会打一条**显式 ⚠**，并**不会**让 run 变红（v1.7.1 定的策略：
+ *     低帧率不单独当失败理由，理由见 `docs/MULTIPLATFORM.md §9.9`）。
+ *     读线报时要知道：这一轮的"浮层/徽章"类不变量是在**偏挤的环境**下验的。
  *   - **喂帧窗口末尾之后**：帧不再进来时 `liveQuality` 回落到 `null`、浮层消失是
  *     **正确**行为（滚动窗口会把内容滚空）。所以浮层那条断言只覆盖窗口**内部**的采样点 ——
  *     把它算进来会把"它该做的事"读成失败（v1 就是这么假红的）。
@@ -112,6 +124,11 @@
  *   node scripts/verify-ui-smoke.mjs --case=android        # 只跑一个平台组合
  *   node scripts/verify-ui-smoke.mjs --dist=dist --timeout=15000
  *   node scripts/verify-ui-smoke.mjs --dump                # 守卫红了先看这个，别猜
+ *   node scripts/verify-ui-smoke.mjs --self-test           # 只跑「本轮采信/不采信」判据的自测
+ *
+ * `--self-test`：`trustCameraRound()` 是纯函数，跑之前**无条件**先自测它（见 `main()`）——
+ * 判"环境够不够"的规则本身错了，症状是"该红的没红"或"已经正确的读数被判成环境问题"，
+ * 两种都不会让守卫自己叫出来。
  *
  * 环境变量：`NG_CHROME` / `CHROME_PATH` 可指定浏览器可执行文件。
  */
@@ -145,6 +162,16 @@ const SETTLE_MS = Number(args.settle || 700)
 const WAIT_MS = Number(args.timeout || 12000)
 /** `--dump`：把每页实际渲染出来的文本打出来。守卫失败时靠它定位，比猜强。 */
 const DUMP = !!args.dump
+/** `--self-test`：只跑「本轮该不该采信」判据的自测，不起浏览器。 */
+const SELF_TEST_ONLY = !!args['self-test']
+
+/**
+ * 帧率/门的显示口径：一律一位小数。
+ * `scenarios.json` 里 `rate_floor_browser` 是 `2.0`，但 JSON 解析成 JS `Number` 之后
+ * 模板串渲染出来是 `2` —— 紧挨着 `离线模型下界 1.5` 读起来像两个不同量纲的数
+ * （实测第一版线报就是 `环境门 2` vs `下界 1.5`）。显示统一，免得读的人再算一遍。
+ */
+const f1 = (v) => Number(v).toFixed(1)
 
 // ─────────────────────────── 用例定义 ───────────────────────────
 
@@ -418,7 +445,7 @@ function loadUiSmoke() {
   const file = path.join(ROOT, 'scripts', 'fake-camera', 'scenarios.json')
   const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
   const ui = doc.ui_smoke
-  const need = ['frames', 'feed_ms', 'frame_count', 'lead_in_frames', 'rate_floor', 'rate_sweep', 'action_duration_ms']
+  const need = ['frames', 'feed_ms', 'frame_count', 'lead_in_frames', 'rate_floor', 'rate_floor_browser', 'rate_sweep', 'action_duration_ms']
   if (!ui) throw new Error('scenarios.json 里没有 ui_smoke 段（跑一次 build-frames.py 重新生成）')
   const missing = need.filter((k) => ui[k] === undefined || ui[k] === null)
   if (missing.length) {
@@ -432,9 +459,15 @@ function loadUiSmoke() {
     throw new Error(`ui_smoke.frames 有 ${ui.frames.length} 项，但声明 frame_count=${ui.frame_count}`)
   }
 
-  // 🔴 **断言的下界 = 离线扫描过的最低帧率**（下面 `rate >= ui.rate_floor` 直接用这个值）。
-  //    这条自检盯的是"两者分叉"：如果谁在 JS 里另写一个更宽松的下界，就会出现
-  //    「守卫绿着，而浏览器里那个帧率其实已经判不出来了」—— 那正是本段要堵的洞。
+  // 🔴 **两个下界各答一问，别把它们合并**（v1.7.1 定的；原来只有一个 `rate_floor`，
+  //    结果是"守卫绿着，而浏览器里那个帧率其实已经判不出来了"）：
+  //      · `rate_floor`         = **离线重放**里算法还判得出的最低档 —— 模型问题
+  //      · `rate_floor_browser` = **浏览器**里读数还可信的门 —— 环境问题
+  //    实测分叉：同一份帧表在浏览器里 2.7–4.5 帧/秒判成 completed、
+  //    1.5–1.6 帧/秒判成 `insufficient score=76`（CI `36660895335`，rerun 两次都复现），
+  //    而离线扫描说 1.5 那一档仍是 completed（它只重打时间戳，建模不出
+  //    `static_image_mode=False` 的逐帧跟踪在长间隔下要重新收敛）。
+  //    下面两条自检分别盯"fixture 自己内部一致"与"两个门的关系没被改坏"。
   const rates = Object.keys(ui.rate_sweep)
   if (!rates.length) throw new Error('ui_smoke.rate_sweep 是空的 —— 帧率扫描没跑')
   // ⚠️ 键是 Python 写出来的字符串（"1.5" / "2.0" / "5.0"）：**不要**转成数字再拿回来查，
@@ -442,6 +475,14 @@ function loadUiSmoke() {
   const floor = Math.min(...rates.map(Number))
   if (ui.rate_floor !== floor) {
     throw new Error(`ui_smoke.rate_floor=${ui.rate_floor} 与 rate_sweep 的最低档 ${floor} 不一致`)
+  }
+  const top = Math.max(...rates.map(Number))
+  if (!(ui.rate_floor_browser > ui.rate_floor && ui.rate_floor_browser <= top)) {
+    throw new Error(
+      `ui_smoke.rate_floor_browser=${f1(ui.rate_floor_browser)} 必须落在 (${ui.rate_floor}, ${top}] 之间：` +
+        `浏览器只会比离线模型更苛刻（≤ ${ui.rate_floor} 就没有意义），` +
+        `而超过扫描最高档 ${top} 则每轮都会判成「环境不足」⇒ 这段守卫被静默关掉`,
+    )
   }
   const notOk = rates.filter((r) => ui.rate_sweep[r].grade !== 'completed')
   if (notOk.length) {
@@ -796,6 +837,76 @@ class ShadowRunner {
     this.checks.push([!!cond, label, detail])
     return !!cond
   }
+}
+
+// ──────────────── 「这一轮该不该采信」的判据（唯一实现 + 自测） ────────────────
+
+/**
+ * 一轮假摄像头测量的**可信度判定** —— 纯函数，有自测（`TRUST_CASES` / `selfTest()`）。
+ * 返回 `'trust'` / `'trust-low-rate'` / `'distrust'` / `'unusable'`。
+ *
+ * 🔴 为什么不是"帧率没到门就红" —— 那是把两件事混成一件。
+ * 帧率低只说明"**这一次的读数可能不可信**"，不说明"**被判的对象错了**"。
+ * 实测代价（CI run `36660895335`）：runner 被挤到 1.5 帧/秒时输出
+ * `grade=insufficient score=76`，读线报的人会去判定实现里找一个不存在的问题 ——
+ * 那 10 条红全是"帧没进来"的下游症状，方向完全指错。
+ * 反过来，把"低帧率"整个忽略掉，一段根本没验成的结果又会被读成"验过了"。
+ * ⇒ 判据**两个轴交叉**：环境指标（帧率）× 结论（与 fixture 对不对得上）。
+ *
+ * | 帧率 | 结论与 fixture 对得上？ | 判定 | 为什么 |
+ * |---|---|---|---|
+ * | ≥ `rate_floor_browser` | 任意 | `trust` | 环境在**实测证过**的区间 ⇒ 结论（对的/错的）都算数 |
+ * | `rate_floor` ~ 门之间 | 对 | `trust-low-rate` | 低帧率下的读数，但**结论正是要验的那个东西** ⇒ 采信 + ⚠ |
+ * | `rate_floor` ~ 门之间 | 不对 | `distrust` | 分不清是环境挤的还是判定坏了 ⇒ 重试一次 |
+ * | < `rate_floor` | 任意 | `distrust` | 连**离线模型**都没证过这一档 ⇒ 结论对得上也不当证据（防蒙对） |
+ * | 这一轮异常 / 提前返回 | — | `unusable` | 异常本身已由 `checkCameraGuidance` 记在那一轮里了 |
+ *
+ * ⚠️ **判据只允许这一处实现**：段内那条断言与外层重试**都调它**。
+ * 抄一份到别处 ⇒ 两份政策必然分叉，而分叉的表现是"守卫绿着但它验的不是你以为的那个东西"。
+ */
+function trustCameraRound(r, ui) {
+  if (!r) return 'unusable'
+  if (r.rate >= ui.rate_floor_browser) return 'trust'
+  if (r.rate < ui.rate_floor) return 'distrust'
+  return r.verdictOk ? 'trust-low-rate' : 'distrust'
+}
+
+/**
+ * `trustCameraRound()` 的自测表 —— 「输入 → 必须得到的判定」。
+ * 表里的值不是描述的复述，而是**政策本身**：改判据就必须同时改这张表；
+ * 改不动表，说明这次不是"修 bug"而是"改政策"，那就得先说服人。
+ */
+const TRUST_CASES = [
+  { why: '环境远超门（本机常态）', rate: 4.5, verdictOk: true, want: 'trust' },
+  { why: '环境超门但判错了 ⇒ 这是**真失败**，不许被"环境"二字掩盖', rate: 4.5, verdictOk: false, want: 'trust' },
+  { why: '恰好等于门（≥ 即采信）', rate: 2.0, verdictOk: false, want: 'trust' },
+  { why: '低于门但结论一致 ⇒ 采信 + ⚠（本政策的核心一行）', rate: 1.9, verdictOk: true, want: 'trust-low-rate' },
+  { why: '低于门且结论对不上 ⇒ 分不清，要重试', rate: 1.9, verdictOk: false, want: 'distrust' },
+  { why: '恰好等于离线最低档 ⇒ 仍属"离线证过"，结论一致就采信', rate: 1.5, verdictOk: true, want: 'trust-low-rate' },
+  { why: '低于离线最低档 ⇒ 结论一致也不当证据（防"蒙对"）', rate: 1.2, verdictOk: true, want: 'distrust' },
+  { why: 'CI 上真实出现过的被挤环境（0.8 帧/秒）', rate: 0.8, verdictOk: false, want: 'distrust' },
+  { why: '这一轮异常 / 提前返回', rate: null, verdictOk: false, want: 'unusable' },
+]
+
+/**
+ * 跑 `TRUST_CASES`。门值用**合成**的一组（1.5 / 2.0）：这里验的是**判据的形状**
+ * （两个轴怎么交叉），而"fixture 里那两个数自己合不合理"由 `loadUiSmoke()` 的
+ * 关系自检负责 —— 两件事分开验，改一个不会把另一个带绿。
+ */
+function selfTest() {
+  const ui = { rate_floor: 1.5, rate_floor_browser: 2.0 }
+  const bad = []
+  for (const c of TRUST_CASES) {
+    const r = c.rate === null ? null : { rate: c.rate, verdictOk: c.verdictOk }
+    const got = trustCameraRound(r, ui)
+    if (got !== c.want) {
+      bad.push(
+        `帧率 ${c.rate === null ? '异常' : c.rate} / 结论${c.verdictOk ? '一致' : '对不上'} → ` +
+          `得到 ${got}，应为 ${c.want}（${c.why}）`,
+      )
+    }
+  }
+  return bad
 }
 
 /** 在页面里求值；表达式抛错时返回 ok:false 而不是让整个脚本崩掉。 */
@@ -1223,12 +1334,13 @@ const SAMPLE_STEP_MS = 500
  * ⚠️ 全程**只断言不变量与存在性**，不钉时间轴：实时引导看的是**最近 5 秒**的滚动窗口，
  * 而帧的时间戳是 `Date.now()` —— "第几秒该出现哪句文案"随真实帧率漂，
  * 钉死必然假红。所以：
- *   ① 帧率不低于**离线扫描过的最低档**（`ui.rate_floor`）—— 这是其余断言的前提；
- *   ② 姿态读数出现过 ≥ 5°（超过静息阈值）⇒ 帧真的走完了 MediaPipe；
- *   ③ 帧流动起来之后浮层**一直在**（`liveQuality` 不再恒为 null）；
- *   ④ 出现过「幅度够了」那一类的提示（不是恒 idle / 恒幅度不足）；
- *   ⑤ 🔴 徽章与提示**不矛盾**（idle ⟺ 0 分；否则 ≥80 ⟺ completed）；
- *   ⑥ 收尾屏与落库：只有那个动作被判、明细 v3 只 1 项、`avg_score` 同源、判成 completed。
+ *   ⓪ 环境够不够**采信**这一轮（帧率 × 结论两个轴交叉判，`trustCameraRound()`；放在段末，
+ *      因为要等结论读出来）—— 🔴 **帧率低不单独判红**，见文件头与 §9.9；
+ *   ① 姿态读数出现过 ≥ 5°（超过静息阈值）⇒ 帧真的走完了 MediaPipe；
+ *   ② 帧流动起来之后浮层**一直在**（`liveQuality` 不再恒为 null）；
+ *   ③ 出现过「幅度够了」那一类的提示（不是恒 idle / 恒幅度不足）；
+ *   ④ 🔴 徽章与提示**不矛盾**（idle ⟺ 0 分；否则 ≥80 ⟺ completed）；
+ *   ⑤ 收尾屏与落库：只有那个动作被判、明细 v3 只 1 项、`avg_score` 同源、判成 completed。
  */
 async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
   const where = `${c.name} 假摄像头实时引导`
@@ -1420,17 +1532,11 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         `动作计时器的边界在 ${ui.action_duration_ms}ms，漫过去之后帧会被记到下一个动作上`,
     )
 
-    // 🔴 帧率是其余断言的前提（窗口按**墙上时间**算）。下界 = **离线扫描过的最低帧率**
-    //    （`ui.rate_floor`，来自 `scenarios.json:ui_smoke.rate_sweep`）—— 不是随手写的数：
-    //    "断言允许的帧率"与"扫描证明过的帧率"必须是同一个数，否则会出现
-    //    「守卫绿着，而浏览器里那个帧率其实已经判不出来了」。
-    //    再往下会先坏在两处：① 帧间隔超过 `MAX_FRAME_GAP_MS=1500` ⇒ `held_ms` 整段不计；
-    //    ② 跟踪器收敛那几帧占掉更长的墙上时间 ⇒ 保持比例掉到 0.6 以下。
-    run.check(
-      rate >= ui.rate_floor,
-      `${where} 馈帧节奏未被节流（≥${ui.rate_floor} 帧/秒，= 离线扫描过的最低档）`,
-      `实测 ${rate.toFixed(1)} 帧/秒（${pushed} 帧 / ${ui.feed_ms}ms）—— 无头页的 setInterval 被推理拖住了？` +
-        `实时引导的窗口按墙上时间算，节流会让"保持比例"直接掉到达标线以下`,
+    // 🔴 **帧率不单独判红**（v1.7.1 起的政策，见文件头 ⓪ 与 `trustCameraRound()`）：
+    //    判据要交叉看"结论对不对得上"，所以那条断言在**段末**（那时结论才读出来）。
+    //    这里只把两个数打出来 —— 它是读线报时唯一的原始环境证据。
+    console.log(
+      `    · 帧率 ${rate.toFixed(1)} 帧/秒（离线模型下界 ${ui.rate_floor} / 浏览器环境门 ${f1(ui.rate_floor_browser)}）`,
     )
 
     const withOverlay = samples.filter((s) => s.overlayMounted)
@@ -1590,6 +1696,11 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
     )
     const got = rec.ok && rec.value
     run.check(!!got, `${where} 真实帧的成绩真的落库`, `没读到记录：${rec.error || '无'}`)
+    // 本轮的**结论**（给 `trustCameraRound()` 交叉判定用）。
+    // 🔴 它**不替代任何断言** —— 下面那几条照旧逐条跑、逐条计数，一行都不少；
+    //    这里的值只回答"这一轮的环境够不够采信这一份结论"。
+    let verdict = '没读到落库记录'
+    let verdictOk = false
     if (got) {
       const row = JSON.parse(rec.value)
       let parsed = null
@@ -1599,6 +1710,22 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         /* 下面那条断言会报出来 */
       }
       const items = parsed && Array.isArray(parsed.items) ? parsed.items : null
+      // 结论摘要（只用于报错话术与采信判定；断言在下面，不看这个变量）
+      verdict = !parsed
+        ? '明细不是 JSON'
+        : !items || items.length !== 1
+          ? `明细 ${items ? items.length : '非数组'} 项（期望 1 项）`
+          : `grade=${items[0].grade} score=${items[0].score} avg=${row.avg_score}`
+      // "结论与 fixture 对得上" = 这段要验的东西**全中**（任一不中 ⇒ 这一轮的结论不可采信）
+      verdictOk =
+        !!parsed &&
+        parsed.v === 3 &&
+        !!items &&
+        items.length === 1 &&
+        items[0].id === 'neck-flex-left' &&
+        items[0].grade === 'completed' &&
+        row.avg_score === items[0].score &&
+        row.avg_score >= 80
       run.check(
         !!parsed && parsed.v === 3 && !!items && items.length === 1,
         `${where} 落库明细是 v3 且只含 1 个判过的动作`,
@@ -1625,9 +1752,24 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         )
       }
     }
+
+    // ── ⓪ 环境够不够采信（**判据只有一处实现**：`trustCameraRound()`）────────────
+    // 为什么放在**段末**：它要交叉看"结论对不对得上"，而结论到上面才读出来。
+    // 读线报时**先看外层那条「环境不足」** —— 它在回放任何断言之前就打出来了，
+    // 所以"先看哪一条"这件事没有变。
+    const trust = trustCameraRound({ rate, verdictOk }, ui)
+    run.check(
+      trust !== 'distrust',
+      `${where} 这一轮的环境够采信（帧率 ≥ ${f1(ui.rate_floor_browser)} 帧/秒，或低帧率下结论仍与 fixture 一致）`,
+      `实测 ${rate.toFixed(1)} 帧/秒（离线模型下界 ${ui.rate_floor} / 浏览器环境门 ${f1(ui.rate_floor_browser)}）、` +
+        `结论 ${verdict} —— ` +
+        (rate < ui.rate_floor
+          ? `连离线模型都没证过这一档，结论对得上也不当证据（防"蒙对"）`
+          : `分不清是环境挤的还是判定坏了，外层会重试一次，两轮都这样才报「环境不足」`),
+    )
     // 把本轮的**关键量**交出去（供 `checkCameraGuidanceWithRetry` 判"环境够不够"）。
-    // 只交数值，不交结论 —— 断言已经在上面 `run.check` 过了。
-    return { rate, clickAt, pushed, samples }
+    // 交数值 + 结论摘要：**不交判定**（判定只有 `trustCameraRound()` 一处实现）。
+    return { rate, clickAt, pushed, samples, verdict, verdictOk }
   } catch (e) {
     run.fail(where, e.message)
     return null
@@ -1635,7 +1777,7 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
 }
 
 /**
- * 跑假摄像头那一段，**环境不足时整段重来一次**。
+ * 跑假摄像头那一段，**环境不够采信时整段重来一次**。
  *
  * 🔴 为什么需要它：这一段要求无头页里的 MediaPipe 真的在出帧，而 **CI runner 的负载波动极大** ——
  * 实测同一台 runner 上帧率在 **0.3 – 4.8 帧/秒** 之间跳（差 16 倍），最差那次 10 秒只推到 **5 帧**，
@@ -1643,11 +1785,19 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
  * 徽章读不到、判成 insufficient），没有一条在说判定实现错了 —— 方向完全指错。
  *
  * 那种红**不是代码缺陷**，但也不能靠"放宽帧率下界"消掉
- * （那正是"为了让测试变绿而削弱断言"，铁律不允许；而且下界 1.5 是**离线扫描过**的数）。
+ * （那正是"为了让测试变绿而削弱断言"，铁律不允许；而且 1.5 这个下界是**离线扫描过**的数）。
  *
- * 做法：第一轮跑进**影子收集器**（不打印、不计数）。帧率达标就把那一轮的断言**原样回放**；
- * 不达标就整段重来一次（`checkCameraGuidance` 开头本来就会回到 `#/` 再 reload，
- * 天然可以重跑）。两轮都不达标 ⇒ 如实红，但**报错形状指向环境**：
+ * 🔴 **什么时候才算"环境不够采信"**：判据**只有一处实现** —— `trustCameraRound()`
+ * （帧率 × 结论两个轴交叉）。要点是**帧率低本身不算**：
+ *   · 帧率 ≥ `rate_floor_browser`（2.0）⇒ 环境在实测证过的区间，结论对错都算数；
+ *   · 帧率低但**结论与 fixture 一致** ⇒ 采信（那正是要验的东西），只打一条 ⚠；
+ *   · 帧率低**且**判不出 expected ⇒ 分不清是谁的问题 ⇒ 重试；
+ *   · 帧率 < `rate_floor`（1.5）⇒ 连离线模型都没证过这一档，结论对得上也不当证据。
+ *
+ * 做法：第一轮跑进**影子收集器**（不打印、不计数）。可采信就把那一轮的断言**原样回放**
+ * （所以正常路径的断言条数、顺序、文案一字不变）；不可采信就整段重来一次
+ * （`checkCameraGuidance` 开头本来就会回到 `#/` 再 reload，天然可以重跑）。
+ * 两轮都不可采信 ⇒ 如实红，但**报错形状指向环境**：
  * 先给一条明确的"环境不足"，再回放第二轮的原始结果 —— 不掩盖任何东西，
  * 但读线报的人不会去判定实现里找不存在的问题。
  */
@@ -1656,36 +1806,98 @@ async function checkCameraGuidanceWithRetry(cdp, sessionId, run, c, ui) {
     for (const [cond, label, detail] of shadow.checks) into.check(cond, label, detail)
   }
   const fmt = (r) => (r ? `${r.rate.toFixed(1)} 帧/秒` : '异常/提前返回')
+  const what = (r) => (r ? String(r.verdict) : '这一轮没跑到落库那一步')
+  const lowNote = (r) =>
+    `    ⚠ ${c.name} 假摄像头实时引导：本轮 ${fmt(r)} < 环境门 ${f1(ui.rate_floor_browser)} 帧/秒，` +
+    `但结论与 fixture 一致（${what(r)}）⇒ 照常采信。` +
+    `**这一段是在偏挤的环境下验的**（实测 1.6 帧/秒就判不出 completed）—— 记进线报，别当常态`
 
   const first = new ShadowRunner()
   const r1 = await checkCameraGuidance(cdp, sessionId, first, c, ui)
-  if (r1 && r1.rate >= ui.rate_floor) {
+  const d1 = trustCameraRound(r1, ui)
+  if (d1 === 'trust') {
+    replay(first, run)
+    return
+  }
+  if (d1 === 'trust-low-rate') {
+    console.log(lowNote(r1))
     replay(first, run)
     return
   }
 
   console.log(
-    `    ⚠ ${c.name} 假摄像头实时引导：本轮 ${fmt(r1)} < ${ui.rate_floor} —— runner 被挤了，整段重试一次`,
+    `    ⚠ ${c.name} 假摄像头实时引导：本轮 ${fmt(r1)}、结论 ${what(r1)} —— ` +
+      (r1 && r1.rate < ui.rate_floor
+        ? `低于离线模型下界 ${ui.rate_floor}，这一轮不作为证据`
+        : `低于环境门 ${f1(ui.rate_floor_browser)} 且判不出期望结论，分不清是环境挤的还是判定坏了`) +
+      `，整段重试一次`,
   )
+
   const second = new ShadowRunner()
   const r2 = await checkCameraGuidance(cdp, sessionId, second, c, ui)
-  if (r2 && r2.rate >= ui.rate_floor) {
+  const d2 = trustCameraRound(r2, ui)
+  if (d2 === 'trust' || d2 === 'trust-low-rate') {
+    if (d2 === 'trust-low-rate') console.log(lowNote(r2))
+    if (r1 && !r1.verdictOk) {
+      console.log(
+        `    ⚠ ${c.name} 第一轮在 ${fmt(r1)} 下判错了（${what(r1)}）、第二轮恢复正常 ` +
+          `⇒ 以第二轮为准（这一条本身就是"帧率越低越容易判不出来"的实证）`,
+      )
+    }
     replay(second, run)
     return
   }
 
-  run.fail(
-    `${c.name} 假摄像头实时引导 环境不足：两轮都没跑到 ${ui.rate_floor} 帧/秒`,
-    `第一轮 ${fmt(r1)}、第二轮 ${fmt(r2)} —— 无头页的推理被 runner 负载挤住了，` +
-      `**这一段本次没能验证**（不是判定实现的问题）。下面的失败多数是它的下游症状，先看这一条。` +
-      `若两轮都低到 1 帧/秒上下，多半是 runner 太忙，重跑一次比查代码更快`,
-  )
+  if (d2 === 'distrust') {
+    run.fail(
+      `${c.name} 假摄像头实时引导 环境不足：两轮都没到可采信的环境`,
+      `第一轮 ${fmt(r1)}（${what(r1)}）、第二轮 ${fmt(r2)}（${what(r2)}）—— ` +
+        `浏览器实测的可信下界是 ${f1(ui.rate_floor_browser)} 帧/秒（离线模型下界 ${ui.rate_floor}），` +
+        `**这一段本次没能验证**：不能据此说判定实现坏了。下面的失败多数是它的下游症状，先看这一条。` +
+        `若两轮都在 1 帧/秒上下，多半是 runner 太忙 —— 重跑一次（rerun）比查代码更快`,
+    )
+  } else {
+    console.log(
+      `    ⚠ ${c.name} 第二轮没能跑完（异常/提前返回）；第一轮 ${fmt(r1)}（${what(r1)}）` +
+        ` —— 下面回放的是第二轮的原始结果（异常本身会在里面报出来）`,
+    )
+  }
   replay(second, run)
 }
 
 // ─────────────────────────── 主流程 ───────────────────────────
 
 async function main() {
+  // ── 先自测"采信判据"本身（纯函数，不需要浏览器/产物）────────────────────────
+  //
+  // 🔴 为什么放在最前面、而且**无条件**跑：`trustCameraRound()` 判错的两种表现是
+  //    「该红的没红」（低帧率把真失败洗成环境问题）与「已经正确的读数被判成环境问题」
+  //    —— 两种**都不会让守卫自己叫出来**。它是这段唯一一处政策实现，必须自己先有牙。
+  const selfBad = selfTest()
+  if (SELF_TEST_ONLY || selfBad.length) {
+    console.log(`采信判据自测（${TRUST_CASES.length} 例：帧率 × 结论两个轴交叉）`)
+    for (const c of TRUST_CASES) {
+      const got = trustCameraRound(
+        c.rate === null ? null : { rate: c.rate, verdictOk: c.verdictOk },
+        { rate_floor: 1.5, rate_floor_browser: 2.0 },
+      )
+      console.log(
+        `  ${got === c.want ? '✓' : '✗'} 帧率 ${String(c.rate === null ? '异常' : c.rate).padStart(5)}` +
+          ` / 结论${c.verdictOk ? '一致  ' : '对不上'} → ${got.padEnd(15)}（期望 ${c.want}；${c.why}）`,
+      )
+    }
+  }
+  if (selfBad.length) {
+    console.error(`::error::采信判据自测失败 ${selfBad.length}/${TRUST_CASES.length}：`)
+    for (const b of selfBad) console.error(`  ✗ ${b}`)
+    process.exit(1)
+  }
+  if (SELF_TEST_ONLY) {
+    console.log(`✅ 采信判据自测通过 ${TRUST_CASES.length}/${TRUST_CASES.length}`)
+    process.exit(0)
+  }
+  console.log(`✓ 采信判据自测 ${TRUST_CASES.length}/${TRUST_CASES.length}\n`)
+
   if (!fs.existsSync(path.join(DIST, 'index.html'))) {
     console.error(`::error::UI 冒烟无法进行：${DIST}/index.html 不存在（先跑 npm run build:web）`)
     process.exit(1)
