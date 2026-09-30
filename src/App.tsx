@@ -173,7 +173,15 @@ function AppShell() {
     }
   }, [post, get, mobile])
 
-  const acceptReminder = useCallback(async () => {
+  /**
+   * 「现在就开始一次活动」——提醒弹窗的「开始活动」与新手引导的「立即试一次」**共用这一条**。
+   *
+   * 🔴 刻意合并成一个：两条路径要做的事完全一样（收掉弹窗/关引导 → 标记进入休息 →
+   *    落 sessionStorage 兜底 → 派发事件 → 跳首页）。各写一份必然分叉，
+   *    而分叉的表现是"从引导进去时少了 `beginBreak()`"这类**只在某一条路上才有的缺陷** ——
+   *    真机上很难复现，因为大多数人只会走其中一条。
+   */
+  const startExerciseNow = useCallback(async () => {
     setReminderVisible(false)
     if (mobile) {
       localReminder.beginBreak()
@@ -263,7 +271,7 @@ function AppShell() {
                 </button>
               )}
               <button
-                onClick={acceptReminder}
+                onClick={startExerciseNow}
                 style={{
                   padding: '10px 28px', borderRadius: 12, border: 'none',
                   background: 'linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%)',
@@ -282,7 +290,17 @@ function AppShell() {
 
   // 新手引导的挂载点。**常驻**渲染（用 `open` 控制显隐）而不是条件挂载 ——
   // 条件挂载会让它内部的 `AnimatePresence` 跟着卸载，退场动画永远不播（一闪就没了）。
-  const onboarding = <Onboarding open={onboardingOpen} onDone={() => setOnboardingOpen(false)} />
+  //
+  // 「立即试一次」复用 `startExerciseNow`（与提醒弹窗同一条路径），
+  // 所以从引导直接开一次活动时，**待处理的提醒弹窗也会被收掉** ——
+  // 否则遮罩一关，提醒弹窗会立刻盖在刚进入的练习界面上（那正是本项目要避免的"两个遮罩打架"）。
+  const onboarding = (
+    <Onboarding
+      open={onboardingOpen}
+      onDone={() => setOnboardingOpen(false)}
+      onStartExercise={startExerciseNow}
+    />
+  )
 
   // ---- 移动端布局：紧凑顶栏 + 内容 + 底部标签栏 ----
   if (mobile) {

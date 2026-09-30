@@ -38,6 +38,11 @@
  *     逐步点完 4 步（**每步标题都要变**；只验"遮罩出现了"会漏掉"卡在第 1 步不动"）→
  *     点「开始使用」→ 遮罩消失 + 「已看过」标志真的落盘 → **再次加载后不再自动出现** →
  *     设置页「重新查看新手引导」能把它叫回来 → 「跳过」能关掉。
+ *     v1.7.2 补三条：① **取景示意图只出现在第 2 步、且宽高非零**
+ *     （只断"第 2 步有图"抓不到"`visual` 被忽略、每步都画"；只断锚点存在抓不到"被压成 0 高"）；
+ *     ② 最后一步有「**立即试一次**」而中间步骤没有；
+ *     ③ 点它之后**真的进入练习模式**（以「结束活动」出现为证据）——
+ *     只断"遮罩消失 + 回到首页"的话，一个"只关引导、不启动活动"的实现照样绿。
  *     ⚠️ 这一段必须在 ROUTES **之前**跑完：引导的遮罩盖在页面上，但下层仍在 DOM 里，
  *     开着它去断言页面文案等于把"被盖住了"验成"渲染得出来"（`innerText` 两层都读得到）。
  *   - **假摄像头 · 实时引导 / 实时徽章**（移动端用例，`checkCameraGuidance`）：
@@ -73,8 +78,8 @@
  *   - 客户端路由（点导航后 URL 变化但**不整页刷新**、目标页渲染出来）
  *   - 设置页显示的版本号 = `package.json` 的版本（版本漂移在界面层也能抓到）
  *   - 未捕获异常、非预期的控制台错误、非预期资源加载失败
- *   - 可选：截图留证（`--evidence=<目录>`）—— 每页一张，另加**新手引导的第 1 / 第 4 步**各一张
- *     （引导是视觉产品，"排版塌了/按钮被遮"这类问题断言看不出来）
+ *   - 可选：截图留证（`--evidence=<目录>`）—— 每页一张，另加**新手引导的第 1 / 2 / 4 步**各一张
+ *     （引导是视觉产品，"排版塌了/按钮被遮"这类问题断言看不出来；第 2 步那张专看取景示意图）
  * 不覆盖（如实记录，别读成"验过了"）：
  *   - **真实摄像头设备与权限层**：注入的是一条 **`MediaStream`**，不是真设备
  *     （没走 `--use-fake-device-for-media-stream`，也没碰 `getUserMedia` 的权限分支）。
@@ -172,6 +177,14 @@ const ONLY = args.case || ''
 const EVIDENCE_DIR = args.evidence ? path.resolve(ROOT, args.evidence) : ''
 const SETTLE_MS = Number(args.settle || 700)
 const WAIT_MS = Number(args.timeout || 12000)
+/**
+ * 等 `DevToolsActivePort` 的上限。
+ *
+ * 为什么要给到 25s：Chrome 是**两段式**启动 —— spawn 出来的是启动器（~0.2s 就退 0），
+ * 真正的浏览器在另一个进程里继续跑，文件 ~1.7s 才落盘。见 `launchChrome` 里的长注释。
+ * 这个值只在**失败**路径上被等满，正常路径 ~2s 就返回。
+ */
+const LAUNCH_TIMEOUT_MS = 25000
 /** `--dump`：把每页实际渲染出来的文本打出来。守卫失败时靠它定位，比猜强。 */
 const DUMP = !!args.dump
 /** `--self-test`：只跑「本轮该不该采信」判据的自测，不起浏览器。 */
@@ -746,6 +759,118 @@ class Cdp {
 
 // ─────────────────────────── 启动 Chrome ───────────────────────────
 
+/**
+ * 等 `DevToolsActivePort` 落盘。**唯一实现**，`launchChrome()` 与自测都调它。
+ *
+ * 抽成"注入时钟 + 注入文件读"的形状，**唯一的理由是要能自测**：这里曾经有一句
+ * 「启动进程退出就放弃」，它把一个明明起来了的浏览器判成"启动失败"，
+ * 而且只在 Windows 上暴露、CI 上完全看不见 —— 靠人肉读代码是发现不了的。
+ *
+ * 🔴 本函数的契约：**只看「到点之前文件有没有写全」，不看启动进程的死活。**
+ *    `io.launcherExitCode()` 只允许用在**失败时的报错信息**里。
+ *    见 `PORT_WAIT_CASES` 第 2 例（那条就是这次的真实事故）。
+ *
+ * @param {{
+ *   read: () => string|null,          // 读 DevToolsActivePort，不存在返回 null
+ *   launcherExitCode: () => number|null,
+ *   now: () => number,
+ *   sleep: (ms:number) => Promise<void>,
+ *   timeoutMs: number,
+ *   intervalMs: number,
+ * }} io
+ * @returns {Promise<{ok:true, port:number, wsPath:string, waitedMs:number}
+ *                 | {ok:false, waitedMs:number, launcherExitCode:number|null}>}
+ */
+async function waitForDevToolsPort(io) {
+  const t0 = io.now()
+  const deadline = t0 + io.timeoutMs
+  while (io.now() < deadline) {
+    const txt = io.read()
+    if (txt) {
+      const lines = txt.split('\n')
+      const port = Number(lines[0])
+      const wsPath = (lines[1] || '').trim()
+      // 🔴 两个都要：只拿到端口、没拿到 ws 路径时**不能算成功**
+      //    （路径里那段 uuid 拼错会握手失败，报的是 "non-101 status code"，看不出是路径问题）
+      if (port > 0 && wsPath) return { ok: true, port, wsPath, waitedMs: io.now() - t0 }
+    }
+    await io.sleep(io.intervalMs)
+  }
+  return { ok: false, waitedMs: io.now() - t0, launcherExitCode: io.launcherExitCode() }
+}
+
+/**
+ * `waitForDevToolsPort()` 的自测表。
+ *
+ * 第 2 例是**这次真实事故的复现**：启动器 200ms 就 `exit(0)`，文件 1700ms 才落盘。
+ * 老代码在这 1.5s 的窗口里看到 `exitCode != null` 就放弃 ⇒ 误报"Chrome 启动失败"。
+ * 这条用例的存在，就是为了让那句话再也回不来。
+ */
+const PORT_WAIT_CASES = [
+  { why: '常态：文件 ~1.7s 落盘，启动器也没退', exitsAtMs: null, readyAtMs: 1700, timeoutMs: 25000, want: true },
+  {
+    why: '🔴 本次真实事故：启动器 0.2s 退 0、文件 1.7s 才落 —— 必须仍然成功',
+    exitsAtMs: 200,
+    readyAtMs: 1700,
+    timeoutMs: 25000,
+    want: true,
+  },
+  {
+    why: '启动器退了、文件也很快落盘（Linux/CI 的常见形状）',
+    exitsAtMs: 100,
+    readyAtMs: 300,
+    timeoutMs: 25000,
+    want: true,
+  },
+  { why: '真的起不来：到点仍无文件 ⇒ 才算失败', exitsAtMs: 200, readyAtMs: null, timeoutMs: 1000, want: false },
+  {
+    why: '文件半截（只有端口、没有 ws 路径）⇒ 继续等到点，不当成功',
+    exitsAtMs: 200,
+    readyAtMs: 300,
+    partialAtMs: 300,
+    timeoutMs: 1000,
+    want: false,
+  },
+  { why: '启动器一直不退且无文件 ⇒ 到点算失败（不许因为"还在跑"就无限等）', exitsAtMs: null, readyAtMs: null, timeoutMs: 1000, want: false },
+]
+
+/** 造一个虚拟时钟的 `io`，让自测**瞬间**跑完（不真的 sleep 25 秒）。 */
+function fakePortIo(c) {
+  let t = 0
+  return {
+    timeoutMs: c.timeoutMs,
+    intervalMs: 120,
+    now: () => t,
+    sleep: (ms) => {
+      t += ms
+      return Promise.resolve()
+    },
+    read: () => {
+      if (c.partialAtMs != null && t >= c.partialAtMs) return '5432\n' // 只有端口，没有 ws 路径
+      if (c.readyAtMs != null && t >= c.readyAtMs) return '5432\n/devtools/browser/fake-uuid\n'
+      return null
+    },
+    launcherExitCode: () => (c.exitsAtMs != null && t >= c.exitsAtMs ? 0 : null),
+  }
+}
+
+/** 跑 `PORT_WAIT_CASES`，返回不合格项的描述。 */
+async function selfTestPortWait() {
+  const bad = []
+  for (const c of PORT_WAIT_CASES) {
+    const got = await waitForDevToolsPort(fakePortIo(c))
+    if (got.ok !== c.want) {
+      bad.push(
+        `启动器退出于 ${c.exitsAtMs ?? '—'}ms / 文件落盘于 ${c.readyAtMs ?? '从不'}${c.partialAtMs != null ? '（半截）' : ''} ⇒ ` +
+          `得到 ${got.ok ? `成功(port=${got.port})` : '失败'}，应为 ${c.want ? '成功' : '失败'}（${c.why}）`,
+      )
+    }
+    // 成功时必须带回**两个**值 —— 只有端口不算数
+    if (got.ok && !(got.port > 0 && got.wsPath)) bad.push(`成功但 port/wsPath 不全：${JSON.stringify(got)}（${c.why}）`)
+  }
+  return bad
+}
+
 async function launchChrome(exe) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ng-smoke-'))
   const child = spawn(
@@ -781,29 +906,81 @@ async function launchChrome(exe) {
   // 🔴 不能自己拼 `/devtools/browser` —— 少了那段 uuid 会握手失败
   //    （报 "Received network error or non-101 status code"），且看不出是路径问题。
   // 用 =0 让系统分配端口，避免与其他进程抢 9222。
+  //
+  // 🔴 判「起没起来」的逻辑在 `waitForDevToolsPort()`（唯一实现，带自测）。
+  //    这里只喂真实实现给它。**不要**在这个函数里再自己写一遍等待循环 ——
+  //    曾经就是这么写出来的，而且写错的那一句（"启动进程退出就放弃"）
+  //    把 Windows 上正常的启动判成了失败，详见 `PORT_WAIT_CASES` 第 2 例。
   const portFile = path.join(userDataDir, 'DevToolsActivePort')
-  const deadline = Date.now() + 25000
-  let port = 0
-  let wsPath = ''
-  while (Date.now() < deadline) {
-    if (fs.existsSync(portFile)) {
-      const txt = fs.readFileSync(portFile, 'utf8').split('\n')
-      port = Number(txt[0])
-      wsPath = (txt[1] || '').trim()
-      if (port > 0 && wsPath) break
-    }
-    if (child.exitCode != null) break
-    await sleep(120)
-  }
+  const r = await waitForDevToolsPort({
+    timeoutMs: LAUNCH_TIMEOUT_MS,
+    intervalMs: 120,
+    now: () => Date.now(),
+    sleep,
+    read: () => (fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8') : null),
+    launcherExitCode: () => child.exitCode,
+  })
 
-  if (!port || !wsPath) {
+  if (!r.ok) {
+    // 失败时把「判断依据」而不是「结论」打出来：下次再遇到，不必再猜五轮。
+    // 需要能一眼区分「压根没跑起来」/「跑了但没起调试口」/「起来了只是慢」。
+    let dirList = '(目录不存在)'
+    try {
+      dirList = fs.readdirSync(userDataDir).slice(0, 12).join(' ')
+    } catch {
+      /* 保持原样 */
+    }
     child.kill()
     throw new Error(
-      `Chrome 启动失败（未写出 DevToolsActivePort，exit=${child.exitCode}）\n` +
-        `  exe: ${exe}\n  最近 stderr: ${stderr.slice(-600) || '(空)'}`,
+      `Chrome 启动失败（${LAUNCH_TIMEOUT_MS}ms 内没写出 DevToolsActivePort）\n` +
+        `  exe:               ${exe}\n` +
+        `  user-data-dir:     ${userDataDir}\n` +
+        `  启动器退出码:      ${r.launcherExitCode === null ? '(仍在跑)' : r.launcherExitCode}\n` +
+        `  ⚠ 注意：启动器退出码**不是**判据（Chrome 在 Windows 上是两段式启动，\n` +
+        `     启动器退 0 很正常、浏览器在另一个进程里继续跑）。看"目录内容"那一行。\n` +
+        `  DevToolsActivePort: ${fs.existsSync(portFile) ? JSON.stringify(fs.readFileSync(portFile, 'utf8').slice(0, 80)) : '不存在'}\n` +
+        `  目录内容:          ${dirList}\n` +
+        `  最近 stderr:       ${stderr.slice(-600) || '(空)'}`,
     )
   }
-  return { child, userDataDir, port, wsPath }
+  return { child, userDataDir, port: r.port, wsPath: r.wsPath }
+}
+
+/**
+ * 收尾：把**浏览器本身**关掉。
+ *
+ * 🔴 不能只 `child.kill()` —— 那个进程在 `launchChrome` 里返回前就已经 `exit(0)` 了，
+ *    杀它等于什么都没做，浏览器会一直活着、一直占着它的 user-data-dir，于是
+ *    `fs.rmSync(userDataDir)` **静默失败**、Temp 里堆满 `ng-smoke-*`。
+ *    （本机实测：诊断跑一轮就泄漏 5 个，且早先几轮留下的死目录累计 54 个。）
+ *    走 CDP 的 `Browser.close` 才关得掉那个**真正在跑的**浏览器。
+ */
+async function shutdownBrowser(cdp, child, userDataDir, dbgPort) {
+  // `Browser.close` 不会回响应（浏览器自己就没了），所以与 3s 超时赛跑。
+  try {
+    await Promise.race([cdp.send('Browser.close'), sleep(3000)])
+  } catch {
+    /* 已经挂了，正常 */
+  }
+  cdp.close()
+  try {
+    child.kill()
+  } catch {
+    /* 启动器早退了，正常 */
+  }
+  // 等它真的放掉 user-data-dir 再删，否则 Windows 上必删不掉（还看不到报错）。
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    let alive = false
+    try {
+      await fetch(`http://127.0.0.1:${dbgPort}/json/version`, { signal: AbortSignal.timeout(600) })
+      alive = true
+    } catch {
+      /* 连不上 = 已经关了 */
+    }
+    if (!alive) break
+    await sleep(150)
+  }
 }
 
 // ─────────────────────────── 断言执行 ───────────────────────────
@@ -988,6 +1165,51 @@ function readOnboardingKey() {
 const ONBOARDING_KEY = readOnboardingKey()
 
 /**
+ * 源码里当前的 `ONBOARDING_VERSION` —— 同样**从源码读**，不在这里再写一份。
+ *
+ * 🔴 为什么连这个数也要钉：`markOnboardingDone()` 写下去的值必须是**当前版本号**。
+ *    哪天有人 bump 了常量却忘了它被写进 `localStorage` 的也是它（比如改成写死 `1`），
+ *    症状是"**引导每次启动都讲一遍**"，而"标志落盘了"那条断言只断 `>= 1` 照样绿。
+ *    钉住 `=== 当前版本` 之后，这种漂移当场红。
+ */
+function readOnboardingVersion() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/platform/onboarding.ts'), 'utf8')
+  const m = /export const ONBOARDING_VERSION\s*=\s*(\d+)/.exec(src)
+  return m ? Number(m[1]) : 0
+}
+
+const ONBOARDING_VERSION = readOnboardingVersion()
+
+/**
+ * 界面上「重试摄像头」那个按钮的**真实文案** —— 从 `NeckActivity.tsx` 读，不在这里再写一份。
+ *
+ * 🔴 为什么这条要跨文件读：第 2 步现在会承诺"`界面上出现「重试摄像头」就点它`"。
+ *    引导里说了一个**界面上做不到**的动作，比不说更伤 —— 用户会以为自己没找到
+ *    （`onboarding.ts` 那段注释就是为这个写的）。而"文案里提到了某个词"这种断言，
+ *    只有把它**钉在真实按钮上**才有意义：单写在守卫里就又成了一份会各自漂移的副本。
+ *    于是：**改按钮文案而忘了改引导 ⇒ 这条红**，两边必须一起改。
+ *    （这与 `readHintTexts()` 从 `exerciseQuality.ts` 读提示语是同一套做法。）
+ *
+ * ⚠️ 读不到时返回 `''`，并且**上不了车**：`includes('')` 恒真，
+ *    那会让下面那条断言变成永远绿的摆设 —— 所以正文那边先有一条"读得到"的自检。
+ */
+function readCameraRetryLabels() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/pages/NeckActivity.tsx'), 'utf8')
+  const out = []
+  // 🔴 认的是**动作**不是文案：`onClick={() => startCamera()}`
+  //    = "重新取一次摄像头流"，那正是引导承诺的那个出口。
+  //    按文案找会误伤同文件里另一颗「重试」按钮（它是后端/模型异常的出口，
+  //    文案形如 `重试`，与摄像头无关）—— 实测第一次就是这么写错的。
+  const re = /onClick=\{\(\) => startCamera\(\)\}[\s\S]{0,240}?>\s*([^<>\n]{1,12}?)\s*<\/button>/g
+  let m
+  while ((m = re.exec(src))) out.push(m[1].trim())
+  return out
+}
+
+/** 界面上「重试摄像头」按钮的文案（两端应各有一颗，且应一致）。 */
+const CAMERA_RETRY_LABELS = readCameraRetryLabels()
+
+/**
  * 新手引导那一段的全部断言。返回时把 URL 交还给后面的 ROUTES 段。
  *
  * 进入本函数前，调用方已经**清掉标志并重新加载**过 —— 所以这里从"没见过引导的新用户"
@@ -1013,6 +1235,10 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
        const h2 = root.querySelector('h2');
        const dots = root.querySelector('[data-ng="onboarding-dots"]');
        const texts = [...root.querySelectorAll('button')].map((b) => b.textContent.replace(/\\s/g, ''));
+       // 取景示意图：**锚点 + 尺寸一起读**。只读"锚点在不在"会漏掉
+       // "锚点在但被样式压成 0 高"（那等于图没显示，而断言照样绿 —— 铁律 #70）。
+       const fig = root.querySelector('[data-ng="onboarding-framing"]');
+       const box = fig ? fig.getBoundingClientRect() : null;
        return {
          title: h2 ? h2.textContent : '',
          progress: dots ? dots.textContent.replace(/\\s/g, '') : '',
@@ -1020,6 +1246,10 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
          next: texts.indexOf('下一步') >= 0,
          done: texts.indexOf('开始使用') >= 0,
          skip: texts.indexOf('跳过') >= 0,
+         startNow: texts.indexOf('▶立即试一次') >= 0,
+         framing: !!fig,
+         framingW: box ? Math.round(box.width) : 0,
+         framingH: box ? Math.round(box.height) : 0,
        };
      })()`
 
@@ -1075,6 +1305,8 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
   // ③ 逐步走完：每点一次，标题都必须**变**  //    只断言"遮罩还在"会漏掉"卡在第 1 步不动"；只断言"点了有反应"会漏掉"四步同一份文案"。
   const titles = [info.title]
   const bodies = [info.body]
+  /** 每一步的取景示意图读数（`{on, w, h}`）—— 用来断言"**只有**第 2 步有、且真的占位"。 */
+  const figs = [{ on: info.framing, w: info.framingW, h: info.framingH }]
   let last = info
   for (let n = 2; n <= 4; n++) {
     const clicked = await evaluate(cdp, sessionId, clickByText('下一步'))
@@ -1091,6 +1323,9 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
     last = r.value
     titles.push(last.title)
     bodies.push(last.body)
+    figs.push({ on: last.framing, w: last.framingW, h: last.framingH })
+    // 第 2 步是唯一带示意图的一步 —— 排版塌没塌只有看图才知道，所以额外留一张。
+    if (n === 2) await shoot('2')
   }
   run.check(titles.length === 4, `${where} 4 步全走到了`, `实际走到 ${titles.length} 步`)
   run.check(
@@ -1102,6 +1337,26 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
     !last.next && last.done,
     `${where} 最后一步是「开始使用」而不是「下一步」`,
     `next=${last.next} done=${last.done}`,
+  )
+
+  // ③a′ 取景示意图（v1.7.2）：**只有第 2 步**该有，而且必须**真的占位**。
+  //
+  // 为什么两边都断：只断"第 2 步有图"抓不到"`visual` 被忽略、每一步都画了图"
+  // （那种实现下第 2 步照样有图，断言全绿，但第 1 步的欢迎页会莫名多一张人形图）。
+  // 为什么断尺寸：只断锚点存在会漏掉"锚点在、被样式压成 0 高"——
+  // 那与"图没显示"在观感上等价，而断言照样绿（铁律 #70 的同一类病）。
+  const figSteps = figs.map((f, i) => (f.on ? i + 1 : 0)).filter(Boolean)
+  run.check(
+    figSteps.length === 1 && figSteps[0] === 2,
+    `${where} 取景示意图只出现在第 2 步`,
+    `实际出现在第 ${figSteps.join(' / ') || '(哪一步都没有)'} 步 —— ` +
+      '`visual` 字段被忽略（每步都画）或挂错步骤了（`onboarding.ts` 的 step.visual）',
+  )
+  const f2 = figs[1] || { on: false, w: 0, h: 0 }
+  run.check(
+    f2.on && f2.w > 40 && f2.h > 20,
+    `${where} 第 2 步的取景示意图真的渲染出来了（锚点读得到且宽高非零）`,
+    `实际 ${JSON.stringify(f2)} —— 锚点在但尺寸为 0，等于图没显示`,
   )
 
   // ③b 平台差异：第 2 步的形态措辞、第 4 步的托盘/自启措辞都**来自能力矩阵**。
@@ -1121,6 +1376,17 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
     !step2.includes(wrong2),
     `${where} 第 2 步不出现另一种形态的措辞（${wrong2}）`,
     'isMobile() 判定失效：两边都渲染，或判定反了',
+  )
+  // ③b′ 摄像头失败时的自救路径（v1.7.2）。
+  //
+  // 这一步**必须**给出"看不到画面时怎么办"，而且必须点名界面上**真的存在**的那个按钮：
+  // 引导里说了一个做不到的动作，比不说更伤（用户会以为自己没找到）。
+  // 所以这条断言不钉文案，钉的是**跨界引用**：文案取自 `NeckActivity.tsx` 里
+  // `onClick={() => startCamera()}` 那颗按钮（两端各一颗），改按钮忘了改引导 ⇒ 红。
+  run.check(
+    CAMERA_RETRY_LABELS.length > 0 && step2.includes(CAMERA_RETRY_LABELS[0]),
+    `${where} 第 2 步点名了界面上真实的「${CAMERA_RETRY_LABELS[0] || '(读不到)'}」出口`,
+    `第 2 步实际文案：${step2.slice(0, 200)}`,
   )
   run.check(
     c.systemTray ? step4.includes('系统托盘') : step4.includes('不会常驻后台'),
@@ -1199,9 +1465,10 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
   const flagOf = `(() => { try { return localStorage.getItem(${JSON.stringify(key)}) } catch (e) { return null } })()`
   const flag = await evaluate(cdp, sessionId, flagOf)
   run.check(
-    flag.ok && flag.value !== null && Number(flag.value) >= 1,
-    `${where} 「已看过」标志真的落盘`,
-    `localStorage[${key}] = ${JSON.stringify(flag.value)}（没落盘 ⇒ 每次启动都会再讲一遍）`,
+    flag.ok && Number(flag.value) === ONBOARDING_VERSION,
+    `${where} 「已看过」标志落盘且等于当前引导版本（${ONBOARDING_VERSION}）`,
+    `localStorage[${key}] = ${JSON.stringify(flag.value)}（期望 ${ONBOARDING_VERSION}）—— ` +
+      '写了个旧版本号 ⇒ 下次启动会再讲一遍',
   )
 
   // ⑤ 再次加载：不再自动出现 —— "只讲一次"这件事唯一的证据
@@ -1260,10 +1527,89 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
 
     const still = await evaluate(cdp, sessionId, flagOf)
     run.check(
-      still.ok && still.value !== null && Number(still.value) >= 1,
+      still.ok && Number(still.value) === ONBOARDING_VERSION,
       `${where} 回看 / 跳过都不会清掉「已看过」标志`,
       `标志变成 ${JSON.stringify(still.value)} —— 回看不该改变"下次启动是否显示"`,
     )
+
+    // ⑦ 「立即试一次」（v1.7.2）：引导的第二个出口 —— 关掉**并直接开始第一个动作**。
+    //
+    // 🔴 判据必须落到「**练习模式真的起来了**」，不能只看"遮罩消失 + 回到首页"：
+    //    一个"只关引导、不启动活动"的实现（忘了落 sessionStorage / 忘了派发事件）
+    //    完全满足后者 —— 而"直接开始做"正是这条出口**存在的全部意义**，
+    //    也是最容易只做一半的地方。
+    //
+    // 放在回看路径里跑：走到这里引导已经关过一轮，再点一次「重新查看新手引导」
+    // 就能重放整条出口流程 —— 不必给主路径再加一次开合（那会让"4 步走完 → 开始使用"
+    // 这条主路径被两件事混在一起，失败时也说不清是哪条坏的）。
+    const reopened2 = await evaluate(cdp, sessionId, clickByText('重新查看新手引导'))
+    run.check(reopened2.ok && reopened2.value === true, `${where} 点得到回看入口（第二次）`, '按钮不存在')
+    await waitFor(cdp, sessionId, `!!document.querySelector(${SEL_Q})`, {
+      timeout: 5000,
+      label: `${where} 回看时引导再次出现（第二次）`,
+    })
+    // 中间步骤**不该**有这个按钮：它是"走到最后"的回报。出现在每一步会让
+    // 「下一步」与它并列，用户在还没读完时就被推着开始做。
+    // ⚠️ 必须在**翻开到第 4 步之前**读（回看总是从第 1 步开始 —— 上一段已单独断过）。
+    const earlyStep = await evaluate(cdp, sessionId, `(() => {
+         const root = document.querySelector(${SEL_Q});
+         return !!(root && root.querySelector('[data-ng="onboarding-start-now"]'));
+       })()`)
+    run.check(
+      !(earlyStep.ok && earlyStep.value === true),
+      `${where} 中间步骤没有「立即试一次」（只有最后一步才有）`,
+      '第 1 步就渲染了它 —— 用户还没读完就被推着开始',
+    )
+    for (let n = 0; n < 3; n++) {
+      await evaluate(cdp, sessionId, clickByText('下一步'))
+      await sleep(160)
+    }
+    const lastStep = await evaluate(cdp, sessionId, readStep)
+    run.check(
+      !!(lastStep.value && lastStep.value.startNow),
+      `${where} 最后一步有「立即试一次」`,
+      '最后一步缺这个出口 —— `App.tsx` 没传 `onStartExercise`，或组件里没渲染',
+    )
+    const clickedStartNow = await evaluate(cdp, sessionId, `(() => {
+         const b = document.querySelector('[data-ng="onboarding-start-now"]');
+         if (!b) return false;
+         b.click();
+         return true;
+       })()`)
+    run.check(clickedStartNow.ok && clickedStartNow.value === true, `${where} 点得到「立即试一次」`, '按钮不存在')
+    try {
+      await waitFor(cdp, sessionId, `!document.querySelector(${SEL_Q})`, {
+        timeout: 5000,
+        label: `${where} 点「立即试一次」后遮罩消失`,
+      })
+      run.ok(`${where} 点「立即试一次」后遮罩消失`)
+    } catch (e) {
+      run.fail(`${where} 点「立即试一次」后遮罩消失`, e.message)
+    }
+    // 「结束活动」只有**练习中**才存在 —— 用它当"真的开始做了"的界面证据。
+    // ⚠️ 不断"回到了首页"：那是「开始使用」就会有的结果，区分不出这两条出口的差别。
+    try {
+      await waitFor(
+        cdp,
+        sessionId,
+        `(() => [...document.querySelectorAll('button')]
+             .some((b) => b.textContent.replace(/\\s/g, '') === '结束活动'))()`,
+        { timeout: 8000, label: `${where} 进入练习模式` },
+      )
+      run.ok(`${where} 「立即试一次」真的进入了练习模式（不是只关了引导）`)
+    } catch (e) {
+      run.fail(
+        `${where} 「立即试一次」真的进入了练习模式`,
+        `点了之后没出现「结束活动」—— 只关了引导、没启动活动？` +
+          `检查 sessionStorage[key] 与 start-exercise-mode 事件这条链：${e.message}`,
+      )
+    }
+    // 收尾：**别把"练习中"留给后面的 ROUTES 段**（它假定 `#/` 是监控态，
+    // 否则读到的是练习条而不是指标卡）。reload 最省事：练习模式是组件状态，重载即复位。
+    await cdp.send('Page.reload', {}, sessionId)
+    await waitFor(cdp, sessionId, `document.readyState === 'complete'`, {
+      label: `${where} 试一次后重新加载`,
+    })
   } catch (e) {
     run.fail(`${where} 回看入口`, e.message)
   }
@@ -1929,7 +2275,8 @@ async function main() {
   //    「该红的没红」（低帧率把真失败洗成环境问题）与「已经正确的读数被判成环境问题」
   //    —— 两种**都不会让守卫自己叫出来**。它是这段唯一一处政策实现，必须自己先有牙。
   const selfBad = selfTest()
-  if (SELF_TEST_ONLY || selfBad.length) {
+  const portBad = await selfTestPortWait()
+  if (SELF_TEST_ONLY || selfBad.length || portBad.length) {
     console.log(`采信判据自测（${TRUST_CASES.length} 例：帧率 × 结论两个轴交叉）`)
     for (const c of TRUST_CASES) {
       const got = trustCameraRound(
@@ -1941,17 +2288,34 @@ async function main() {
           ` / 结论${c.verdictOk ? '一致  ' : '对不上'} → ${got.padEnd(15)}（期望 ${c.want}；${c.why}）`,
       )
     }
+    console.log(`\n启动等待自测（${PORT_WAIT_CASES.length} 例：文件何时落盘 × 启动器何时退）`)
+    for (const c of PORT_WAIT_CASES) {
+      const got = await waitForDevToolsPort(fakePortIo(c))
+      const ok = got.ok === c.want
+      console.log(
+        `  ${ok ? '✓' : '✗'} 启动器退 ${String(c.exitsAtMs ?? '—').padStart(5)}ms` +
+          ` / 文件 ${String(c.readyAtMs ?? '从不').padStart(5)}ms${c.partialAtMs != null ? '(半截)' : ''}` +
+          ` → ${(got.ok ? '成功' : '失败').padEnd(3)}（期望 ${c.want ? '成功' : '失败'}；${c.why}）`,
+      )
+    }
   }
   if (selfBad.length) {
     console.error(`::error::采信判据自测失败 ${selfBad.length}/${TRUST_CASES.length}：`)
     for (const b of selfBad) console.error(`  ✗ ${b}`)
     process.exit(1)
   }
+  if (portBad.length) {
+    console.error(`::error::启动等待自测失败 ${portBad.length}/${PORT_WAIT_CASES.length}：`)
+    for (const b of portBad) console.error(`  ✗ ${b}`)
+    process.exit(1)
+  }
   if (SELF_TEST_ONLY) {
     console.log(`✅ 采信判据自测通过 ${TRUST_CASES.length}/${TRUST_CASES.length}`)
+    console.log(`✅ 启动等待自测通过 ${PORT_WAIT_CASES.length}/${PORT_WAIT_CASES.length}`)
     process.exit(0)
   }
-  console.log(`✓ 采信判据自测 ${TRUST_CASES.length}/${TRUST_CASES.length}\n`)
+  console.log(`✓ 采信判据自测 ${TRUST_CASES.length}/${TRUST_CASES.length}`)
+  console.log(`✓ 启动等待自测 ${PORT_WAIT_CASES.length}/${PORT_WAIT_CASES.length}\n`)
 
   if (!fs.existsSync(path.join(DIST, 'index.html'))) {
     console.error(`::error::UI 冒烟无法进行：${DIST}/index.html 不存在（先跑 npm run build:web）`)
@@ -2022,6 +2386,24 @@ async function main() {
     `新手引导的持久化键仍是 ${EXPECTED_ONBOARDING_KEY}`,
     `源码里读到的是 ${JSON.stringify(ONBOARDING_KEY)} —— 换键会让老用户的「已看过」作废；` +
       `若确属有意，同步改本脚本的 EXPECTED_ONBOARDING_KEY 并接受"老用户再看一次引导"`,
+  )
+  // 先证明**这个数真的读到了**：读不到时它是 0，后面那条"标志 === 版本"会以
+  // "标志不对"的形状报出来 —— 那会把"我的正则没匹配上"误诊成"实现写错了版本号"。
+  // （与铁律 #70 同一条道理：先证明测量工具读到了，再下关于被测对象的结论。）
+  run.check(
+    ONBOARDING_VERSION >= 1,
+    `读得到当前引导版本（ONBOARDING_VERSION = ${ONBOARDING_VERSION}）`,
+    '从 src/platform/onboarding.ts 里没解析出版本号 —— 改写法了？本脚本的正则要跟着改',
+  )
+  // 同理，先证明"界面上那颗重试按钮的文案"读得到，再去断言引导与它一致。
+  // 🔴 读不到时它是空串、而 `includes('')` **恒真** —— 少了这条自检，
+  //    下面那条断言会变成永远绿的摆设（铁律 #70 的同一类病）。
+  run.check(
+    CAMERA_RETRY_LABELS.length > 0 && new Set(CAMERA_RETRY_LABELS).size === 1,
+    `读得到「重试摄像头」按钮的文案（${JSON.stringify(CAMERA_RETRY_LABELS)}）`,
+    CAMERA_RETRY_LABELS.length === 0
+      ? '在 NeckActivity.tsx 里找不到 onClick={() => startCamera()} 的按钮 —— 改写法了？本脚本的正则要跟着改'
+      : `两端文案不一致：${JSON.stringify(CAMERA_RETRY_LABELS)} —— 引导只可能点名其中一个`,
   )
 
   const cleanup = () => {
@@ -2709,10 +3091,13 @@ async function main() {
     }
   } catch (e) {
     console.error(`::error::UI 冒烟执行失败：${e.message}`)
+    // 失败路径也要**把浏览器关掉**（走 CDP），否则它会连带占住的 user-data-dir 一起留下来。
+    await shutdownBrowser(cdp, child, userDataDir, dbgPort)
     cleanup()
     process.exit(1)
   }
 
+  await shutdownBrowser(cdp, child, userDataDir, dbgPort)
   cleanup()
 
   console.log('─'.repeat(60))
