@@ -1810,7 +1810,8 @@ async function checkCameraGuidanceWithRetry(cdp, sessionId, run, c, ui) {
   const lowNote = (r) =>
     `    ⚠ ${c.name} 假摄像头实时引导：本轮 ${fmt(r)} < 环境门 ${f1(ui.rate_floor_browser)} 帧/秒，` +
     `但结论与 fixture 一致（${what(r)}）⇒ 照常采信。` +
-    `**这一段是在偏挤的环境下验的**（实测 1.6 帧/秒就判不出 completed）—— 记进线报，别当常态`
+    `**这一段是在偏挤的环境下验的** —— 那一档的结论不可信（实测两个平台**都**跑 1.5 帧/秒时，` +
+    `一个判 completed 84、另一个判 insufficient 76 ⇒ 跨在 80 分达标线上摇摆），记进线报，别当常态`
 
   const first = new ShadowRunner()
   const r1 = await checkCameraGuidance(cdp, sessionId, first, c, ui)

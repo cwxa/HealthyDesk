@@ -316,21 +316,25 @@ UI_SMOKE_RATES = (1.5, 2.0, 5.0)
 #   · `rate_floor`          ：离线重放里「算法还判得出 completed 吗」—— 模型问题
 #   · `rate_floor_browser`  ：浏览器里「这一次的读数还可信吗」—— 环境问题
 # 实测分叉（原始读数见 `docs/MULTIPLATFORM.md §9.9`）：同一份帧表在浏览器里
-# **2.7 / 2.9 / 4.2 / 4.5 帧/秒全判 completed**，而 **1.6 / 1.5 帧/秒判成
-# `insufficient score=76`**（CI run `36660895335`，rerun 两次都复现）。
+# **2.7 / 2.9 / 4.2 / 4.5 帧/秒全判 completed**；而 **1.5 – 1.6 帧/秒那一档结论不可信** ——
+# 最强的一条证据是 CI run `36676223799`：**同一次 run、两个平台都跑 1.5 帧/秒**，
+# android 判 `completed score=84`、ios 判 `insufficient score=76`
+# ⇒ 结论**跨在 80 分达标线上摇摆**（另有 `36660895335`：1.5/1.6 都判 76）。
 # 原因是浏览器里的读数来自 MediaPipe 的**逐帧跟踪**（`static_image_mode=False`）：
 # 帧隔得越久越要重新收敛、读数越低；而离线扫描只把同一串读数**重打时间戳**
 # （见 `rate_sweep()`），这一层它建模不出来。
-# ⇒ 2.0 落在"实测判得出的最低档（2.7）"与"实测判不出的最高档（1.6）"之间。
+# ⇒ 2.0 落在"实测稳得住的最低档（2.7）"与"实测摇摆的那一档（1.5–1.6）"之间。
 UI_SMOKE_RATE_FLOOR_BROWSER = 2.0
 UI_SMOKE_RATE_FLOOR_BROWSER_WHY = (
     "浏览器里读数的**可信下界**（= `verify:ui` 的「环境够不够」门）。"
     "与 `rate_floor`（离线扫描最低档）分开登记，是因为实测分叉：同一份帧表在浏览器里"
-    "2.7–4.5 帧/秒判成 completed、1.5–1.6 帧/秒判成 insufficient score=76，"
-    "而离线扫描说 1.5 那一档仍是 completed（它只重打时间戳，建模不出"
-    "`static_image_mode=False` 的逐帧跟踪在长间隔下要重新收敛）。"
+    "2.7–4.5 帧/秒稳定判成 completed，而 1.5–1.6 帧/秒那一档**结论不可信** —— "
+    "CI `36676223799` 同一次 run 里两个平台都跑 1.5 帧/秒，一个判 completed score=84、"
+    "另一个判 insufficient score=76（跨在 80 分达标线上摇摆）；"
+    "`36660895335` 的 1.5/1.6 也判成 insufficient。"
+    "根因是离线扫描只重打时间戳、建模不出 `static_image_mode=False` 的逐帧跟踪在长间隔下要重新收敛。"
     "语义：**低帧率只决定「这一轮该不该采信」，不单独当失败理由** —— "
-    "帧率低于它但结论仍与期望一致照样通过（只记一条 ⚠）；"
+    "帧率低于它但结论仍与期望一致照样通过（只记一条 ⚠，并注明那一档不可信）；"
     "低于它**且**判不出 expected 才重试一次，两轮如此才报「环境不足」。"
     "低于 `rate_floor` 则连离线模型都没证过那一档，结论对得上也不采信。"
 )
@@ -706,7 +710,8 @@ def rate_sweep(series: list[dict], spec: dict) -> dict:
     🔴 **这条"读数与时间戳无关"只对离线重放成立，在浏览器里是假的。**
     浏览器里的读数来自 MediaPipe 的**逐帧跟踪**（`static_image_mode=False`），
     帧隔得越久越要重新收敛、读数越低 —— 而这一步扫描**建模不出来**。
-    实测：同一份帧表在浏览器里 1.5–1.6 帧/秒判成 `insufficient score=76`，
+    实测：浏览器里 1.5–1.6 帧/秒那一档的**结论不可信**（同一次 CI run 里两个平台都跑
+    1.5 帧/秒，一个判 `completed 84`、一个判 `insufficient 76` ⇒ 跨在 80 分线上摇摆），
     而这里说那一档是 `completed`（详见 `UI_SMOKE_RATE_FLOOR_BROWSER`）。
     ⇒ 这一段的结论**只能**读成"离线模型在哪个帧率下还站得住"，
     **不是**"浏览器里那个帧率一定判得出来"。后者由 `rate_floor_browser` 那个门回答。
@@ -940,7 +945,7 @@ def report(doc: dict, title: str) -> tuple[int, list[str]]:
           f" / 保持 {mg['hold']:+.3f}（vs HOLD_TARGET_RATIO）")
     print(f"  两个帧率下界（**各有各的问题，别合并**）："
           f"离线模型 {ui['rate_floor']} 帧/秒 ｜ 浏览器环境门 {ui['rate_floor_browser']} 帧/秒"
-          f"（实测分叉：浏览器 1.5–1.6 判成 insufficient）")
+          f"（实测分叉：浏览器 1.5–1.6 那一档结论摇摆、不可信）")
 
     grades = {c["verdict"]["grade"] for c in doc["cases"]}
     hints = {c["verdict"]["hint"] for c in doc["cases"]}
