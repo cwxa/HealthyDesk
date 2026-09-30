@@ -777,6 +777,27 @@ class Runner {
   }
 }
 
+/**
+ * 影子收集器：接口与 `Runner` 一致，但**不打印、不计数**，只把每次断言的参数存下来。
+ * 用途见 `checkCameraGuidanceWithRetry()` —— 环境太差时整段重跑，
+ * 那一轮的结果必须能整体丢弃（或整体回放），不能直接污染最终线报。
+ */
+class ShadowRunner {
+  constructor() {
+    this.checks = []
+  }
+  ok(label) {
+    this.checks.push([true, label, undefined])
+  }
+  fail(label, detail) {
+    this.checks.push([false, label, detail])
+  }
+  check(cond, label, detail) {
+    this.checks.push([!!cond, label, detail])
+    return !!cond
+  }
+}
+
 /** 在页面里求值；表达式抛错时返回 ok:false 而不是让整个脚本崩掉。 */
 async function evaluate(cdp, sessionId, expression) {
   const r = await cdp.send(
@@ -1245,7 +1266,7 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
       `${where} 假摄像头在 document-start 注入成功`,
       inj.value ? `window.__ngFakeCam=${inj.value.has}，err=${inj.value.err}` : inj.error,
     )
-    if (!injOk) return
+    if (!injOk) return null
 
     await waitFor(cdp, sessionId, `window.__ngFakeCam.ready()`, {
       timeout: 8000,
@@ -1604,9 +1625,62 @@ async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
         )
       }
     }
+    // 把本轮的**关键量**交出去（供 `checkCameraGuidanceWithRetry` 判"环境够不够"）。
+    // 只交数值，不交结论 —— 断言已经在上面 `run.check` 过了。
+    return { rate, clickAt, pushed, samples }
   } catch (e) {
     run.fail(where, e.message)
+    return null
   }
+}
+
+/**
+ * 跑假摄像头那一段，**环境不足时整段重来一次**。
+ *
+ * 🔴 为什么需要它：这一段要求无头页里的 MediaPipe 真的在出帧，而 **CI runner 的负载波动极大** ——
+ * 实测同一台 runner 上帧率在 **0.3 – 4.8 帧/秒** 之间跳（差 16 倍），最差那次 10 秒只推到 **5 帧**，
+ * 连带 **10 项断言红**，而且**全是"帧没进来"的下游症状**（姿态读数 1.4°、浮层没出现、
+ * 徽章读不到、判成 insufficient），没有一条在说判定实现错了 —— 方向完全指错。
+ *
+ * 那种红**不是代码缺陷**，但也不能靠"放宽帧率下界"消掉
+ * （那正是"为了让测试变绿而削弱断言"，铁律不允许；而且下界 1.5 是**离线扫描过**的数）。
+ *
+ * 做法：第一轮跑进**影子收集器**（不打印、不计数）。帧率达标就把那一轮的断言**原样回放**；
+ * 不达标就整段重来一次（`checkCameraGuidance` 开头本来就会回到 `#/` 再 reload，
+ * 天然可以重跑）。两轮都不达标 ⇒ 如实红，但**报错形状指向环境**：
+ * 先给一条明确的"环境不足"，再回放第二轮的原始结果 —— 不掩盖任何东西，
+ * 但读线报的人不会去判定实现里找不存在的问题。
+ */
+async function checkCameraGuidanceWithRetry(cdp, sessionId, run, c, ui) {
+  const replay = (shadow, into) => {
+    for (const [cond, label, detail] of shadow.checks) into.check(cond, label, detail)
+  }
+  const fmt = (r) => (r ? `${r.rate.toFixed(1)} 帧/秒` : '异常/提前返回')
+
+  const first = new ShadowRunner()
+  const r1 = await checkCameraGuidance(cdp, sessionId, first, c, ui)
+  if (r1 && r1.rate >= ui.rate_floor) {
+    replay(first, run)
+    return
+  }
+
+  console.log(
+    `    ⚠ ${c.name} 假摄像头实时引导：本轮 ${fmt(r1)} < ${ui.rate_floor} —— runner 被挤了，整段重试一次`,
+  )
+  const second = new ShadowRunner()
+  const r2 = await checkCameraGuidance(cdp, sessionId, second, c, ui)
+  if (r2 && r2.rate >= ui.rate_floor) {
+    replay(second, run)
+    return
+  }
+
+  run.fail(
+    `${c.name} 假摄像头实时引导 环境不足：两轮都没跑到 ${ui.rate_floor} 帧/秒`,
+    `第一轮 ${fmt(r1)}、第二轮 ${fmt(r2)} —— 无头页的推理被 runner 负载挤住了，` +
+      `**这一段本次没能验证**（不是判定实现的问题）。下面的失败多数是它的下游症状，先看这一条。` +
+      `若两轮都低到 1 帧/秒上下，多半是 runner 太忙，重跑一次比查代码更快`,
+  )
+  replay(second, run)
 }
 
 // ─────────────────────────── 主流程 ───────────────────────────
@@ -2309,7 +2383,7 @@ async function main() {
       //    而这一段会真的喂帧。反过来排，那段边界断言就成了"有帧时的值"，
       //    整个断言组都失效。这里重载一次页面把 `mode` 归零、再单独跑一次"有帧的活动"。
       if (c.form === '移动端' && UI_SMOKE) {
-        await checkCameraGuidance(cdp, sessionId, run, c, UI_SMOKE)
+        await checkCameraGuidanceWithRetry(cdp, sessionId, run, c, UI_SMOKE)
       }
 
       // 页面级错误汇总
