@@ -187,8 +187,27 @@ const METRIC_WIRING = { file: 'src/pages/NeckActivity.tsx', call: 'judgeExercise
  */
 const LIVE_SCORE_WIRING = {
   file: 'src/pages/NeckActivity.tsx',
+  panel: 'src/components/ExercisePanel.tsx',
   scored: 'scoreExercise(v, spec)',
-  assign: 'activityScore: liveQuality?.score ?? score',
+  /**
+   * 徽章的**唯一派生点**。
+   * 🔴 v1.7.1 起从 `exState` 的字段初始化式提成了一个变量 —— 因为页面上有**两处**
+   * 要显示它（移动端练习条 + 桌面面板），原来练习条那处自己读了运动态 `score`。
+   */
+  derive: 'const activityScore = liveQuality?.score ?? score',
+  /**
+   * 🔴 移动端练习条的徽章：必须用派生值，且必须带 `data-ng` 锚点。
+   *
+   * 这里记的是 v1.7.1 修掉的真实缺陷：练习条原来读 `score`（运动态通道），
+   * 于是同屏出现「浮层说『没检测到动作』、旁边徽章 73 分」和
+   * 「浮层说『很好，保持住』、徽章 73 分」。之所以拖了两轮才发现，是因为
+   * `verify:ui` 那条一致性断言的锚点选错了（移动端没有 `p「实时动作达成度」`）
+   * ⇒ 读数恒 `null` ⇒ 整段 `continue` ⇒ 断言恒绿却什么都没查（变异 M5 漏网才暴露）。
+   * 所以这里**同时**钉死"哪个值"与"哪个锚点"：少任何一个都会红。
+   */
+  bar: 'ngId="exercise-bar-score" score={activityScore}',
+  /** 桌面面板的徽章：同一个派生值 + 锚点。 */
+  panelGauge: 'ngId="live-activity-score" score={activityScore}',
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -568,21 +587,46 @@ async function main() {
     }
   }
 
-  // ── I. 实时徽章与实时提示同源（v1.7.0）────────────────────
+  // ── I. 实时徽章与实时提示同源（v1.7.0；v1.7.1 补全移动端）──
   // 徽章与提示是**同一屏并排**的两个东西。若徽章回到运动态通道（三项取最大的绝对偏离），
   // 它们会在"基线本身就超标"的姿势上互相打脸（徽章 72 分 / 提示说没动）。
+  //
+  // 🔴 v1.7.1 扩了这段，因为原来只钉了 `exState` 里那一行 —— 而页面上**两处**显示徽章，
+  //    移动端练习条那处读的是运动态 `score`，钉一个字段根本覆盖不到它。
+  //    现在改成"钉住**每个**徽章调用的取值 + 锚点"：漏一处就红一处。
   {
     const raw = readFileSync(join(ROOT, LIVE_SCORE_WIRING.file), 'utf8')
     const scored = count(raw, LIVE_SCORE_WIRING.scored)
-    const assigned = count(raw, LIVE_SCORE_WIRING.assign)
-    if (scored === 0 || assigned === 0) {
-      fail(
-        `I. 实时徽章没有与逐动作判定同源：${LIVE_SCORE_WIRING.file} 里 ` +
-          `${LIVE_SCORE_WIRING.scored} ×${scored}、${LIVE_SCORE_WIRING.assign} ×${assigned}` +
-          ' —— 徽章会退回运动态通道（三项取最大的绝对偏离），与旁边的提示互相打脸',
+    const derived = count(raw, LIVE_SCORE_WIRING.derive)
+    const bar = count(raw, LIVE_SCORE_WIRING.bar)
+    const panelRaw = readFileSync(join(ROOT, LIVE_SCORE_WIRING.panel), 'utf8')
+    const panelGauge = count(panelRaw, LIVE_SCORE_WIRING.panelGauge)
+
+    const problems = []
+    if (scored === 0) {
+      problems.push(`找不到 ${LIVE_SCORE_WIRING.scored} —— 实时分不再来自逐动作判定（这条守卫会空转）`)
+    }
+    if (derived !== 1) {
+      problems.push(
+        `${LIVE_SCORE_WIRING.file} 里「${LIVE_SCORE_WIRING.derive}」出现 ${derived} 次（要恰好 1 次）` +
+          ' —— 徽章的唯一派生点被搬走或复制了，两处显示会各自漂移',
       )
+    }
+    if (bar !== 1) {
+      problems.push(
+        `${LIVE_SCORE_WIRING.file} 里移动端练习条的徽章「${LIVE_SCORE_WIRING.bar}」出现 ${bar} 次（要恰好 1 次）` +
+          ' —— 少一次就是它又读回运动态 score / 丢了 data-ng 锚点，同屏两套口径会重现且守卫读不到',
+      )
+    }
+    if (panelGauge !== 1) {
+      problems.push(
+        `${LIVE_SCORE_WIRING.panel} 里面板徽章「${LIVE_SCORE_WIRING.panelGauge}」出现 ${panelGauge} 次（要恰好 1 次）`,
+      )
+    }
+    if (problems.length) {
+      fail(`I. 实时徽章没有与逐动作判定同源：${problems.join('；')}`)
     } else {
-      ok('I. 实时徽章与实时提示同源（同一个窗口 verdict、同一个 scoreExercise）')
+      ok('I. 两处实时徽章都与逐动作判定同源（同一个窗口 verdict、同一个 scoreExercise + 各自的 data-ng 锚点）')
     }
   }
 

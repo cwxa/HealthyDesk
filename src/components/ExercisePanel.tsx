@@ -255,7 +255,7 @@ export default function ExercisePanel({ state, onSkipCurrent, onEndExercise }: P
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
         <p style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>实时动作达成度</p>
         <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <ScoreGauge score={activityScore} size={80} hasData={hasPose} />
+          <ScoreGauge ngId="live-activity-score" score={activityScore} size={80} hasData={hasPose} />
         </div>
       </div>
 

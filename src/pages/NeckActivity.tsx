@@ -606,12 +606,24 @@ export default function NeckActivity() {
     return { grade: v.grade, hint: v.hint, score: scoreExercise(v, spec) }
   })()
 
+  /**
+   * 实时动作达成度（0–100）。**页面上每一处显示它的地方都必须用这一个值。**
+   *
+   * 🔴 v1.7.1 补：v1.7.0 把「徽章与提示同源」做进了 `exState`（桌面 `ExercisePanel`），
+   * 但**移动端练习条上那个徽章漏了** —— 它读的还是运动态 `score`，于是同屏出现
+   * 「浮层说『没检测到动作』、旁边徽章 73 分」和「浮层说『很好，保持住』、徽章 73 分」
+   * 两种互相打脸的组合。`verify:ui` 里那条一致性断言当时**选错了锚点**
+   * （移动端没有 `p"实时动作达成度"`），`gauge` 恒为 `null` 整段空转，所以一直没红。
+   * 两处都提到这里、并挂上 `ngId` 锚点，任何一处再回落到 `score` 都会被守卫当场抓住。
+   */
+  const activityScore = liveQuality?.score ?? score
+
   const exState: ExerciseState = {
     phase: mode === 'done' ? 'done' : 'active',
     current: exCurrent,
     timeLeft: exTimeLeft,
     // 有逐动作判定时用它的实时分（与提示同源）；否则回落到**运动态通道**（不是静息姿态分）
-    activityScore: liveQuality?.score ?? score,
+    activityScore,
     hasPose: latestResult?.type === 'pose',
     totalDur,
     progress,
@@ -908,7 +920,7 @@ export default function NeckActivity() {
                     <span style={{ fontSize: 10, color: '#999', flexShrink: 0 }}>{exCurrent + 1}/{exercises.length}</span>
                   </div>
                 </div>
-                <ScoreGauge score={score} size={44} hasData={hasPose} />
+                <ScoreGauge ngId="exercise-bar-score" score={activityScore} size={44} hasData={hasPose} />
               </div>
             )}
 

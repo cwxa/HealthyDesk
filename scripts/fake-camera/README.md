@@ -15,18 +15,16 @@
 
 | 路径 | 职责 | 入库 |
 | --- | --- | --- |
-| `build-frames.py` | **素材流水线 + 准入校验**。从 ImageGen 原图重建 `frames/` 与 `scenarios.json`；无参运行时**重测重放并与登记值逐项比对** | ✅ |
+| `build-frames.py` | **素材流水线 + 准入校验**。从 ImageGen 原图重建 `frames/` 与 `scenarios.json`（`--from-src=`）；无参运行时**重测重放并与登记值逐项比对**；`--rewrite` 从入库素材刷新登记表（**有闸门**，刷新不了判定结论） | ✅ |
 | `replay.mjs` | **消费端**：把登记序列喂给**移动端** TS 实现，与桌面端 Python 登记值做双端对拍（`npm run verify:fake-camera`，**已进 CI**） | ✅ |
-| `make-y4m.py` | 把案例序列写成 **Y4M** 供无头 Chrome 的假摄像头使用（见「注入浏览器」） | ✅ |
+| `make-y4m.py` | 把案例序列写成 **Y4M** 供无头 Chrome 的假摄像头使用（**备查路线**，最终走的是 CDP 注入，见「注入浏览器」） | ✅ |
 | `frames/*.jpg` | 6 帧 640×480 画面素材（共 456 KB） | ✅ |
-| `scenarios.json` | fixture：素材准入读数、逐帧序列、期望判定、阈值、实测结论（64 KB） | ✅ |
+| `scenarios.json` | fixture：素材准入读数、逐帧序列、期望判定、阈值、实测结论、`ui_smoke`（喂给 `verify:ui` 的那份帧表 + 帧率扫描）（68 KB） | ✅ |
 | 原图（ImageGen 出品，3 张 PNG 共 2.8 MB） | 只做再生成用；**不入库**（花 credits、体积大、可复现性靠 prompt 记录） | ❌ |
 
-原图与 ImageGen prompt 记录在 `.buildenv/fake-camera-src/`；重建命令：
-
-```bash
-.buildenv/Scripts/python.exe scripts/fake-camera/build-frames.py --from-src=.buildenv/fake-camera-src
-```
+> ⚠️ 原图与 prompt 记录在 `.buildenv/fake-camera-src/` —— 那是**本机临时目录**，
+> 不在版本控制里。所以**换机器之后 `--from-src` 就跑不了了**，改喂帧表只能走
+> `--rewrite`（它对判定结论有闸门）。重建素材则需要重新用 ImageGen 出图（花钱）。
 
 ## 命令
 
@@ -34,12 +32,21 @@
 # 1) 校验模式：重测素材 + 重放 7 个案例，与 scenarios.json 逐项比对（需要 mediapipe）
 .buildenv/Scripts/python.exe scripts/fake-camera/build-frames.py
 
+# 1b) 改了喂帧表 / 换了素材之后刷新登记表（原图不入库 ⇒ 这是唯一能改 ui_smoke 的路）
+#     🔴 有闸门：只在「除 ui_smoke 之外的一切都与登记值一致」时才写文件
+.buildenv/Scripts/python.exe scripts/fake-camera/build-frames.py --rewrite
+
+# 1c) 有原图时从零重建素材（需要 ImageGen 出的那 3 张 PNG，本机在 .buildenv/fake-camera-src/）
+.buildenv/Scripts/python.exe scripts/fake-camera/build-frames.py --from-src=.buildenv/fake-camera-src
+
 # 2) 双端对拍：同一个 fixture 喂给 TS 实现，六字段逐项比（纯 node + esbuild，**不需要 mediapipe**）
 npm run verify:fake-camera
 
-# 3) 生成假摄像头供片盘（可选，注入浏览器时才用）
+# 3) 把这份帧表真的喂进浏览器（移动端用例；`ui_smoke` 是它的输入）
+npm run verify:ui -- --case=android
+
+# 4) 生成假摄像头供片盘（备查路线 A，现在走的是 CDP 注入）
 .buildenv/Scripts/python.exe scripts/fake-camera/make-y4m.py --list
-.buildenv/Scripts/python.exe scripts/fake-camera/make-y4m.py --case=completed --out=.buildenv/fake-cam/completed.y4m
 ```
 
 > 分工：**重新生成案例需要 mediapipe**（要真跑推理）；**断言案例不需要** ——
@@ -187,22 +194,23 @@ npm run verify:fake-camera
 | **X1** | TS：`MIN_POSE_MS` 200 → 0（**抓不到，且这是对的**） | 本层逐帧间隔 = 200ms = `MIN_POSE_MS` ⇒ 时间支撑过滤本就惰性；它由 `verify:exercise-quality` §l 的 50ms 密集帧用例覆盖 |
 | N1–N2 | 负向对照：改注释 / 值等价改写（`0.25` → `2.5e-1`） | 证明守卫不是「见到 diff 就红」，比的是**语义**不是**文本** |
 
-## 注入浏览器（**已实测可行**，接线尚未做）
+## 注入浏览器（✅ **已接线进 `npm run verify:ui`**，移动端用例）
 
-Chromium 有官方假摄像头开关：
+### 两条路都用过，最终选第二条
+
+| 路子 | 做法 | 结论 |
+| --- | --- | --- |
+| A. Chrome 官方开关 | `--use-file-for-fake-video-capture=<case>.y4m` | **实测可行**（`<video>` 640×480、≈5fps），但 ① 相位不可控（第几帧什么时候到不由我们定）② y4m **26MB** 不入库 ③ 每个 Chrome 实例只能喂一个文件 |
+| B. **CDP 注入 `MediaStream`** | `canvas.captureStream(0)` + `track.requestFrame()`，覆写 `getUserMedia` | ✅ **最终采用**：纯 JS、几 KB 载荷、帧表与节奏完全可控、能与现有冒烟共用同一个 Chrome |
+
+路 A 的命令留在这里备查：
 
 ```bash
 .buildenv/Scripts/python.exe scripts/fake-camera/make-y4m.py --case=completed --out=/tmp/completed.y4m
 chrome --headless=new --no-sandbox \
-  --use-fake-ui-for-media-stream \
-  --use-fake-device-for-media-stream \
-  --use-file-for-fake-video-capture=/tmp/completed.y4m \
-  <页面>
+  --use-fake-ui-for-media-stream --use-fake-device-for-media-stream \
+  --use-file-for-fake-video-capture=/tmp/completed.y4m <页面>
 ```
-
-**实测结果**（本机 Chrome / 无头 / 走 CDP + 真实时间）：`<video>` 拿到 **640×480**、
-8 秒推进 **39 帧 ≈ 5fps** —— 正好等于桌面端的 `setInterval(captureAndSend, 200)` 与
-fixture 的 `frame_interval_ms`。
 
 两个坑（都踩过）：
 
@@ -213,14 +221,101 @@ fixture 的 `frame_interval_ms`。
    虚拟时间就不再推进，dump 出来永远是初始状态。实测第一版打印 `0:start`，
    **看上去像「y4m 不行」，其实探针根本没跑**。必须连 CDP、用**真实**等待。
 
-### 接线还差什么（如实列出）
+### 路 B 的三个关键点（少一个就静默失效）
 
-- `verify-ui-smoke.mjs` 里加一轮「假摄像头」：临时把 `dist/mediapipe/wasm/*` 与
-  `dist/mediapipe/models/pose_landmarker_full.task` 补进 dist 的**临时副本**
-  （`cap-build` 才补它们，plain `vite build` 没有，所以现在 `?platform=android` 走本地引擎会 404），
-  用 `?platform=android` 打开、跑完 12 秒活动、断言实时徽章与收尾分数。
-- 每案例 **12 秒真实时间**，7 个案例 ≈ 90 秒 —— 要决定是进 CI（变慢）还是本地/发布前跑。
-- 上面「已知测量路径差异」那几条余量要在**实跑后复核**。
+1. 🔴 必须在 **document-start** 注入（`Page.addScriptToEvaluateOnNewDocument`），
+   而且那时 `document.documentElement` **还是 `null`** —— 直接 `appendChild` 会抛，
+   整段注入**静默失效**（症状是 `window.__ngFakeCam === undefined`，而界面照常渲染，
+   看着像"注入没执行"）。整段包 `try/catch`，错误留在 `window.__ngFakeCamErr` 供断言读。
+   ⚠️ 这个 API 只对**后续文档**生效 ⇒ 必须在 `Page.navigate` **之前**注册。
+2. 🔴 `captureStream(0)` **不主动 `requestFrame()` 就不出新帧** ⇒ `<video>` 只有画布初始
+   那一帧、`currentTime` 不动、引擎按它去重 ⇒ 一条帧都进不了判定链。这被当成**特性**用：
+   未 `start()` 时一条帧都不推，于是整个用例前半段（路由 / 新手引导 / 零采样收尾屏）
+   保持"没有摄像头"时的语义 —— 有一条断言专门钉这件事。
+3. 🔴 **喂帧按墙上时间定长**（`start(ms)`），不是"把帧表喂完为止"。见下一节。
+
+### 为什么"喂帧时长"必须自己定，而不能由帧数算
+
+无头页里每帧推理是**同步**的、占主线程 ~0.45 秒 ⇒ 推帧的 `setInterval` 被拖到
+**2.0–5.0 帧/秒**（实测：同一次冒烟里既出现过 3.2/s 也出现过 2.0/s）。
+于是「53 帧 × 200ms = 10.6 秒」在浏览器里根本不成立：
+
+- 帧率 2.0 时它变成 **22.5 秒** ⇒ 越过动作计时器的 **12 秒**边界 ⇒ 后半段帧被记到
+  `action=1` 上 ⇒ 收尾屏多出一个"判过的动作"（「未判定」6 → 5）、落库明细 1 项 → 2 项；
+- 帧率 5.0 时它只有 10.6 秒 ⇒ "喂多久"取决于机器当前有多忙，断言跟着飘。
+
+改成"在 `feed_ms` 里一直喂"之后，帧率**只影响帧数、不影响时长**，
+而"保持比例"这个被验的量恰好**只依赖时长**（`judgeSession` 的 `held_ms` 是相邻帧时间差之和）。
+
+### UI 冒烟帧表（`scenarios.json:ui_smoke`）
+
+`01-upright x1 02-head-tilt-mild x59`，表长 60 帧（供循环），但**实际喂 10 秒**：
+
+- 起势只放 **1 帧** `01-upright`：它只用来当活动范围的基线（`amplitudesOf` 取段内最低位）。
+- 之后**一直**是 `02-head-tilt-mild`（solo 读数 9.69° = 6 张里最大的一张；
+  `03-head-tilt-strong` 在跟踪上下文里只收敛到 5.70°，**判不到 onset**，所以不能用它）。
+- ⚠️ **起势为什么只能 1 帧**：跟踪器换图之后要几帧才收敛 —— 实测喂
+  `01-upright → 02-mild` 时 `head_angle` 走 **1.31° → 3.63° → 6.06° → 7.71°**，
+  第 4 帧才越过 `ACTIVITY_ONSET`。这几帧在**帧数**上是固定的，换算成占时就等于
+  `4 × 帧间隔` —— **帧率越低，能被算成"保持住"的时间越少**。起势 1 帧把这段开销压到最小。
+
+#### 帧率扫描（`ui_smoke.rate_sweep`）—— 把"帧率波动会不会翻结论"变成离线可复算
+
+| 帧率 | 帧数 | 帧间隔 | 峰值活动 | 保持(ms) | 占比 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1.5 | 15 | 667ms | 1.6 | 8004 | **0.7** | completed ✅ |
+| 2.0 | 20 | 500ms | 1.6 | 8500 | **0.7** | completed ✅ |
+| 5.0 | 50 | 200ms | 1.6 | 9400 | **0.8** | completed ✅ |
+
+幅度余量 **+0.6**（vs `ACTIVITY_ONSET`）/ 保持余量 **+0.1**（vs `HOLD_TARGET_RATIO`）。
+
+🔴 **1.5 是这条断言允许的最慢节奏，也是它的下界**：`verify-ui-smoke.mjs` 直接用
+`ui_smoke.rate_floor`（= 扫描的最低档）去断言"帧率没被节流"，**不自己另写一个数** ——
+否则会出现「守卫绿着，而浏览器里那个帧率其实已经判不出来了」。再往下会先坏在两处：
+① 帧间隔超过 `MAX_FRAME_GAP_MS=1500` ⇒ `held_ms` 整段不计；
+② 收敛帧占掉更长的墙上时间 ⇒ 保持比例掉到达标线以下。
+
+### 实跑记录（`npm run verify:ui -- --case=android`）
+
+```
+· 采样 16 次 / 喂帧 10000 ms，推送 32 帧（3.2/s）；点结束活动 t+10110ms（往返 110ms）
+· 时间轴 0.1s:-- 1.2s:-- 1.7s:-- 2.4s:幅度 3.0s:幅度 3.6s:保持 4.2s:保持 4.8s:保持
+        5.6s:保持 6.1s:很好 6.7s:很好 7.3s:保持 7.9s:幅度 8.5s:幅度 9.0s:没检 9.6s:没检
+```
+
+时间轴与机制推演**完全吻合**（`没检 → 幅度 → 保持 → 很好 → 幅度 → 没检`）：开头两帧
+窗口里不足两帧 ⇒ 无判定；随后跟踪器收敛 ⇒ 幅度不够 → 保持 → 很好；
+**6.1–6.7 秒出现过「很好，保持住」**，即浏览器路径真的判出了 `completed`；
+最后那两句「没检测到动作」是**已知现象**（起势帧滚出 5 秒窗口后活动范围归零），
+不是缺陷，也没被断死（见下）。
+
+### 复核「已知测量路径差异」（本文档此前的最大未验证项）
+
+上一节列过：期望角度是**预测值**，浏览器路径只换滤波不换分辨率，差异**应当更小但未测**。
+现在有了实跑证据：**浏览器判出来的结论与离线扫描的每一条都一致** ——
+
+- 帧表在浏览器里判成 `completed`、成绩 ≥ 80（与扫描的 3 档全部一致）；
+- 同一屏上的**实时徽章与实时提示不矛盾**（`idle ⟺ 0 分`、否则 `≥80 ⟺ completed`）。
+
+🔴 **最后这一条自带一段教训（v1.7.1）**：它**第一轮是空转的** —— 锚点写成
+`p「实时动作达成度」`，而移动端练习条上的徽章压根没有那个 `<p>` ⇒ 读数恒 `null`、
+循环整段 `continue` ⇒ 断言一路"✓"却什么都没查（变异 M5 漏网才暴露）。
+同轮修法：锚点改成 `ScoreGauge` 上的 `data-ng`，并把"锚点读得到"写进断言；
+顺带发现移动端练习条徽章读的是运动态 `score`（不是 `liveQuality.score`）——
+**v1.7.0 的「徽章与提示同源」当时只覆盖了桌面面板**，已一并统一。
+修完实测：锚点每次跑读到 **19 次读数**，M5 当场被抓住（11 处矛盾）。
+
+⇒ 余量按最坏方向扣 0.26 之后仍然成立（UI 冒烟这份表余量 +0.6/+0.1）。
+⚠️ 但**七个登记案例的余量表没有重测** —— 浏览器里只喂了 UI 冒烟那一份表，
+下面「已知测量路径差异」里 `insufficient-hold`（余量 +0.2）那条**仍然只是预测**。
+
+### 收尾：契约变更（改了喂帧表就要走这条）
+
+`ui_smoke` 段是 `verify:ui` 的**输入**，被谁单方面改掉都会让那条守卫验的东西悄悄变样。
+所以：改了序列/时长/帧率档 ⇒ 跑 `build-frames.py --rewrite` 刷新登记值
+（原图**不入库**，没有原图就跑不了 `--from-src`）。
+🔴 `--rewrite` **有闸门**：只在「除 `ui_smoke` 之外的一切都与登记值一致」时才写文件 ——
+它**刷新不了任何判定结论**，所以不可能被用来把一次评分回归洗成新的登记值。
 
 ## 水印与成本
 
@@ -237,11 +332,18 @@ fixture 的 `frame_interval_ms`。
   只能保证「在这份素材上自洽」，不能推出「真机上同一个动作会给同样的读数」。
 - **只有头部侧屈与一个空房间**：肩部环绕是**复用同一套帧**凑出的往复序列，
   它的 `metric` 是 `any`，**不代表真做环绕动作时肩部量的行为**。
-- **只有 5fps 一条采样率**：桌面路径就是 200ms/帧，所以这没问题；但**移动端 rAF 高帧率**
-  （真正的短命段只可能出现在那里）**没有被这套案例覆盖** —— 那一层由
-  `verify:exercise-quality` §l 的 50ms 密集帧合成用例负责。
+- **案例只覆盖 5fps 一条采样率**：桌面路径就是 200ms/帧，所以离线案例这没问题；
+  **移动端 rAF 高帧率**（真正的短命段只可能出现在那里）**没有被这 7 个案例覆盖** ——
+  那一层由 `verify:exercise-quality` §l 的 50ms 密集帧合成用例负责。
+  ⚠️ 而 `verify:ui` 那个浏览器用例里的实际帧率是**机器决定的 2–5 帧/秒**，
+  它在 fixture 里由 `ui_smoke.rate_sweep`（1.5 / 2.0 / 5.0）离线建模，
+  **实测帧率只被"≥ 扫描下界"这一条断言兜住** —— "第几帧在什么时候"不在射程内。
 - **不含时间戳异常**：掉帧缺口、乱序时间戳不在素材里（数值层有用例）。
 - **不含权限与设备行为**：不覆盖「用户拒绝授权」「切后台」「设备被占用」。
 - **不含真机 WebView**：这是桌面 Chrome，与安卓/iOS 的 WebView 不是同一个内核版本。
 - **`still-person-12s` 是已登记的偏差，不是通过**：see F1。
-- **浏览器实跑（app 侧读数）尚未做过** —— 上面「余量表」里的期望角度全部是**预测值**。
+- **浏览器实跑只覆盖了 UI 冒烟那一份帧表**（`01-upright x1 02-mild x59`）。
+  上面「素材准入」表里的读数、以及七个案例的判定，**仍然全部是离线预测值** ——
+  浏览器路径只被证明"对这份表给出了与离线一致的三分类结论与同源分数"，
+  **不能**推出"这 6 张图在浏览器里读数与离线相同"。要核对的话得逐案例在浏览器里跑
+  （每案例 10 秒，7 个 ≈ 70 秒），眼下没做 —— 因为 `verify:ui` 已经很长了。

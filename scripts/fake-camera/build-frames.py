@@ -7,13 +7,18 @@
 它至今只在真机验过 —— 无头环境没帧，`liveQuality` 恒为 `null`）。
 本脚本产出那套「假摄像头」用的**画面素材**与**期望判定**。
 
-## 两种模式
+## 三种模式
 
     python scripts/fake-camera/build-frames.py --from-src=<原图目录>
         # 从 ImageGen 原图重建 frames/ 与 scenarios.json（需要 PIL + mediapipe）
 
     python scripts/fake-camera/build-frames.py
-        # 校验模式：**重测/重放**已入库素材，与 scenarios.json 登记值逐项比对
+        # 校验模式（默认）：**重测/重放**已入库素材，与 scenarios.json 登记值逐项比对
+
+    python scripts/fake-camera/build-frames.py --rewrite
+        # 从**入库素材**刷新登记表（原图不入库，所以改了喂帧表就只能走这条路）。
+        # 🔴 有闸门：只在「除 ui_smoke 之外的一切都与登记值一致」时才写文件 ——
+        #    它刷新不了任何判定结论，因此不可能被用来把评分回归洗成新的登记值。
 
 ## 四条「别把绿当能用」的规矩（全部踩过，逐条留证）
 
@@ -256,6 +261,109 @@ CASES = [
                "它若被判 completed，说明判定链在「没有数据」时捏造了结论",
     },
 ]
+
+
+# ---------------------------------------------------------------- UI 冒烟轮
+#
+# `npm run verify:ui`（`scripts/verify-ui-smoke.mjs`）会把下面这份帧表**真的逐帧喂进
+# 浏览器里的 app**（CDP 注入一条 `canvas.captureStream()` 假摄像头），于是
+# 「`getUserMedia` → 本地引擎（MediaPipe wasm）→ 帧序列 → `judgeExercise` →
+# 实时引导浮层 + 实时徽章」这条链第一次有了自动化证据。
+# 在此之前无头环境**没有帧** ⇒ `liveQuality` 恒为 `null` ⇒ 只验过它的**回落分支**。
+#
+# 登记**展开后的文件名列表**，而不是把 `sequence` 串交给 JS 再解析一遍：
+# 序列解析器只该有一份实现（`parse_sequence`），而它已经坏过两次（见其 docstring）——
+# 多写一份 JS 复刻，就是多一处"两份解析器悄悄分叉"的地方。
+UI_SMOKE_LEAD_IN = 1
+UI_SMOKE_ACTIVE = "02-head-tilt-mild"
+UI_SMOKE_FRAMES = 60
+# 🔴 浏览器那次喂帧是**按墙上时间定长**的（`feed_ms`），不是「把帧表喂完为止」。
+#
+# 为什么不能靠"帧数 × 间隔"来定长（**实测，返工过一次**）：
+# 无头页里每帧推理 ~0.4–0.5 秒且**同步**占用主线程 ⇒ 推帧的 `setInterval` 被拖到
+# **2.0–5.0 帧/秒**（`.buildenv/probe-live-frames.mjs` 与冒烟实跑都测到过 2.0）。
+# 于是「53 帧 × 200ms = 10.6s」这条算术在浏览器里根本不成立：
+#   ① 帧率 2.0 时它变成 **22.5 秒**，越过动作计时器的 **12 秒** ⇒ 后半段帧被记到
+#      下一个动作上 ⇒ 收尾屏多出一个"判过的动作"（「未判定」6 → 5）、落库明细 1 项 → 2 项；
+#   ② 帧率 5.0 时它只有 10.6 秒 —— 于是"多久"取决于机器当前有多忙，断言跟着飘。
+# 改成"在 `feed_ms` 墙上时间里一直喂"，帧率变成**只影响帧数、不影响时长**的量，
+# 而"保持比例"这个被验的量恰好只依赖**时长**。
+#
+# 为什么是 10 秒：整段判定的分母是动作的**标称时长**（`neck-flex-left` = 12 秒），
+# 达标线 0.6 ⇒ 需要 held ≥ 7.2 秒。喂帧能贡献的 held ≈ `feed_ms − (起势 + 跟踪器收敛) × 帧间隔`，
+# 而收敛段在**帧数**上是固定的（实测见下），换算成时间就是 `4 × 1000/帧率` ⇒ 帧率越低亏得越多。
+# 10 秒 + 起势压到 1 帧之后，最慢的扫描点（1.5 帧/秒）也还剩 0.7 的占比（余量 +0.1），
+# 同时离 12 秒的动作切换线留了 2 秒 —— `feed_ms` 一到就点「结束活动」，绝不可能溢出。
+UI_SMOKE_FEED_MS = 10000
+# 🔴 帧率扫描：把同一份帧表按这几个帧率**重打时间戳**再判一次，要求**全部**判成 completed。
+#
+# 这几个值不是随手取的：
+#   · 1.5 = 这条断言允许的最慢节奏。它同时是"帧间隔还没被当成掉帧"的下界
+#     （1000/1.5 = 667ms < MAX_FRAME_GAP_MS = 1500，再慢下去 held_ms 会整段塌成 0）
+#     与"保持比例还够得着"的下界（实测：再慢一档就要压线）。
+#   · 2.0 = 实跑里真出现过的最低帧率（`.buildenv/probe-live-frames.mjs`）。
+#   · 5.0 = 实跑里的正常值。
+# 扫描把"帧率波动会不会翻结论"变成一条**离线可复算**的断言，而不是等 CI 里偶发一次红。
+# ⚠️ **下界必须与 `verify-ui-smoke.mjs` 允许的最低帧率一致** —— 消费端直接读
+#    `rate_floor`（= 这里的最小值）来断言，不自己另写一个数（下面有自检钉住）。
+UI_SMOKE_RATES = (1.5, 2.0, 5.0)
+# 从 `feed_ms` 一到就开始点「结束活动」：点击会立刻停止记录帧，而 CDP 往返
+# （`Runtime.evaluate` + React 调度）在忙页上最多几百毫秒 —— 这段余量必须预先算出来，
+# 否则"帧越过了 12 秒边界"会以"收尾屏多了一个判过的动作"的形状出现（很难归因）。
+UI_SMOKE_CLICK_SLACK_MS = 600
+UI_SMOKE_SEQUENCE = (f"01-upright x{UI_SMOKE_LEAD_IN} "
+                     f"{UI_SMOKE_ACTIVE} x{UI_SMOKE_FRAMES - UI_SMOKE_LEAD_IN}")
+UI_SMOKE_WHY = (
+    f"起势 {UI_SMOKE_LEAD_IN} 帧（`01-upright`，只用来当活动范围的基线）→ 之后一直是 "
+    f"`{UI_SMOKE_ACTIVE}`（拉伸位，实测 head_angle 最大的一张）。"
+    f"整个冒烟就是「把这一段按**墙上时间**喂 {UI_SMOKE_FEED_MS} 毫秒」。"
+    "\n"
+    "\n"
+    "## 为什么不是「取 completed 案例的连续切片」\n"
+    "\n"
+    "v1 取的是 `completed` 的前 53 帧（起势 3 + 轻微 5 + 大幅 45），按「喂完即止」跑。"
+    "实跑暴露两个问题：① 帧率被拖到 2.0 帧/秒时推帧跨过了 12 秒的动作边界，"
+    "后半段帧被记到下一个动作上（收尾屏会多出一个「判过的动作」）；"
+    "② `hold_ratio` 的分母是**标称 12 秒**，而「被记下的第一帧」来得晚"
+    "（首次推理要建图 + 预热，起势帧在墙上时间里被拉长）⇒ ratio 正好在 0.6 上摇摆。"
+    "现在改成「定长喂帧 + 起势压到 1 帧」，两条同时解决。"
+    "\n"
+    "\n"
+    "## 起势为什么只能是 1 帧\n"
+    "\n"
+    "跟踪器（`static_image_mode=False`）换图之后要几帧才收敛：实测喂 "
+    "`01-upright → 02-mild` 时 head_angle 走 1.31° → 3.63° → 6.06° → 7.71°，"
+    "第 4 帧才越过 `ACTIVITY_ONSET`。这几帧在**帧数**上是固定的，换算成占时就等于 "
+    "`4 × 帧间隔` —— 帧率越低，喂帧时长里能被算成「保持住」的部分越少。"
+    "起势 1 帧把这段开销压到最小，于是最慢的扫描点也还有 0.1 的余量。"
+    "\n"
+    "\n"
+    "## 不钉时间轴，只钉不变量\n"
+    "\n"
+    "实时引导看的是**最近 5 秒**的滚动窗口、帧的时间戳是 `Date.now()`，所以"
+    "「第几秒该出现哪句文案」依赖真实帧率，钉了必然假红。冒烟只断言：读数真的来自"
+    "注入的帧、浮层整个喂帧期间都在、出现过非 idle 的提示、徽章与提示不矛盾。"
+    "⚠️ 另有一个**已知现象**（不是缺陷、也未被断死）：起势帧滚出 5 秒窗口后，"
+    "窗口内的最低位变成拉伸位本身 ⇒「活动范围」归零 ⇒ 静止保持被实时提示成"
+    "「没检测到动作」。整段判定不受影响（它看的是整段帧），见 README。"
+)
+
+
+# UI 冒烟那份帧表的**重放载体**。它不是第 8 个案例：案例表要"覆盖 grade/hint 的组合"，
+# 而这份表只服务一件事 —— 给浏览器喂帧。所以它不进 `CASES`，也不进登记表的 `cases`。
+# 但它的读数**必须由同一条重放路径产生**（`simulate()`，一把检测器、按顺序喂），
+# 否则"离线扫描说 completed、浏览器里 insufficient"就无从对账。
+UI_SMOKE_CASE = {
+    "id": "__ui-smoke__",
+    "title": "UI 冒烟喂帧表（不进案例登记）",
+    "spec": dict(HOLD_HEAD),
+    "sequence": UI_SMOKE_SEQUENCE,
+    "frames": UI_SMOKE_FRAMES,
+    "expect_grade": "completed",
+    "expect_hint": "很好，保持住",
+    "semantics": "as-designed",
+    "why": UI_SMOKE_WHY,
+}
 
 
 # ---------------------------------------------------------------- 编解码
@@ -533,7 +641,141 @@ def thresholds() -> dict:
     }
 
 
-def make_doc(solo: dict, cases: list[dict]) -> dict:
+def first_action_duration_ms() -> int:
+    """从 `src/data/exercises.ts` 读**第一个动作**的标称时长（毫秒）。
+
+    🔴 为什么要跨语言读，而不是在这里写 `12000`：动作计时器走到这个时长会**自动切到
+    下一个动作**，而切过去之后推进去的帧会被记到新动作上 —— 这正是 v1 那个
+    「收尾屏多出一个判过的动作」的原因。喂帧窗口必须短于它，这条不等式只有在
+    时长**单点取值**时才成立；在 Python 里复刻一个 12000，改动作库时就会悄悄分叉
+    （症状是浏览器里偶发多一个动作，而归因看起来完全不像"时长改了"）。
+    """
+    src = (ROOT / "src" / "data" / "exercises.ts").read_text(encoding="utf-8")
+    body = src.split("export const EXERCISES", 1)
+    if len(body) != 2:
+        raise RuntimeError("src/data/exercises.ts 里找不到 `export const EXERCISES`")
+    m = re.search(r"\bduration:\s*(\d+)", body[1])
+    if not m:
+        raise RuntimeError("src/data/exercises.ts 的动作里找不到 `duration: <秒>`")
+    return int(m.group(1)) * 1000
+
+
+def smoke_series(blobs: dict[str, bytes]) -> list[dict]:
+    """按 UI 冒烟的帧表重放一遍，拿到**顺序相关**的读数。
+
+    复用 `simulate()` 而不是另写一遍循环：读数与喂帧顺序有关（跟踪模式有跨帧状态），
+    而"浏览器里那 10 秒"喂的就是这个顺序 —— 两条路各写一份重放，迟早有一天分叉。
+    """
+    return simulate(UI_SMOKE_CASE, blobs)["series"]
+
+
+def rate_sweep(series: list[dict], spec: dict) -> dict:
+    """把同一串读数按几个帧率**重打时间戳**再判一次 —— 见 `UI_SMOKE_RATES`。
+
+    建模方式：帧率 r ⇒ 每帧间隔 1000/r 毫秒；在 `feed_ms` 的墙上时间里只来得及喂
+    `r × feed_ms / 1000` 帧。**读数不重测**（它们只取决于喂帧顺序，与时间戳无关），
+    只换时间戳 —— 而"保持比例"恰恰只由时间戳决定。
+    """
+    out: dict[str, dict] = {}
+    for r in UI_SMOKE_RATES:
+        n = int(r * UI_SMOKE_FEED_MS / 1000)
+        gap = round(1000.0 / r)
+        sub = [dict(f, t=i * gap) for i, f in enumerate(series[:n])]
+        v = judge_exercise(sub, spec)
+        out[str(r)] = {
+            "frames": len(sub), "frame_gap_ms": gap,
+            "peak_activity": v["peak_activity"], "held_ms": v["held_ms"],
+            "hold_ratio": v["hold_ratio"], "grade": v["grade"], "hint": v["hint"],
+        }
+    return out
+
+
+def ui_smoke_block(blobs: dict[str, bytes]) -> dict:
+    """UI 冒烟那段要喂的帧表 + 「帧率波动会不会翻结论」的离线扫描。
+
+    消费端（`scripts/verify-ui-smoke.mjs`）拿到的是**展开后的文件名列表**，
+    它不必再解析一遍 `sequence` —— 序列解析器只该有一份实现（`parse_sequence`），
+    而且它已经坏过两次（见 docstring）。
+
+    ### 四条自检，每一条都"自己先坏掉才可能放过"
+
+    1. 帧数与声明一致 —— 解析器坏了要报成解析器的缺陷（同样的教训见 `simulate()`）。
+    2. 起势帧必须恰好是最前面那几帧、且**只有**它们是非拉伸帧。基线帧一旦跑到中间
+       （或消失），`amplitudesOf` 取到的"最低位"就不再是静息位，活动范围会被凭空改小 ——
+       症状是浏览器里偶发 `insufficient`，而离线扫描照样绿。
+    3. 帧率扫描必须**全部** `completed` —— 这是把"帧率波动"从"CI 里偶发一次红"
+       变成"改完当场可复算"。
+    4. 两个余量（幅度、保持）都要留够，不能"刚好过线" —— 浏览器路径的读数与这里
+       差零点几度是常态（见文件头第 3 条），压线的表必然间歇性翻车。
+    """
+    files = [f"{n}.jpg" for n in parse_sequence(UI_SMOKE_SEQUENCE)]
+    lead = [f"{UI_SMOKE_ACTIVE}.jpg"] * (UI_SMOKE_FRAMES - UI_SMOKE_LEAD_IN)
+    if len(files) != UI_SMOKE_FRAMES:
+        raise AssertionError(
+            f"UI 冒烟序列解析出 {len(files)} 帧，声明 {UI_SMOKE_FRAMES} 帧 —— "
+            f"**解析器坏了**（sequence={UI_SMOKE_SEQUENCE!r}）")
+    want = ["01-upright.jpg"] * UI_SMOKE_LEAD_IN + lead
+    if files != want:
+        raise AssertionError(
+            f"UI 冒烟帧表必须恰好是「起势 {UI_SMOKE_LEAD_IN} 帧 01-upright → 其余全部 "
+            f"{UI_SMOKE_ACTIVE}」—— 实际 {sorted(set(files))}，"
+            f"`01-upright` 出现 {files.count('01-upright.jpg')} 次。"
+            f"（基线帧跑到中间会让活动范围凭空改小，而且离线扫描看不出来）")
+
+    series = smoke_series(blobs)
+    sweep = rate_sweep(series, UI_SMOKE_CASE["spec"])
+
+    # ── 喂帧窗口 vs 动作时长：这条不等式不成立，"多出一个判过的动作"必然复发 ──
+    action_ms = first_action_duration_ms()
+    budget = UI_SMOKE_FEED_MS + UI_SMOKE_CLICK_SLACK_MS
+    if budget > action_ms - 500:
+        raise AssertionError(
+            f"喂帧窗口 {UI_SMOKE_FEED_MS}ms + 点击余量 {UI_SMOKE_CLICK_SLACK_MS}ms "
+            f"= {budget}ms，已经贴到第一个动作的标称时长 {action_ms}ms —— "
+            f"动作计时器会在喂帧还没结束时切到下一个动作，后半段帧被记到新动作上。"
+            f"（第一个动作的时长来自 src/data/exercises.ts，不是本文件的常量）")
+
+    bad = [f"{r} 帧/秒 → {v['grade']}/{v['hint']}"
+           for r, v in sweep.items() if v["grade"] != "completed"]
+    if bad:
+        raise AssertionError(
+            "UI 冒烟帧表在扫描的帧率下有判不成 completed 的：\n"
+            + "\n".join(f"  · {b}" for b in bad)
+            + "\n  ⇒ 要么加长 feed_ms / 缩短起势，要么换一张 tilt 更大的拉伸帧。"
+              "**不要**改成只扫一个帧率或放宽这句 —— 那等于把已知的间歇性失败藏起来。"
+              "（实测：起势压到 1 帧 + feed 10 秒，最慢的 1.5 帧/秒才刚好留出 0.1 的余量）")
+
+    amp_margin = min(v["peak_activity"] for v in sweep.values()) - ACTIVITY_ONSET
+    hold_margin = min(v["hold_ratio"] for v in sweep.values()) - HOLD_TARGET_RATIO
+    if amp_margin < 0.3 or hold_margin < 0.09:
+        raise AssertionError(
+            f"UI 冒烟帧表余量不够：幅度余量 {amp_margin:+.2f}（要求 ≥ +0.30）、"
+            f"保持余量 {hold_margin:+.2f}（要求 ≥ +0.09）。扫描明细："
+            + json.dumps(sweep, ensure_ascii=False)
+            + "。浏览器路径的读数与离线重放差零点几度是常态，压线的表会间歇性翻车"
+              "（v1 就是栽在这上面）。")
+
+    floor = min(UI_SMOKE_RATES)
+    return {
+        "why": UI_SMOKE_WHY,
+        "sequence": UI_SMOKE_SEQUENCE,
+        "frame_interval_ms": FPS_MS,
+        "frame_count": len(files),
+        "lead_in_frames": UI_SMOKE_LEAD_IN,
+        "feed_ms": UI_SMOKE_FEED_MS,
+        "click_slack_ms": UI_SMOKE_CLICK_SLACK_MS,
+        "action_duration_ms": action_ms,
+        # 🔴 消费端（`verify-ui-smoke.mjs`）直接用这个当下界去断言"帧率没被节流"，
+        # 不自己另写一个数 —— 否则"断言允许的帧率"与"扫描证明过的帧率"会分叉，
+        # 而那种分叉的表现是"守卫绿着但浏览器里已经判不出来了"。
+        "rate_floor": floor,
+        "rate_sweep": sweep,
+        "margins": {"amplitude": round(amp_margin, 3), "hold": round(hold_margin, 3)},
+        "frames": files,
+    }
+
+
+def make_doc(solo: dict, cases: list[dict], ui: dict) -> dict:
     return {
         "_comment": "由 scripts/fake-camera/build-frames.py 生成；校验模式会重测/重放并逐项比对。",
         "capture": {
@@ -557,6 +799,7 @@ def make_doc(solo: dict, cases: list[dict]) -> dict:
             for name in solo
         ],
         "cases": cases,
+        "ui_smoke": ui,
     }
 
 
@@ -611,6 +854,25 @@ def report(doc: dict, title: str) -> tuple[int, list[str]]:
           f"ACTIVITY_ONSET={t['ACTIVITY_ONSET']}  ACTIVITY_IDLE_MAX={t['ACTIVITY_IDLE_MAX']}  "
           f"HOLD_TARGET_RATIO={t['HOLD_TARGET_RATIO']}  DEFAULT_MIN_CYCLES={t['DEFAULT_MIN_CYCLES']}")
 
+    # UI 冒烟那份帧表：它是 `verify:ui` 的输入。帧率扫描要**每次**都打出来 ——
+    # 只在失败时才显示的话，"它今天扫的是 1.5 还是 5.0"就没人知道，
+    # 而"扫描绿"正是"浏览器里那 10 秒不会间歇性翻结论"的唯一依据。
+    ui = doc["ui_smoke"]
+    print(f"\nUI 冒烟帧表（喂给浏览器的那一份；定长 {ui['feed_ms']}ms，"
+          f"{ui['frame_count']} 帧表 / 起势 {ui['lead_in_frames']} 帧）")
+    print(f"  {ui['sequence']}")
+    print(f"{'帧率':>6}{'帧数':>7}{'间隔(ms)':>10}{'峰值活动':>10}{'保持(ms)':>10}{'占比':>8}"
+          f"{'判定':>14}")
+    for r, v in ui["rate_sweep"].items():
+        mark = "✅" if v["grade"] == "completed" else "❌"
+        print(f"{r:>6}{v['frames']:>7}{v['frame_gap_ms']:>10}{v['peak_activity']:>10.3f}"
+              f"{v['held_ms']:>10}{v['hold_ratio']:>8.3f}{v['grade']:>14}  {mark}")
+    mg = ui["margins"]
+    if any(v["grade"] != "completed" for v in ui["rate_sweep"].values()):
+        problems.append("UI 冒烟帧表在扫描的帧率下有判不成 completed 的（余量不足）")
+    print(f"  余量：幅度 {mg['amplitude']:+.3f}（vs ACTIVITY_ONSET）"
+          f" / 保持 {mg['hold']:+.3f}（vs HOLD_TARGET_RATIO）")
+
     grades = {c["verdict"]["grade"] for c in doc["cases"]}
     hints = {c["verdict"]["hint"] for c in doc["cases"]}
     print(f"覆盖：{len(doc['cases'])} 个案例 / grade {sorted(grades)}（三分类全中 "
@@ -626,7 +888,7 @@ def report(doc: dict, title: str) -> tuple[int, list[str]]:
     return (0 if not problems else 1), problems
 
 
-# ---------------------------------------------------------------- 两种模式
+# ---------------------------------------------------------------- 三种模式
 
 def build_from_src(src_dir: Path) -> int:
     FRAMES.mkdir(parents=True, exist_ok=True)
@@ -649,7 +911,7 @@ def build_from_src(src_dir: Path) -> int:
 
     solo = {n: measure_solo(b) for n, b in blobs.items()}
     cases = [simulate(c, blobs) for c in CASES]
-    doc = make_doc(solo, cases)
+    doc = make_doc(solo, cases, ui_smoke_block(blobs))
     SCENARIOS.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     rc, _ = report(doc, "重建完成（已写入 frames/ 与 scenarios.json）")
     return rc
@@ -659,20 +921,38 @@ def load_frames() -> dict[str, bytes]:
     return {p.stem: p.read_bytes() for p in sorted(FRAMES.glob("*.jpg"))}
 
 
-def verify() -> int:
-    """重测 + 重放，与 scenarios.json 逐项比对 —— 这才是「校验」。"""
+def load_doc() -> dict | None:
     if not SCENARIOS.exists():
         print(f"!! 缺 {SCENARIOS}；先跑 --from-src=<原图目录>")
-        return 2
-    doc = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+        return None
+    return json.loads(SCENARIOS.read_text(encoding="utf-8"))
+
+
+def recompute(doc: dict) -> tuple[dict, list[dict], dict, list[str]]:
+    """把登记表里**除 `ui_smoke` 之外**的一切重算一遍并逐项比对。
+
+    返回 `(solo, cases, ui, problems)`。`ui_smoke` 单独由调用方比对 ——
+    它与其他段不同源（见 `ui_smoke_block()`）。
+    """
     frames = load_frames()
     recorded_frames = {f["file"]: f for f in doc["frames"]}
     recorded_cases = {c["id"]: c for c in doc["cases"]}
-
     problems: list[str] = []
+
     on_disk = {f"{n}.jpg" for n in frames}
     if on_disk != set(recorded_frames):
         problems.append(f"frames/ 与登记表不一致：{sorted(on_disk)} vs {sorted(recorded_frames)}")
+
+    # 素材说明与「期望检出」是**代码里的常量**生成的。比对它们，是因为导出/重写登记表时
+    # 这两栏最容易变成"只在 JSON 里改过、代码里没改"的孤儿值（人眼不会去核对注释）。
+    for spec in FRAME_SPECS:
+        old = recorded_frames.get(f"{spec['name']}.jpg")
+        if old is None:
+            continue
+        if old.get("desc") != spec["desc"]:
+            problems.append(f"{spec['name']}.jpg：desc 与 FRAME_SPECS 不一致")
+        if old.get("expect_detected", True) != spec.get("expect_detected", True):
+            problems.append(f"{spec['name']}.jpg：expect_detected 与 FRAME_SPECS 不一致")
 
     solo = {n: measure_solo(b) for n, b in frames.items()}
     for name, m in solo.items():
@@ -722,7 +1002,25 @@ def verify() -> int:
             if redo[k] != ov[k]:
                 problems.append(f"案例 {c['id']}：登记序列不自洽 —— 重判 {k}={redo[k]} ≠ 登记 {ov[k]}")
 
-    rc, _ = report(make_doc(solo, cases), "校验（重测素材 + 重放案例）")
+    return solo, cases, ui_smoke_block(frames), problems
+
+
+def verify() -> int:
+    """重测 + 重放，与 scenarios.json 逐项比对 —— 这才是「校验」。"""
+    doc = load_doc()
+    if doc is None:
+        return 2
+    solo, cases, ui, problems = recompute(doc)
+
+    # UI 冒烟那一段的帧表：它是 `verify:ui` 的输入，被谁单方面改掉都会让那条守卫
+    # 验的东西悄悄变样（少喂几帧、喂错素材、断言照样可能绿）。
+    if doc.get("ui_smoke") != ui:
+        problems.append(
+            "ui_smoke 段与重建结果不一致 —— 帧表 / 序列 / 喂帧时长 / 帧率扫描任一改动都要重跑 "
+            "--from-src=<原图目录>（没有原图时用 --rewrite，它有闸门）再提交"
+            "（它是 verify:ui 的输入，不是注释）")
+
+    rc, _ = report(make_doc(solo, cases, ui), "校验（重测素材 + 重放案例）")
     if problems:
         print("\n❌ 与 scenarios.json 登记值不符：")
         for p in problems:
@@ -732,6 +1030,38 @@ def verify() -> int:
     return rc
 
 
+def rewrite() -> int:
+    """从**入库素材**刷新登记表（不需要 ImageGen 原图）。
+
+    🔴 这个模式存在的唯一理由是：`scenarios.json` 里有些段是**从素材重算出来的**
+    （`frames` 的单测读数、`ui_smoke` 的帧率扫描），而原图（花钱的那三张）**不入库** ——
+    没有原图就没法走 `--from-src`，于是一次纯粹的"喂帧表改动"会被迫连累整份素材。
+
+    🔴 **闸门**：只在「除 `ui_smoke` 之外的一切都与登记值一致」时才写文件。
+    也就是说它**刷新不了任何判定结论** —— 案例的 grade/hint/读数只要变了，
+    `recompute()` 就会把问题列出来，这里直接拒绝。这样它就不可能被用来
+    "把一次评分回归洗成新的登记值"（那正是本项目铁律里最贵的一种自欺）。
+    """
+    doc = load_doc()
+    if doc is None:
+        return 2
+    solo, cases, ui, problems = recompute(doc)
+    if problems:
+        print("\n❌ 拒绝刷新登记表：重算结果与登记值**不符**（--rewrite 不是用来洗结论的）")
+        for p in problems:
+            print(f"   · {p}")
+        print("\n  先跑不带参数的模式查原因；真要改判定，那是评分域变更，"
+              "要同时升 ACTION_SCORES_VERSION 并重跑 verify:parity。")
+        return 1
+
+    new = make_doc(solo, cases, ui)
+    SCENARIOS.write_text(json.dumps(new, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if doc.get("ui_smoke") != ui:
+        print("\n（ui_smoke 段已刷新）")
+    report(new, "刷新完成（已写入 scenarios.json；判定结论一个字都没动）")
+    return 0
+
+
 def main() -> int:
     check_parser()          # 先体检解析器：它坏过两次，且症状都不指向自己
     src_arg = next((a for a in sys.argv[1:] if a.startswith("--from-src=")), None)
@@ -739,6 +1069,8 @@ def main() -> int:
         src_dir = Path(src_arg.split("=", 1)[1])
         print(f"从 {src_dir} 重建素材……")
         return build_from_src(src_dir)
+    if "--rewrite" in sys.argv[1:]:
+        return rewrite()
     return verify()
 
 

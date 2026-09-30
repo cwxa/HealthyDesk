@@ -40,6 +40,27 @@
  *     设置页「重新查看新手引导」能把它叫回来 → 「跳过」能关掉。
  *     ⚠️ 这一段必须在 ROUTES **之前**跑完：引导的遮罩盖在页面上，但下层仍在 DOM 里，
  *     开着它去断言页面文案等于把"被盖住了"验成"渲染得出来"（`innerText` 两层都读得到）。
+ *   - **假摄像头 · 实时引导 / 实时徽章**（移动端用例，`checkCameraGuidance`）：
+ *     CDP 在 **document-start** 注入一条 `canvas.captureStream()` 假摄像头，
+ *     然后把 `scenarios.json:ui_smoke.frames` 逐帧喂进去。**喂帧按墙上时间定长**
+ *     （`ui_smoke.feed_ms` = 10 秒，起势 1 帧 + 拉伸帧），不是"把帧表喂完为止" ——
+ *     无头页里推理同步占主线程，推帧会被拖到 2.0–5.0 帧/秒，按帧数定长会让"喂多久"
+ *     取决于机器多忙（实测跨过动作计时器的 12 秒边界，后半段帧被记到下一个动作上）。
+ *     于是「`getUserMedia` → 本地引擎（MediaPipe wasm）→ 帧序列 → `judgeExercise` →
+ *     **实时引导浮层** + **实时动作达成度徽章**」这条链第一次有了自动化证据。
+ *     断言只取**不变量**与**存在性**，不钉时间轴（见下）：
+ *       ⓪ 帧率 ≥ `ui_smoke.rate_floor` —— 这个下界就是 fixture 里**离线扫描过的最低档**，
+ *          两条路共用一个数（扫描证明过那一档仍判 completed，断言才敢允许它）；
+ *       ① 姿态读数真的来自注入的帧（头部侧倾出现过 ≥ 5°，即超过静息阈值），
+ *          且 `<video>` 的 `currentTime` 在前进（帧真的交给了视频元素）；
+ *       ② 喂帧窗口内**浮层真的渲染出来了** —— `liveQuality` 不再恒为 `null`；
+ *       ③ 出现过「幅度够了」那一类的提示（不是恒 idle / 恒幅度不够）；
+ *       ④ 🔴 **徽章与提示不矛盾**：`hint === idle ⟺ 徽章 = 0`；
+ *          否则 `徽章 ≥ 80 ⟺ hint = 「很好，保持住」`。这条盯的是 v1.7.0 修的
+ *          「徽章取运动态通道、提示取活动范围 ⇒ 同屏互相打脸」（铁律 #62/#63）——
+ *          把 `activityScore` 改回 `score` 会被这条当场抓住（见变异自证）。
+ *       ⑤ 收尾屏：**真实帧**下只有第一个动作被判定（「未判定」= 6，明细项 id 也是它），
+ *          且落库明细 `v=3` / 只有 1 项 / `avg_score` 与明细**同源** / 判成 `completed`。
  *   - `?platform=` / `?os=` 覆盖是否真的改变界面（平台专属文案的**出现与消失**）
  *   - 客户端路由（点导航后 URL 变化但**不整页刷新**、目标页渲染出来）
  *   - 设置页显示的版本号 = `package.json` 的版本（版本漂移在界面层也能抓到）
@@ -47,11 +68,24 @@
  *   - 可选：截图留证（`--evidence=<目录>`）—— 每页一张，另加**新手引导的第 1 / 第 4 步**各一张
  *     （引导是视觉产品，"排版塌了/按钮被遮"这类问题断言看不出来）
  * 不覆盖（如实记录，别读成"验过了"）：
- *   - **摄像头与姿态推理**：无头环境没有摄像头；plain `vite build` 的 dist 里
- *     也没有 MediaPipe 的 wasm/模型（那是 `cap-build` 才补的）。
- *     冒烟只保证"界面走到了取流这一步"，不保证"能出分"。
- *   - **有真实帧时的收尾分数**：收尾屏那条断言跑的是"零采样"分支，
- *     "判出来的分数对不对"只能靠 `verify:exercise-quality`（数值层）与真机层。
+ *   - **真实摄像头设备与权限层**：注入的是一条 **`MediaStream`**，不是真设备
+ *     （没走 `--use-fake-device-for-media-stream`，也没碰 `getUserMedia` 的权限分支）。
+ *     所以「申请授权 / 设备不存在 / 被拒绝 / 切前后台重新取流」这些仍然只能真机验。
+ *     这里验的是 **app 侧**：attachVideo → 本地引擎 → 帧 → 判定 → 界面。
+ *   - **时间轴的绝对值**：实时引导看的是**最近 5 秒**的滚动窗口，而帧的时间戳是
+ *     `Date.now()`。所以"第几秒该出现哪句文案"依赖真实帧率 —— 断言只取不变量与
+ *     存在性。「喂帧窗口有多长」是固定的（`ui_smoke.feed_ms`），但**窗口里有多少帧**
+ *     取决于机器 —— 只由那条 `≥ rate_floor` 的帧率断言兜住，兜不住的是"哪一帧在什么时候"。
+ *     ⚠️ 另有一个**已知现象**（不是缺陷、也未被断死）：起势帧滚出 5 秒窗口后
+ *     「活动范围」归零 ⇒ 静止保持会被实时提示成「没检测到动作」。
+ *     整段判定不受影响（它看的是整段帧），见 `scripts/fake-camera/README.md`。
+ *   - **喂帧窗口末尾之后**：帧不再进来时 `liveQuality` 回落到 `null`、浮层消失是
+ *     **正确**行为（滚动窗口会把内容滚空）。所以浮层那条断言只覆盖窗口**内部**的采样点 ——
+ *     把它算进来会把"它该做的事"读成失败（v1 就是这么假红的）。
+ *   - **桌面端（web / electron）的实时引导**：浮层与 `liveQuality` 是移动端专属，
+ *     桌面走 WS 发帧给 Python 后端，无头环境里没有后端 —— 那段仍属真机层。
+ *   - **收尾分数的"对错"**：这里只证明"浏览器路径判出来的成绩与 fixture 的期望一致"；
+ *     数值口径的逐位正确性由 `verify:exercise-quality` 与 `verify:fake-camera` 负责。
  *   - **HTTP 落库的端到端**：桌面/electron 用例只验到"请求发出去时带的是规范文本"
  *     （探针拦的是 `fetch` 的入参），**没有后端**去收它 —— 真正的写库由
  *     `verify:schema` 与后端的迁移守卫覆盖。
@@ -337,20 +371,230 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 }
 
-function startStaticServer(dir) {
+/**
+ * 静态服务**兜底根**。
+ *
+ * 有两类资源**故意不在 dist 里**，但它们又必须能在浏览器里取到：
+ *   - `/ng-frames/*`：假摄像头素材（真人照片补齐后的 6 张 640×480 JPEG）。
+ *     它们从不进 dist —— 素材只该有一个位置（`scripts/fake-camera/frames/`），
+ *     多一份拷贝就多一处会悄悄分叉的东西。
+ *   - `/mediapipe/**`：姿态推理的 wasm 与模型。这两样**只有 `cap-build` 才补进
+ *     `dist/mediapipe/`**（见 `scripts/cap-build.js`）—— plain `vite build` 的 dist 没有它们，
+ *     所以此前无头环境里那两个请求必然 404、被 `BENIGN_URL` 归成"预期内失败"。
+ *
+ * 🔴 **不改 dist**：`verify:source` 要拿"包内前端 vs 本次 dist"逐文件对 sha256，
+ *    冒烟如果往 dist 里塞东西，那条守卫就会对着一个被人动过的目录跑。
+ *    所以这里只在**静态服务**这一层按前缀映射到仓库里的真实位置。
+ *    顺带的好处：这同时证明了 `localPoseEngine.ts` 里那两条相对路径
+ *    （`mediapipe/wasm` / `mediapipe/models/pose_landmarker_full.task`，
+ *    相对 `document.baseURI`）**指对了地方** —— 以前 404 被归成"预期内"，指错了也看不出来。
+ */
+const FRAMES_DIR = path.join(ROOT, 'scripts', 'fake-camera', 'frames')
+const MEDIAPIPE_WASM_SRC = path.join(ROOT, 'node_modules', '@mediapipe', 'tasks-vision', 'wasm')
+const MEDIAPIPE_MODEL_SRC = path.join(ROOT, 'mediapipe-assets', 'models', 'pose_landmarker_full.task')
+const FALLBACK_ROOTS = [
+  { prefix: '/ng-frames/', root: FRAMES_DIR },
+  { prefix: '/mediapipe/wasm/', root: MEDIAPIPE_WASM_SRC },
+  { prefix: '/mediapipe/models/', root: path.dirname(MEDIAPIPE_MODEL_SRC) },
+]
+
+/**
+ * 假摄像头那一段要用到的资源清单（**跑之前先点名核对**）。
+ *
+ * 🔴 缺任何一个都**直接 exit 1**，不许"缺了就跳过那一段" —— 跳过会让这个守卫
+ * 永远是绿的，而它恰恰是唯一能证明"有帧时实时引导真的出来了"的东西。
+ * 两处的来源都可靠：wasm 来自 `npm ci` 装的依赖，模型是**入库**的
+ * （`mediapipe-assets/`，就是为了"离线也能构建"）。
+ */
+const CAMERA_ASSETS = [
+  [path.join(MEDIAPIPE_WASM_SRC, 'vision_wasm_internal.js'), 'MediaPipe wasm（SIMD loader）'],
+  [path.join(MEDIAPIPE_WASM_SRC, 'vision_wasm_internal.wasm'), 'MediaPipe wasm（SIMD 二进制）'],
+  [MEDIAPIPE_MODEL_SRC, '姿态模型 pose_landmarker_full.task'],
+  [path.join(ROOT, 'scripts', 'fake-camera', 'scenarios.json'), '假摄像头 fixture'],
+]
+
+/** `scenarios.json:ui_smoke` —— 逐帧喂给浏览器的那份帧表（单一真相来源）。 */
+function loadUiSmoke() {
+  const file = path.join(ROOT, 'scripts', 'fake-camera', 'scenarios.json')
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const ui = doc.ui_smoke
+  const need = ['frames', 'feed_ms', 'frame_count', 'lead_in_frames', 'rate_floor', 'rate_sweep', 'action_duration_ms']
+  if (!ui) throw new Error('scenarios.json 里没有 ui_smoke 段（跑一次 build-frames.py 重新生成）')
+  const missing = need.filter((k) => ui[k] === undefined || ui[k] === null)
+  if (missing.length) {
+    throw new Error(`ui_smoke 段缺字段 ${missing.join(' / ')} —— 跑一次 ` +
+      'scripts/fake-camera/build-frames.py（改了喂帧表就用 --rewrite）')
+  }
+  if (!Array.isArray(ui.frames) || ui.frames.length === 0) {
+    throw new Error('scenarios.json 里没有可用的 ui_smoke.frames（跑一次 build-frames.py 重新生成）')
+  }
+  if (ui.frames.length !== ui.frame_count) {
+    throw new Error(`ui_smoke.frames 有 ${ui.frames.length} 项，但声明 frame_count=${ui.frame_count}`)
+  }
+
+  // 🔴 **断言的下界 = 离线扫描过的最低帧率**（下面 `rate >= ui.rate_floor` 直接用这个值）。
+  //    这条自检盯的是"两者分叉"：如果谁在 JS 里另写一个更宽松的下界，就会出现
+  //    「守卫绿着，而浏览器里那个帧率其实已经判不出来了」—— 那正是本段要堵的洞。
+  const rates = Object.keys(ui.rate_sweep)
+  if (!rates.length) throw new Error('ui_smoke.rate_sweep 是空的 —— 帧率扫描没跑')
+  // ⚠️ 键是 Python 写出来的字符串（"1.5" / "2.0" / "5.0"）：**不要**转成数字再拿回来查，
+  //    `String(2)` 是 "2"，跟 "2.0" 不是同一个键（这里第一版就踩了这个）。
+  const floor = Math.min(...rates.map(Number))
+  if (ui.rate_floor !== floor) {
+    throw new Error(`ui_smoke.rate_floor=${ui.rate_floor} 与 rate_sweep 的最低档 ${floor} 不一致`)
+  }
+  const notOk = rates.filter((r) => ui.rate_sweep[r].grade !== 'completed')
+  if (notOk.length) {
+    throw new Error(`ui_smoke.rate_sweep 在 ${notOk.join(' / ')} 帧/秒下判不成 completed —— ` +
+      'fixture 自己就没过，别指望浏览器里能过')
+  }
+
+  // 喂帧窗口必须短于**第一个动作的标称时长**：动作计时器走到那儿会自动切下一个动作，
+  // 之后推的帧会被记到新动作上（症状是收尾屏多出一个「判过的动作」）。时长从
+  // `exercises.ts` 读出来存进 fixture，不在两边各写一个 12000。
+  const budget = ui.feed_ms + ui.click_slack_ms
+  if (budget > ui.action_duration_ms - 500) {
+    throw new Error(`feed_ms=${ui.feed_ms} + click_slack=${ui.click_slack_ms} = ${budget}ms` +
+      ` 太贴近动作时长 ${ui.action_duration_ms}ms —— 帧会溢出到下一个动作`)
+  }
+  return ui
+}
+
+/**
+ * document-start 注入的假摄像头。
+ *
+ * `canvas.captureStream(0)` + `track.requestFrame()`：帧完全由我们按 `setInterval`
+ * 推、`<video>` 侧由浏览器自己解码（素材就是普通的 `<img>`）—— 所以**载荷几 KB、
+ * 不需要任何额外 Chrome 开关**（尤其不需要 `--use-fake-device-for-media-stream`），
+ * 可以和现有冒烟共用同一个 Chrome 实例。
+ *
+ * 🔴 这段脚本在 **document-start** 跑（`Page.addScriptToEvaluateOnNewDocument`），
+ *    那时 `document.documentElement` **还是 `null`** —— 直接 `appendChild` 会抛、
+ *    整个注入静默失效（症状是 `window.__ngFakeCam === undefined`，而界面照常渲染，
+ *    看着像"注入根本没执行"）。所以整段包 try/catch，并把错误留在
+ *    `window.__ngFakeCamErr` 里供断言读取，而不是让它烂在控制台里。
+ *
+ * 🔴 注入之后**默认不推帧**：`captureStream(0)` 不主动请求就不出新帧 ⇒
+ *    `<video>` 只有画布初始的那一帧 ⇒ app 的本地引擎会去 `detect()`，
+ *    但 `video.currentTime` 不变（引擎内部按它去重）⇒ 永远不出姿态 ⇒
+ *    **一条帧都进不了判定链**。这正是我们要的：整个用例的前半段（路由、新手引导、
+ *    零采样收尾屏）必须与"没有摄像头"时**完全一样**，只有
+ *    `checkCameraGuidance` 里显式 `start()` 的那一段才有帧。
+ *
+ * 🔴 `start(ms)` 是**按墙上时间定长**的（不是一个帧数）：到点自己停。
+ *    为什么不能用"帧表喂完即止"：无头页里每帧推理同步占主线程 ~0.45 秒，
+ *    推帧的 `setInterval` 会被拖到 2.0–5.0 帧/秒（实测）。按帧数定长的话，
+ *    「53 帧 × 200ms」在忙的时候会变成 22.5 秒 —— 越过动作计时器的 12 秒边界，
+ *    后半段帧被记到下一个动作上。按时间定长之后，帧率**只影响帧数、不影响时长**，
+ *    而"保持比例"这个被验的量只依赖时长（`judgeSession` 的 held_ms 是时间差之和）。
+ */
+function fakeCameraScript(frameFiles) {
+  return `
+(() => {
+  try {
+    const FRAMES = ${JSON.stringify(frameFiles)};
+    const W = 640, H = 480;
+    const imgs = [];
+    let loaded = 0;
+    for (const f of FRAMES) {
+      const im = new Image();
+      im.src = '/ng-frames/' + f;
+      im.onload = () => { loaded++ };
+      imgs.push({ name: f, im });
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    canvas.style.cssText = 'position:fixed;left:-9999px;top:0;width:640px;height:480px';
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const stream = canvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    window.__ngFakeCam = {
+      frames: FRAMES, queue: FRAMES.slice(), idx: 0, timer: 0, pushed: 0,
+      started: false, startedAt: 0, deadline: 0, stoppedAt: 0,
+      ready: () => loaded === FRAMES.length,
+      setQueue(names) { this.queue = names.slice(); this.idx = 0; return this.queue.length },
+      /** 喂帧 \`ms\` 毫秒（0 = 一直喂到显式 stop()）。到点自己停，免得"喂多久"取决于机器多忙。 */
+      start(ms) {
+        if (this.started) return this.started;
+        this.started = true;
+        this.startedAt = Date.now();
+        this.deadline = ms ? this.startedAt + ms : 0;
+        this.timer = setInterval(() => {
+          if (this.deadline && Date.now() >= this.deadline) { this.stop(); return; }
+          const n = this.queue[this.idx] ?? this.queue[0];
+          const e = imgs.find((x) => x.name === n) || imgs[0];
+          ctx.drawImage(e.im, 0, 0, W, H);
+          track.requestFrame();
+          this.pushed++;
+          this.idx = (this.idx + 1) % this.queue.length;
+        }, ${UI_FEED_INTERVAL_MS});
+        return true;
+      },
+      stop() {
+        clearInterval(this.timer); this.timer = 0; this.started = false;
+        if (!this.stoppedAt) this.stoppedAt = Date.now();
+      },
+    };
+    try { document.documentElement.appendChild(canvas) } catch (e) {
+      document.addEventListener('DOMContentLoaded', () => document.body.appendChild(canvas));
+    }
+    const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (c) => (c && c.video) ? stream : orig(c);
+  } catch (e) {
+    window.__ngFakeCamErr = String(e && (e.stack || e.message || e));
+  }
+})();
+`
+}
+
+/** 喂帧间隔。必须等于 fixture 里的 `frame_interval_ms` —— 见下面那条断言。 */
+const UI_FEED_INTERVAL_MS = 200
+
+/** 实时引导的 5 条文案（`exerciseQuality.ts` 的 HINT_* 常量；从源码读，不在这里复刻）。 */
+function readHintTexts() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/platform/exerciseQuality.ts'), 'utf8')
+  const found = [...src.matchAll(/export const HINT_[A-Z]+ = '([^']+)'/g)].map((m) => m[1])
+  if (found.length !== 5) throw new Error(`从 exerciseQuality.ts 读到 ${found.length} 条 HINT_ 文案，期望 5 条`)
+  return found
+}
+const HINT_TEXTS = readHintTexts()
+const HINT_COMPLETED = HINT_TEXTS.find((h) => h.startsWith('很好'))
+const HINT_IDLE = HINT_TEXTS.find((h) => h.startsWith('没检测到动作'))
+const HINT_HOLD = HINT_TEXTS.find((h) => h.startsWith('保持住'))
+
+function startStaticServer(dir, fallbackRoots = []) {
+  /** 按「dist 优先、兜底根其次」列出候选文件（每个都做穿越防护）。 */
+  const candidatesFor = (rel) => {
+    const out = [path.join(dir, rel)]
+    for (const f of fallbackRoots) {
+      if (rel.startsWith(f.prefix)) out.push(path.join(f.root, rel.slice(f.prefix.length)))
+    }
+    return out.filter((p) => {
+      const rp = path.resolve(p)
+      if (rp.startsWith(path.resolve(dir))) return true
+      return fallbackRoots.some((f) => rp.startsWith(path.resolve(f.root)))
+    })
+  }
+
   const server = http.createServer((req, res) => {
     let rel = decodeURIComponent((req.url || '/').split('?')[0])
     if (rel.endsWith('/')) rel += 'index.html'
-    const file = path.join(dir, rel)
-    // 目录穿越防护：解析后必须仍在 dist 之内
-    if (!path.resolve(file).startsWith(path.resolve(dir))) {
-      res.writeHead(403).end('forbidden')
+    const file = candidatesFor(rel).find((p) => {
+      try {
+        return fs.statSync(p).isFile()
+      } catch {
+        return false
+      }
+    })
+    if (!file) {
+      // SPA 回退：非资源请求一律给 index.html（HashRouter 下正常不会走到，
+      // 但 `--headless` 偶尔会请求 /favicon.ico 之类，给个 404 更诚实）
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
       return
     }
     fs.readFile(file, (err, buf) => {
       if (err) {
-        // SPA 回退：非资源请求一律给 index.html（HashRouter 下正常不会走到，
-        // 但 `--headless` 偶尔会请求 /favicon.ico 之类，给个 404 更诚实）
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
         return
       }
@@ -880,6 +1124,478 @@ async function checkOnboarding(cdp, sessionId, run, c, key) {
   }
 }
 
+// ─────────────────── 假摄像头：实时引导 / 实时徽章 ───────────────────
+
+/**
+ * 一次采样的探针。把判定链在界面上留下的痕迹读出来：
+ *   · 实时引导**浮层**的文案（= `liveQuality.hint`）
+ *   · 实时动作达成度的**徽章**数字（= `liveQuality.score`，见 `NeckActivity.tsx` 的 `liveQuality`）
+ *   · 摄像头画面里的**姿态读数**（证明帧真的进了 MediaPipe）
+ *   · 视频元素的 `currentTime`（证明**新帧真的到了** `<video>`，不是只有我们自己在 requestFrame）
+ *
+ * 🔴 浮层必须按**样式**认，不能只按文案：面板里还有一处同文案的 `<span>`，
+ *    只按文案会把"浮层没渲染、面板那行在"读成"浮层出现了"。
+ *
+ * 🔴 徽章按 **`data-ng` 锚点**读，不按布局层级找 —— 这一条是被变异测试逼出来的：
+ *    原来靠 `p"实时动作达成度"` → `parentElement` → `span`，可**移动端练习条上的徽章
+ *    根本没有那个 `<p>`**，于是 `gauge` 恒为 `null`、一致性循环整段 `continue`，
+ *    断言一路"✓"着却一次都没检查过任何东西（变异 M5 漏网才暴露）。
+ *    现在锚点挂在 `ScoreGauge` 上（`ngId`），并且"提示在屏上时锚点必须读得到"本身
+ *    就是一条断言 —— 锚点再丢，红的是这一条，不会又是静默空转。
+ *
+ * 🔴 分辨「渲染出来了」与「用户看得见」是两件事，必须分开读：
+ *   · `overlayMounted` = 元素在 DOM 里（= `liveQuality` 非 null）。这是"有帧时实时引导
+ *     不再恒为 null"要断的东西 —— 它不该被 `opacity` 影响。
+ *   · `overlayVisible` = 再排除 `opacity: 0`。浮层挂载时 `initial={{opacity: 0}}`，
+ *     退场的那 0.18 秒也停在 0 上、且**上面还挂着上一句文案** —— 那种陈旧读数会
+ *     伪造出"徽章与提示矛盾"。所以**文案与徽章的一致性**只认 `overlayVisible`。
+ *   （v1 只用了一个 `overlay` 字段，把这两件事混在一起：结果是"浮层缺了一次"既可能是
+ *   判定真的为空、也可能只是采样撞在淡入的那一帧上，而报错话术是一样的。）
+ */
+const GUIDANCE_PROBE = `(() => {
+  const hints = ${JSON.stringify(HINT_TEXTS)};
+  const isOverlay = (opacityOk) => [...document.querySelectorAll('div')].find((d) => {
+    if (!hints.includes((d.textContent || '').trim())) return false;
+    const cs = getComputedStyle(d);
+    if (cs.pointerEvents !== 'none' || cs.position !== 'absolute') return false;
+    return !opacityOk || cs.opacity !== '0';
+  });
+  const mounted = isOverlay(false);
+  const visible = isOverlay(true);
+  // [锚点名, 徽章数字或 null]；页面上有几处就几条（移动端练习条 / 桌面 ExercisePanel）
+  const gauges = [...document.querySelectorAll('[data-ng$="-score"]')].map((el) => {
+    const sp = el.querySelector('span');
+    return [el.getAttribute('data-ng'), sp ? sp.textContent.trim() : null];
+  });
+  const tp = [...document.querySelectorAll('p')].find((p) => p.textContent.trim() === '头部侧倾');
+  const v = document.querySelector('video');
+  const s = window.__ngFakeCam;
+  return JSON.stringify({
+    hint: visible ? visible.textContent.trim() : null,
+    overlayMounted: !!mounted,
+    overlayVisible: !!visible,
+    gauges,
+    headTilt: tp && tp.nextElementSibling ? tp.nextElementSibling.textContent.trim() : null,
+    pushed: s ? s.pushed : -1,
+    vt: v ? v.currentTime : null,
+    ending: [...document.querySelectorAll('button')]
+      .some((x) => x.textContent.replace(/\\s/g, '') === '结束活动'),
+  });
+})()`
+
+const SAMPLE_STEP_MS = 500
+
+/**
+ * 假摄像头那一段的全部断言。
+ *
+ * ⚠️ 进入本函数前，本用例已经把「三路由 + 新手引导 + 零采样收尾屏」走完了 ——
+ * 所以这里先**回到 `#/` 再整页重载**（`mode` 回到 monitor、假摄像头在 document-start
+ * 重新注入），然后单独跑一次"有帧的活动"。
+ *
+ * ## 时间：喂帧是按**墙上时间**定长，采样也是
+ *
+ * `start(ui.feed_ms)` 到点自己停 ⇒ 那段"有帧的活动"的**长度是固定的 10 秒**，
+ * 帧率只决定喂进去多少帧。采样循环同样按墙上时间走（v1 按"循环次数 × 500ms"走，
+ * 而单次采样本身要一次 CDP 往返、在忙页上要 0.3–0.6 秒 ⇒ 10 秒的帧表被采成 22 秒，
+ * 时间轴整个错位）。
+ *
+ * ⚠️ 全程**只断言不变量与存在性**，不钉时间轴：实时引导看的是**最近 5 秒**的滚动窗口，
+ * 而帧的时间戳是 `Date.now()` —— "第几秒该出现哪句文案"随真实帧率漂，
+ * 钉死必然假红。所以：
+ *   ① 帧率不低于**离线扫描过的最低档**（`ui.rate_floor`）—— 这是其余断言的前提；
+ *   ② 姿态读数出现过 ≥ 5°（超过静息阈值）⇒ 帧真的走完了 MediaPipe；
+ *   ③ 帧流动起来之后浮层**一直在**（`liveQuality` 不再恒为 null）；
+ *   ④ 出现过「幅度够了」那一类的提示（不是恒 idle / 恒幅度不足）；
+ *   ⑤ 🔴 徽章与提示**不矛盾**（idle ⟺ 0 分；否则 ≥80 ⟺ completed）；
+ *   ⑥ 收尾屏与落库：只有那个动作被判、明细 v3 只 1 项、`avg_score` 同源、判成 completed。
+ */
+async function checkCameraGuidance(cdp, sessionId, run, c, ui) {
+  const where = `${c.name} 假摄像头实时引导`
+  try {
+    // ⚠️ 先回到 `#/`：上一段（活动收尾屏 / 历史行）结束时页面停在 `#/dashboard`，
+    // 在那里重载**没有 `<video>`** —— 症状是"app 没取到流"超时，看着像注入坏了。
+    await evaluate(
+      cdp,
+      sessionId,
+      `(() => { const a = document.querySelector('a[href="#/"]'); if (a) a.click(); return true })()`,
+    )
+    await waitFor(cdp, sessionId, `location.hash === '#/' || location.hash === ''`, {
+      timeout: 6000,
+      label: `${where} 回到肩颈活动页`,
+    })
+    await evaluate(
+      cdp,
+      sessionId,
+      `(() => { try { sessionStorage.removeItem('neckguardian:start-exercise') } catch (e) {} return true })()`,
+    )
+    await cdp.send('Page.reload', {}, sessionId)
+    await waitFor(cdp, sessionId, `document.readyState === 'complete'`, {
+      label: `${where} 重新加载`,
+    })
+
+    // ── ① 注入真的生效了（document-start 那个时机最容易静默失败）──────────────
+    const inj = await evaluate(
+      cdp,
+      sessionId,
+      `(() => ({ has: typeof window.__ngFakeCam, err: window.__ngFakeCamErr || null }))()`,
+    )
+    const injOk = !!(inj.ok && inj.value && inj.value.has === 'object' && !inj.value.err)
+    run.check(
+      injOk,
+      `${where} 假摄像头在 document-start 注入成功`,
+      inj.value ? `window.__ngFakeCam=${inj.value.has}，err=${inj.value.err}` : inj.error,
+    )
+    if (!injOk) return
+
+    await waitFor(cdp, sessionId, `window.__ngFakeCam.ready()`, {
+      timeout: 8000,
+      label: `${where} 素材加载完`,
+    })
+
+    // 🔴 没 `start()` 时必须**一条帧都推不出去**。这条不是形式主义：整个用例前半段
+    //    （路由渲染 / 新手引导 / 零采样收尾屏）之所以还能验那几条**边界**，
+    //    靠的就是"有摄像头但没帧"。哪天有人把注入改成自动推帧，这里立刻红。
+    const idle = await evaluate(
+      cdp,
+      sessionId,
+      `(() => ({ pushed: window.__ngFakeCam.pushed, started: window.__ngFakeCam.started }))()`,
+    )
+    run.check(
+      idle.ok && idle.value && idle.value.pushed === 0 && idle.value.started === false,
+      `${where} 未 start() 时一条帧都不推（前半段仍是"零采样"边界）`,
+      `pushed=${idle.value?.pushed} started=${idle.value?.started}`,
+    )
+
+    // ── ② app 真的把这条流接上了 ─────────────────────────────────────────────
+    await waitFor(
+      cdp,
+      sessionId,
+      `(() => { const v = document.querySelector('video'); return !!v && v.videoWidth > 0 })()`,
+      { timeout: 15000, label: `${where} app 取到流` },
+    )
+    const vw = await evaluate(
+      cdp,
+      sessionId,
+      `(() => { const v = document.querySelector('video'); return v ? v.videoWidth + 'x' + v.videoHeight : null })()`,
+    )
+    run.check(
+      vw.ok && vw.value === '640x480',
+      `${where} 注入的流被 app 接受（640×480）`,
+      `实际 ${vw.value}`,
+    )
+
+    // 帧表必须与 fixture 一致：少喂几帧 / 喂错素材都会让下面几条验的东西悄悄变样。
+    const setq = await evaluate(
+      cdp,
+      sessionId,
+      `(() => window.__ngFakeCam.setQueue(${JSON.stringify(ui.frames)}))()`,
+    )
+    run.check(
+      setq.ok && setq.value === ui.frames.length,
+      `${where} 帧表长度与 fixture 一致（${ui.frames.length} 帧 / 喂 ${ui.feed_ms} ms）`,
+      `setQueue 返回 ${setq.value}（fixture 里是 ${ui.frames.length}）`,
+    )
+    run.check(
+      ui.frame_interval_ms === UI_FEED_INTERVAL_MS,
+      `${where} 喂帧间隔与 fixture 声明一致（${UI_FEED_INTERVAL_MS} ms）`,
+      `fixture 说 ${ui.frame_interval_ms} ms，注入脚本推 ${UI_FEED_INTERVAL_MS} ms —— 两处必须一起改`,
+    )
+
+    // ── ③ 开始活动，**确认进了活动态再喂帧** ────────────────────────────────
+    const clicked = await evaluate(
+      cdp,
+      sessionId,
+      `(() => {
+         const b = [...document.querySelectorAll('button')]
+           .find((x) => x.textContent.replace(/\\s/g, '').includes('开始活动'));
+         if (!b) return false;
+         b.click();
+         return true;
+       })()`,
+    )
+    run.check(clicked.ok && clicked.value === true, `${where} 点得到「开始活动」`, '按钮不存在')
+    await waitFor(
+      cdp,
+      sessionId,
+      `(() => [...document.querySelectorAll('button')]
+           .some((x) => x.textContent.replace(/\\s/g, '') === '结束活动'))()`,
+      { timeout: 8000, label: `${where} 进入活动态` },
+    )
+
+    // 🔴 计时从**点下开始活动之后**起算：动作计时器的 12 秒边界也从这个时刻起算，
+    //    所以"喂帧窗口 + 点结束活动的往返"必须整体落在那 12 秒之内（fixture 里
+    //    有 `feed_ms + click_slack_ms ≤ 动作时长 − 500ms` 这条自检钉着）。
+    const t0 = Date.now()
+    const began = await evaluate(cdp, sessionId, `window.__ngFakeCam.start(${ui.feed_ms})`)
+    run.check(began.ok && began.value === true, `${where} 开始逐帧推送`, 'start() 没返回 true')
+
+    // 采样循环按**墙上时间**走（不是按次数）：单次采样要一次 CDP 往返，
+    // 忙页上要 0.3–0.6 秒 —— 按次数走会把 10 秒的帧表采成 20 秒以上，时间轴整个错位。
+    const samples = []
+    for (;;) {
+      if (samples.length) await sleep(SAMPLE_STEP_MS)
+      const at = Date.now() - t0
+      if (at >= ui.feed_ms) break
+      const r = await evaluate(cdp, sessionId, GUIDANCE_PROBE)
+      if (r.ok && r.value) {
+        try {
+          samples.push({ at: Date.now() - t0, ...JSON.parse(r.value) })
+        } catch {
+          /* 单次采样解析失败不算失败，下面的计数断言会兜住 */
+        }
+      }
+    }
+
+    // 喂帧窗口一到就点「结束活动」。这一下会**立刻停止记录帧** ⇒ 记录窗口
+    // 不会漫过动作计时器的 12 秒边界（漫过去的话后半段帧会被记到下一个动作上，
+    // 症状是"收尾屏多出一个判过的动作"，很难归因）。
+    const clickT0 = Date.now()
+    const clickedEnd = await evaluate(
+      cdp,
+      sessionId,
+      `(() => {
+         const b = [...document.querySelectorAll('button')]
+           .find((x) => x.textContent.replace(/\\s/g, '') === '结束活动');
+         if (!b) return false;
+         b.click();
+         return true;
+       })()`,
+    )
+    const clickAt = Date.now() - t0
+    await evaluate(cdp, sessionId, `window.__ngFakeCam.stop()`)
+    const stopAt = Date.now() - t0
+
+    const last = samples[samples.length - 1] || {}
+    const pushed = last.pushed > 0 ? last.pushed : 0
+    // 帧率 = 喂帧窗口内推出去的帧数 ÷ 喂帧窗口长度（窗口是定长的，见 `start(ms)`）。
+    const rate = (pushed * 1000) / ui.feed_ms
+    console.log(
+      `    · 采样 ${samples.length} 次 / 喂帧 ${ui.feed_ms} ms，推送 ${pushed} 帧（${rate.toFixed(1)}/s）；` +
+        `点结束活动 t+${clickAt}ms（往返 ${clickAt - ui.feed_ms}ms，stop t+${stopAt}ms）`,
+    )
+    console.log(
+      `    · 时间轴 ${samples.map((s) => `${(s.at / 1000).toFixed(1)}s:${s.hint ? s.hint.slice(0, 2) : '--'}`).join(' ')}`,
+    )
+
+    // 🔴 前置断言：记录窗口没漫出喂帧窗口。它红了就说"别往下看"，因为下面的
+    //    "只有 1 个动作被判"必然跟着红 —— 但根因是这一条（机器太慢 / CDP 往返太慢）。
+    run.check(
+      clickAt <= ui.feed_ms + ui.click_slack_ms,
+      `${where} 点「结束活动」落在喂帧窗口内（≤ ${ui.feed_ms + ui.click_slack_ms}ms）`,
+      `实测 t+${clickAt}ms —— 记录窗口比 fixture 建模的长 ${clickAt - ui.feed_ms - ui.click_slack_ms}ms。` +
+        `动作计时器的边界在 ${ui.action_duration_ms}ms，漫过去之后帧会被记到下一个动作上`,
+    )
+
+    // 🔴 帧率是其余断言的前提（窗口按**墙上时间**算）。下界 = **离线扫描过的最低帧率**
+    //    （`ui.rate_floor`，来自 `scenarios.json:ui_smoke.rate_sweep`）—— 不是随手写的数：
+    //    "断言允许的帧率"与"扫描证明过的帧率"必须是同一个数，否则会出现
+    //    「守卫绿着，而浏览器里那个帧率其实已经判不出来了」。
+    //    再往下会先坏在两处：① 帧间隔超过 `MAX_FRAME_GAP_MS=1500` ⇒ `held_ms` 整段不计；
+    //    ② 跟踪器收敛那几帧占掉更长的墙上时间 ⇒ 保持比例掉到 0.6 以下。
+    run.check(
+      rate >= ui.rate_floor,
+      `${where} 馈帧节奏未被节流（≥${ui.rate_floor} 帧/秒，= 离线扫描过的最低档）`,
+      `实测 ${rate.toFixed(1)} 帧/秒（${pushed} 帧 / ${ui.feed_ms}ms）—— 无头页的 setInterval 被推理拖住了？` +
+        `实时引导的窗口按墙上时间算，节流会让"保持比例"直接掉到达标线以下`,
+    )
+
+    const withOverlay = samples.filter((s) => s.overlayMounted)
+    const hintsSeen = [...new Set(samples.map((s) => s.hint).filter(Boolean))]
+    const tilts = samples.map((s) => parseFloat(s.headTilt)).filter((v) => Number.isFinite(v))
+    const maxTilt = tilts.length ? Math.max(...tilts) : 0
+    const vts = samples.map((s) => s.vt).filter((v) => Number.isFinite(v))
+
+    // ① 帧真的走完了「流 → MediaPipe → 姿态读数」
+    run.check(
+      maxTilt >= 5,
+      `${where} 姿态读数来自注入的帧（头部侧倾出现过 ≥ 5°）`,
+      `本次最大读数 ${maxTilt}° —— 帧没进推理，或引擎没加载起来`,
+    )
+    // ①' 视频元素的时间戳也要前进：只证明"我们 requestFrame 了"不够，
+    //     得证明浏览器把帧真的交给了 `<video>`（引擎按它去重，不动就等于没帧）
+    run.check(
+      vts.length >= 2 && vts[vts.length - 1] > vts[0],
+      `${where} 注入的帧真的到了 <video>（currentTime 在前进）`,
+      `采样到的 currentTime：${vts.length} 个（首 ${vts[0]} / 末 ${vts[vts.length - 1]}）`,
+    )
+    // ② 帧流动起来之后，实时引导浮层**一直在**（这条就是本次接线要堵的洞：
+    //    以前无头环境没有帧 ⇒ `liveQuality` 恒为 null ⇒ 只验过回落分支）
+    //
+    //    ⚠️ 只统计**喂帧窗口内部**的采样：窗口末尾之后 `liveQuality` 回落到 null 是
+    //    **正确**行为（帧不再进来，滚动窗口会把内容滚空）。v1 把"采样一直采到窗口
+    //    结束之后"的读数也算进来，于是"停帧后浮层消失"被当成失败 —— 而那恰恰是它该做的。
+    const late = samples.filter((s) => s.at >= 3000 && s.at <= ui.feed_ms - 500)
+    const lateMiss = late.filter((s) => !s.overlayMounted)
+    const liveOk = withOverlay.length > 0 && late.length >= 3 && lateMiss.length === 0
+    run.check(
+      liveOk,
+      `${where} 有帧时实时引导浮层真的渲染出来了（liveQuality 不再恒为 null）`,
+      withOverlay.length === 0
+        ? '一次都没出现 —— 帧没进判定链，或浮层的显示条件没满足'
+        : late.length < 3
+          ? `窗口内只采到 ${late.length} 次（机器太慢，采样被推理挤掉了）`
+          : `3 秒后有 ${lateMiss.length}/${late.length} 次采样没看到浮层（${lateMiss.map((s) => (s.at / 1000).toFixed(1) + 's').join(',')}）`,
+    )
+    // ③ 不是恒 idle / 恒"幅度不够"：拉伸位那一段必须被认成"幅度够了"
+    const ampOk = hintsSeen.includes(HINT_HOLD) || hintsSeen.includes(HINT_COMPLETED)
+    run.check(
+      ampOk,
+      `${where} 实时引导认出「幅度够了」那一类提示（不是恒 idle）`,
+      `只见到 ${JSON.stringify(hintsSeen)} —— 判定结果与实际动作不符，或帧的相位不对`,
+    )
+    // ④ 🔴 徽章与提示不矛盾（v1.7.0 修的「同屏两套口径」，铁律 #62/#63）
+    //
+    //    规则来自 `scoreExercise` 那条**由构造保证**的不变量：`score >= 80 ⟺ completed`；
+    //    再加 idle 的显式定义（`IDLE_SCORE = 0`）。把 `activityScore` 改回运动态通道
+    //    `score` 会让 idle 时刻的徽章变成一个非 0 的数字 —— 这条当场抓住。
+    //    ⚠️ 只认 `overlayVisible` 里的文案（见 `GUIDANCE_PROBE` 的说明）。
+    //
+    //    🔴 第二轮（变异 M5 漏网后）补的两件事 —— 别再把它们删回去：
+    //    ① **锚点必须读得到**：提示在屏上时，同屏徽章必须有读数。以前锚点选错
+    //       （移动端练习条没有 `p"实时动作达成度"`）⇒ `gauge` 恒 null ⇒ 整个循环
+    //       `continue`，断言恒绿却什么都没查。所以"锚点丢了"本身要红，且报错话术
+    //       必须区别于"真矛盾"。
+    //    ② 页面上**每一处** `data-ng="*-score"` 都要查（移动端练习条 + 桌面面板），
+    //       不是只查第一个 —— 否则又会出现"某条路径没被覆盖"。
+    const bad = []
+    let anchorSeen = 0
+    let anchorMissing = 0
+    for (const s of samples) {
+      if (s.hint === null) continue
+      const pairs = (s.gauges || []).filter(([, v]) => v !== null && v !== '')
+      if (!pairs.length) {
+        anchorMissing++
+        continue
+      }
+      for (const [ng, v] of pairs) {
+        const g = Number(v)
+        if (!Number.isFinite(g)) {
+          bad.push(`${(s.at / 1000).toFixed(1)}s ${ng} 徽章读数「${v}」不是数字`)
+          continue
+        }
+        anchorSeen++
+        const okIdle = s.hint === HINT_IDLE ? g === 0 : null
+        const okPair = g >= 80 === (s.hint === HINT_COMPLETED)
+        if (okIdle === false || !okPair) {
+          bad.push(`${(s.at / 1000).toFixed(1)}s ${ng} 徽章${g}分/提示「${s.hint}」`)
+        }
+      }
+    }
+    run.check(
+      bad.length === 0 && anchorMissing === 0 && anchorSeen >= 5,
+      `${where} 实时徽章与实时提示不矛盾（idle⟺0 分，否则 ≥80⟺completed）`,
+      anchorMissing > 0
+        ? `${anchorMissing} 次采样「提示在屏上、徽章却读不到」 —— 徽章上的 ` +
+          'data-ng="*-score" 锚点没了（这正是这条断言以前静默空转的原因）'
+        : anchorSeen < 5
+          ? `只读到 ${anchorSeen} 次徽章读数（要 ≥5）—— 徽章没渲染，或锚点又选错了`
+          : `${bad.length} 处矛盾：${bad.slice(0, 3).join('；')}`,
+    )
+    console.log(`    · 徽章锚点：读到 ${anchorSeen} 次读数${anchorMissing ? `，另有 ${anchorMissing} 次读不到` : ''}`)
+
+    // ── ⑥ 收尾：**真实帧**下的收尾屏与落库 ────────────────────────────────────
+    run.check(clickedEnd.ok && clickedEnd.value === true, `${where} 点得到「结束活动」`, '按钮不存在')
+
+    const done = await waitFor(
+      cdp,
+      sessionId,
+      `(() => {
+         const ps = [...document.querySelectorAll('p')];
+         const lbl = ps.find((p) => p.textContent.trim() === '本次动作成绩');
+         if (!lbl) return null;
+         return {
+           score: lbl.previousElementSibling ? lbl.previousElementSibling.textContent.trim() : '',
+           undecided: (document.body.innerText.match(/未判定/g) || []).length,
+         };
+       })()`,
+      { timeout: 6000, label: `${where} 渲染出收尾屏` },
+    )
+    run.check(
+      done.score !== '--' && Number.isFinite(Number(done.score)),
+      `${where} 有真实帧时成绩不再是 --`,
+      `实际「${done.score}」 —— 帧没被判进去`,
+    )
+    run.check(
+      done.undecided === 6,
+      `${where} 只有 1 个动作被判、其余 6 个如实标「未判定」`,
+      `实际 ${done.undecided} 次 —— 帧被算到了别的动作上。先看上面那条"点结束活动落在喂帧窗口内"` +
+        `有没有红：记录窗口漫过动作时长 ${ui.action_duration_ms}ms 之后，后半段帧会被记到下一个动作上`,
+    )
+    console.log(`    · 收尾：本次动作成绩 ${done.score}、未判定 ${done.undecided} 次`)
+
+    // 落库那条记录：取**时间戳最新**的一条（不是"最后一条"—— 上一轮还插了 3 条老记录）
+    const rec = await evaluate(
+      cdp,
+      sessionId,
+      `(async () => {
+         const readLatest = () => new Promise((resolve) => {
+           let req;
+           try { req = indexedDB.open('neckguardian'); } catch (e) { resolve(null); return; }
+           req.onerror = () => resolve(null);
+           req.onsuccess = () => {
+             const db = req.result;
+             if (!db.objectStoreNames.contains('activity_log')) { db.close(); resolve(null); return; }
+             const all = db.transaction('activity_log', 'readonly').objectStore('activity_log').getAll();
+             all.onerror = () => { db.close(); resolve(null); };
+             all.onsuccess = () => {
+               const rows = all.result || [];
+               db.close();
+               if (!rows.length) { resolve(null); return; }
+               const newest = rows.reduce((a, b) => (String(b.timestamp) > String(a.timestamp) ? b : a));
+               resolve(JSON.stringify(newest));
+             };
+           };
+         });
+         for (let i = 0; i < 30; i++) {
+           const r = await readLatest();
+           if (r) return r;
+           await new Promise((s) => setTimeout(s, 100));
+         }
+         return null;
+       })()`,
+    )
+    const got = rec.ok && rec.value
+    run.check(!!got, `${where} 真实帧的成绩真的落库`, `没读到记录：${rec.error || '无'}`)
+    if (got) {
+      const row = JSON.parse(rec.value)
+      let parsed = null
+      try {
+        parsed = JSON.parse(row.action_scores)
+      } catch {
+        /* 下面那条断言会报出来 */
+      }
+      const items = parsed && Array.isArray(parsed.items) ? parsed.items : null
+      run.check(
+        !!parsed && parsed.v === 3 && !!items && items.length === 1,
+        `${where} 落库明细是 v3 且只含 1 个判过的动作`,
+        `实际：${JSON.stringify(row.action_scores)}`,
+      )
+      if (items && items.length === 1) {
+        // 明细项的 `id` 也钉住：光看"1 项 / completed / ≥80"的话，
+        // 万一时序反了（判的是第二个动作），分数照样可能合理 —— 而那就不是这段要验的东西了。
+        run.check(
+          items[0].id === 'neck-flex-left',
+          `${where} 判过的那一项是第一个动作（neck-flex-left）`,
+          `实际 id=${items[0].id} —— 计时/时序偏了？`,
+        )
+        run.check(
+          row.avg_score === items[0].score,
+          `${where} avg_score 与明细同源`,
+          `avg_score=${row.avg_score} vs 明细 ${items[0].score}`,
+        )
+        run.check(
+          items[0].grade === 'completed' && row.avg_score >= 80,
+          `${where} 浏览器路径判成 completed（与 fixture 的 UI 冒烟帧表同源）`,
+          `实际 grade=${items[0].grade} score=${items[0].score} —— 两条测量路径分叉了？` +
+            `见 fake-camera/README 的余量表与 scenarios.json:ui_smoke.rate_sweep（扫描说这一档是 completed）`,
+        )
+      }
+    }
+  } catch (e) {
+    run.fail(where, e.message)
+  }
+}
+
 // ─────────────────────────── 主流程 ───────────────────────────
 
 async function main() {
@@ -908,10 +1624,31 @@ async function main() {
 
   if (EVIDENCE_DIR) fs.mkdirSync(EVIDENCE_DIR, { recursive: true })
 
-  const { server, port } = await startStaticServer(DIST)
+  // 假摄像头那一段的前提资源：跑之前点名核对，缺任何一个就**直接失败**。
+  // 🔴 不许"缺了就跳过那一段" —— 跳过会让这个守卫永远是绿的，而它恰恰是唯一能
+  //    证明"有帧时实时引导真的出来了"的东西。两处来源都可靠（见 CAMERA_ASSETS）。
+  const mobileCases = cases.filter((c) => c.form === '移动端')
+  let UI_SMOKE = null
+  if (mobileCases.length) {
+    const missing = CAMERA_ASSETS.filter(([p]) => !fs.existsSync(p))
+    if (missing.length) {
+      console.error('::error::UI 冒烟无法进行：假摄像头那一段的前提资源缺失')
+      for (const [p, what] of missing) console.error(`  ✗ ${what} —— ${path.relative(ROOT, p)}`)
+      console.error('  wasm 来自 npm ci 装的 @mediapipe/tasks-vision；模型是入库的 mediapipe-assets/。')
+      process.exit(1)
+    }
+    UI_SMOKE = loadUiSmoke()
+  }
+
+  const { server, port } = await startStaticServer(DIST, FALLBACK_ROOTS)
   const origin = `http://127.0.0.1:${port}`
   console.log(`UI 冒烟 · 无头 Chrome`)
   console.log(`  静态目录  ${path.relative(ROOT, DIST) || '.'} → ${origin}`)
+  if (UI_SMOKE) {
+    console.log(
+      `  兜底资源  /ng-frames/ → scripts/fake-camera/frames   /mediapipe/** → ${path.relative(ROOT, MEDIAPIPE_WASM_SRC)}+models`,
+    )
+  }
   console.log(`  浏览器    ${chrome}`)
 
   const { child, userDataDir, port: dbgPort, wsPath } = await launchChrome(chrome)
@@ -1001,6 +1738,19 @@ async function main() {
       await cdp.send('Runtime.enable', {}, sessionId)
       await cdp.send('Log.enable', {}, sessionId)
       await cdp.send('Emulation.setDeviceMetricsOverride', { ...c.viewport }, sessionId)
+
+      // 🔴 假摄像头必须**在导航之前**注册：`Page.addScriptToEvaluateOnNewDocument`
+      //    只对**后续**文档生效，晚一步就等于这一页没有它 —— 而页面照常渲染，
+      //    从日志上看不出任何差异（症状只是"帧没来"）。
+      //    只给**移动端**用例注入：桌面走 WS 把帧发给 Python 后端，注入会把它的取流
+      //    路径换掉、把"桌面无后端"那几条断言验的东西悄悄改成别的东西。
+      if (c.form === '移动端' && UI_SMOKE) {
+        await cdp.send(
+          'Page.addScriptToEvaluateOnNewDocument',
+          { source: fakeCameraScript(UI_SMOKE.frames) },
+          sessionId,
+        )
+      }
 
       const url = `${origin}/?${c.query}`
       await cdp.send('Page.navigate', { url }, sessionId)
@@ -1539,6 +2289,16 @@ async function main() {
         run.fail(`${c.name} 活动收尾屏`, e.message)
       }
 
+      // ── 假摄像头 · 实时引导 ────────────────────────────────────────────────
+      //
+      // 🔴 必须排在「活动收尾屏」**之后**：那一段验的是**零采样**那条边界
+      //    （无帧 ⇒ 成绩 `--`、7 个动作全「未判定」、落库 `{"v":3,"items":[]}`），
+      //    而这一段会真的喂帧。反过来排，那段边界断言就成了"有帧时的值"，
+      //    整个断言组都失效。这里重载一次页面把 `mode` 归零、再单独跑一次"有帧的活动"。
+      if (c.form === '移动端' && UI_SMOKE) {
+        await checkCameraGuidance(cdp, sessionId, run, c, UI_SMOKE)
+      }
+
       // 页面级错误汇总
       if (uncaught.length) {
         run.fail(`${c.name} 无未捕获异常`, `${uncaught.length} 条：${uncaught.slice(0, 2).join(' | ')}`)
@@ -1555,6 +2315,40 @@ async function main() {
       } else {
         run.ok(`${c.name} 无非预期资源加载失败`)
       }
+
+      // ── 收尾：把本用例写进 IndexedDB 的东西清干净 ──────────────────────────
+      //
+      // 🔴 同一个浏览器 profile 下，`indexedDB` 与 `localStorage` 都是**跨用例共享**的
+      //    （5 个平台组合共用同一个 origin）。以前不清也没红，只是因为那几条历史断言的
+      //    目标行恰好还没被多出来的行挤出可见窗口 —— 那是**运气，不是隔离**。
+      //    本用例新增的「假摄像头」段每次会多写一条活动记录，正好把 ios 用例里
+      //    那条 v2 明细行挤出去（实测：`v2 明细（旧口径）照常显示分数` 当场红）。
+      //    ⇒ 显式复原"全新 profile"的语义，用例之间不再互相影响。
+      //    （`localStorage` 的引导标志在**每个用例开头**已经被清过一次，这里不重复。）
+      const wiped = await evaluate(
+        cdp,
+        sessionId,
+        `(async () => {
+           const db = await new Promise((res) => {
+             let req;
+             try { req = indexedDB.open('neckguardian'); } catch (e) { res(null); return }
+             req.onsuccess = () => res(req.result)
+             req.onerror = () => res(null)
+           })
+           if (!db) return '(打不开库)'
+           const names = [...db.objectStoreNames]
+           for (const n of names) {
+             await new Promise((res) => {
+               const tx = db.transaction(n, 'readwrite')
+               tx.objectStore(n).clear()
+               tx.oncomplete = res; tx.onerror = res; tx.onabort = res
+             })
+           }
+           db.close()
+           return names.join(',')
+         })()`,
+      )
+      console.log(`    · 收尾清空 IndexedDB：${wiped.value ?? wiped.error}`)
 
       await cdp.send('Target.closeTarget', { targetId })
       console.log('')
@@ -1575,7 +2369,8 @@ async function main() {
   }
   console.log(
     `✅ UI 冒烟通过：${cases.length} 个平台组合 × ${ROUTES.length} 个路由` +
-      ` + 新手引导 ${cases.length} 次 + 活动收尾屏/历史行 ${cases.length} 次，${run.passed} 项断言`,
+      ` + 新手引导 ${cases.length} 次 + 活动收尾屏/历史行 ${cases.length} 次` +
+      ` + 假摄像头实时引导 ${mobileCases.length} 次，${run.passed} 项断言`,
   )
   if (EVIDENCE_DIR) console.log(`   截图已存：${path.relative(ROOT, EVIDENCE_DIR)}`)
 }
