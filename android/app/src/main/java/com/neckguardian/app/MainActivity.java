@@ -16,9 +16,7 @@ import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 /**
  * NeckGuardian 安卓入口。
@@ -80,8 +78,19 @@ public class MainActivity extends BridgeActivity {
     /** WebView 权限请求的资源名（摄像头）。 */
     private static final String RESOURCE_VIDEO_CAPTURE = "android.webkit.resource.VIDEO_CAPTURE";
 
-    /** 等待系统权限结果的 WebView 权限请求（可能并发，必须用集合）。 */
-    private final List<PermissionRequest> pendingRequests = new ArrayList<>();
+    /**
+     * 等待系统权限结果的 WebView 权限请求。
+     *
+     * 🔴 必须用**集合语义**（见 {@link CameraPermissionQueue}）：并发请求若互相覆盖，
+     * 先到的那个既没 grant 也没 deny，前端 {@code getUserMedia} 就永久挂起 —— 这正是
+     * v1.3.2「允许了权限却打不开」的机制（dev 模式 StrictMode 双挂载、或用户连点「重试」
+     * 都会触发并发）。
+     *
+     * 这段收纳逻辑已抽成**不依赖 Android 框架**的纯类，因此「并发下会不会漏应答」
+     * 现在由 {@code CameraPermissionQueueTest} 单元测试直接覆盖，不再只能靠真机复现。
+     */
+    private final CameraPermissionQueue<PermissionRequest> permissionQueue =
+            new CameraPermissionQueue<>();
 
     /** 是否已经向系统请求过相机权限（用于区分「还没问过」和「用户选了不再询问」）。 */
     private boolean cameraPermissionAsked = false;
@@ -137,7 +146,7 @@ public class MainActivity extends BridgeActivity {
                     request.grant(request.getResources());
                 } else {
                     Log.i(TAG, "camera permission missing -> ask system, keep request pending");
-                    pendingRequests.add(request);
+                    permissionQueue.add(new PendingPermissionRequest(request));
                     armPermissionWatchdog(request);
                     requestCameraPermission();
                 }
@@ -147,7 +156,38 @@ public class MainActivity extends BridgeActivity {
         @Override
         public void onPermissionRequestCanceled(PermissionRequest request) {
             Log.w(TAG, "onPermissionRequestCanceled");
-            pendingRequests.remove(request);
+            permissionQueue.cancel(request);
+        }
+    }
+
+    /**
+     * 把一个 WebView 的 {@link PermissionRequest} 适配成队列能收纳的挂起项。
+     *
+     * <p>{@code key()} 直接返回原 request —— {@code PermissionRequest} 没有覆写
+     * {@code equals}，因此是 identity 语义，正好用来区分「同一个请求对象」。
+     */
+    private static final class PendingPermissionRequest
+            implements CameraPermissionQueue.Pending<PermissionRequest> {
+
+        private final PermissionRequest request;
+
+        PendingPermissionRequest(PermissionRequest request) {
+            this.request = request;
+        }
+
+        @Override
+        public void grant() {
+            request.grant(request.getResources());
+        }
+
+        @Override
+        public void deny() {
+            request.deny();
+        }
+
+        @Override
+        public PermissionRequest key() {
+            return request;
         }
     }
 
@@ -198,16 +238,10 @@ public class MainActivity extends BridgeActivity {
         boolean granted = grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         Log.i(TAG, "onRequestPermissionsResult granted=" + granted
-                + " pending=" + pendingRequests.size());
+                + " pending=" + permissionQueue.size());
 
-        for (PermissionRequest request : pendingRequests) {
-            if (granted) {
-                request.grant(request.getResources());
-            } else {
-                request.deny();
-            }
-        }
-        pendingRequests.clear();
+        // 一次系统回调把**全部**挂起请求应答掉（grant 或 deny），每个恰好一次。
+        permissionQueue.resolveAll(granted);
 
         notifyWebPermissionChanged();
     }
@@ -218,10 +252,9 @@ public class MainActivity extends BridgeActivity {
      */
     private void armPermissionWatchdog(final PermissionRequest request) {
         mainHandler.postDelayed(() -> {
-            if (pendingRequests.remove(request)) {
+            if (permissionQueue.denyIfPending(request)) {
                 Log.w(TAG, "watchdog: deny stale PermissionRequest after "
                         + (PERMISSION_WATCHDOG_MS / 1000) + "s");
-                request.deny();
             }
         }, PERMISSION_WATCHDOG_MS);
     }
