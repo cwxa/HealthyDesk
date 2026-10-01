@@ -25,10 +25,14 @@
  * 用例名。两者都退出非 0（**不静默跳过**），但原因一眼可辨 —— 否则一次 runner 环境
  * 抖动会被读成「代码坏了」，或反过来被读成「通过」。
  *
+ * 而且 `环境不足` 还要**指到该做什么**（`classifyBuildFailure`）：CI 首跑就撞上了
+ * 「干净的检出上没有 `cap sync` 生成的 cordova 产物 ⇒ gradle 配置阶段炸 ⇒ 一份报告都
+ * 没有」，而本机因为跑过打包、那些产物还在，**一直绿**。归类器就是为这个写的。
+ *
  * 用法：
  *   node scripts/verify-android-unit.mjs              # 正常跑
  *   node scripts/verify-android-unit.mjs --offline    # 不联网（依赖已在 gradle 缓存里）
- *   node scripts/verify-android-unit.mjs --self-test  # 只跑本脚本的报告解析自测
+ *   node scripts/verify-android-unit.mjs --self-test  # 只跑本脚本的报告解析+失败归类自测
  *   node scripts/verify-android-unit.mjs --parse-only # 只解析「上一次跑出来的」报告，不执行测试
  */
 import { spawnSync } from 'node:child_process'
@@ -228,6 +232,52 @@ const XML_CASES = [
   },
 ]
 
+/**
+ * 构建失败归类的用例。
+ *
+ * 🔴 这几条**照抄 CI 首跑的真实输出**（不是想出来的形态）—— 第 1 条就是那次事故原文，
+ * 第 5/6 条是**负向对照**：同样出现 `does not exist`（或什么都没有），但都不是原生工程
+ * 没生成 ⇒ 必须落到 `unknown`（否则归类器就成了"见到 does not exist 就喊环境不足"的开关）。
+ */
+const HINT_CASES = [
+  {
+    why: '🔴 CI 首跑真实输出：干净检出上没有 cap sync 生成的 cordova.variables.gradle',
+    out: [
+      "Script '/home/runner/work/HealthyDesk/HealthyDesk/android/app/capacitor.build.gradle' line: 10",
+      '* What went wrong:',
+      'A problem occurred evaluating script.',
+      "> Could not read script '/home/runner/work/HealthyDesk/HealthyDesk/android/capacitor-cordova-android-plugins/cordova.variables.gradle' as it does not exist.",
+      'BUILD FAILED in 34s',
+    ].join('\n'),
+    want: 'native-project-not-generated',
+  },
+  {
+    why: '同一件事的另一种措辞：cordova 插件目录整个不存在',
+    out: "Could not read script '.../android/capacitor-cordova-android-plugins/build.gradle' as it does not exist.",
+    want: 'native-project-not-generated',
+  },
+  {
+    why: 'JDK 太旧：class file major version',
+    out: 'error: Unsupported class file major version 61',
+    want: 'jdk-mismatch',
+  },
+  {
+    why: '依赖下不下来（离线跑、缓存空）',
+    out: "Could not resolve all files for configuration ':app:debugCompileClasspath'.",
+    want: 'deps-unavailable',
+  },
+  {
+    why: '🔴 负向对照：同样有 does not exist，但缺的与原生工程无关 ⇒ 不许当成环境不足',
+    out: "error: cannot open 'src/test/java/com/neckguardian/app/Typo.java' as it does not exist",
+    want: 'unknown',
+  },
+  {
+    why: '🔴 负向对照：空输出（gradle 什么都没说）⇒ unknown，不许瞎猜',
+    out: '',
+    want: 'unknown',
+  },
+]
+
 function selfTest() {
   const bad = []
   for (const c of XML_CASES) {
@@ -248,7 +298,81 @@ function selfTest() {
       )
     }
   }
+  for (const c of HINT_CASES) {
+    const got = classifyBuildFailure(c.out)
+    if (got !== c.want) {
+      bad.push(`${c.why}\n      期望 ${c.want}\n      实得 ${got}`)
+    }
+  }
   return bad
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 构建失败的归类（"环境不足"要能指到具体该做什么）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 给「没有产出报告」的 gradle 输出归类，指出**该做什么**。
+ *
+ * 为什么需要它：CI 首跑真的踩过 —— 干净的检出上**没有** `cap sync` 生成的
+ * `android/capacitor-cordova-android-plugins/cordova.variables.gradle`（它被
+ * `android/.gitignore` 忽略），而**被跟踪的** `android/app/capacitor.build.gradle`
+ * 恰恰 `apply from` 了它 ⇒ gradle 在**配置阶段**就炸，一份报告都不产出。
+ * 本机因为以前跑过打包、那些产物还在，所以**永远是绿的**（本机绿 ≠ CI 绿）。
+ *
+ * 只做「文本 → 归类」这一件事（纯函数 ⇒ 可自测），不做任何 IO。
+ *
+ * @param {string} out gradle 的 stdout+stderr 合并文本
+ * @returns {'native-project-not-generated'|'jdk-mismatch'|'deps-unavailable'|'unknown'}
+ */
+export function classifyBuildFailure(out) {
+  // 逐行看：同一个现象的两段关键词可能落在同一行，跨行匹配容易误伤。
+  const lines = String(out || '').split('\n')
+  const has = (a, b) => lines.some((l) => l.includes(a) && l.includes(b))
+
+  // ① 原生工程没生成（cap sync 的产物不入库）
+  if (
+    has('cordova.variables.gradle', 'does not exist') ||
+    has('capacitor-cordova-android-plugins', 'does not exist') ||
+    has('capacitor.settings.gradle', 'does not exist')
+  ) {
+    return 'native-project-not-generated'
+  }
+
+  // ② JDK 版本不对（AGP 8.x 要 17；用 11 跑会报 class file major version）
+  if (
+    lines.some((l) => /Unsupported class file major version|compiled by a more recent version/.test(l)) ||
+    lines.some((l) => /Gradle requires JVM|requires Java \d+ or later/.test(l))
+  ) {
+    return 'jdk-mismatch'
+  }
+
+  // ③ 依赖下不下来（离线 / 网络 / 缓存空）
+  if (lines.some((l) => /Could not resolve all |Could not download |Could not GET /.test(l))) {
+    return 'deps-unavailable'
+  }
+
+  return 'unknown'
+}
+
+/** 归类 → 人话。⚠️ 每条都必须给出**可执行的下一步**，不只是描述现象。 */
+const FAILURE_HINTS = {
+  'native-project-not-generated': [
+    '原生工程还没生成 —— `cap sync` 的产物被 `android/.gitignore` 忽略，**干净的检出上一定没有**，',
+    '而入库的 `android/app/capacitor.build.gradle` 会 `apply from` 它，于是 gradle 在配置阶段就炸。',
+    '先跑：npm ci && npx cap sync android    （本机跑过打包的机器上这些产物还在，所以本机永远绿。）',
+  ],
+  'jdk-mismatch': [
+    'JDK 版本不匹配 —— 这个 Android 工程要 JDK 17（AGP 8.x）。',
+    '检查 JAVA_HOME 是否指向 17，而不是 11 或 21+ 里某个不兼容的构建。',
+  ],
+  'deps-unavailable': [
+    '依赖没解析出来 —— 离线、网络不通、或 gradle 缓存是空的。',
+    'CI 上别加 `--offline`；本机离线跑要确认依赖已在 GRADLE_USER_HOME 缓存里。',
+  ],
+  unknown: [
+    '归类不出来 —— 请直接看下面的 gradle 输出。',
+  ],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -314,7 +438,10 @@ function main() {
     for (const b of selfBad) console.error(`  - ${b}`)
     return 1
   }
-  console.log(`✅ 报告解析自测通过 ${XML_CASES.length}/${XML_CASES.length}`)
+  console.log(
+    `✅ 自测通过：报告解析 ${XML_CASES.length}/${XML_CASES.length} + ` +
+      `失败归类 ${HINT_CASES.length}/${HINT_CASES.length}`,
+  )
   if (SELF_TEST) return 0
 
   // 只复核既有报告。本机（Windows + 当前沙箱）没有 spawn 子进程的能力时的出口；
@@ -374,7 +501,9 @@ function main() {
 
   // 报告不存在 ⇒ 测试根本没跑起来（编译失败 / 任务被跳过 / 配置漂移）
   if (!results || results.files === 0) {
-    console.error('✗ 环境不足或构建失败：没有产出 JUnit 报告。')
+    const kind = classifyBuildFailure(out)
+    console.error(`✗ 环境不足或构建失败（${kind}）：没有产出 JUnit 报告。`)
+    for (const line of FAILURE_HINTS[kind]) console.error(`  ${line}`)
     console.error('  gradle 输出尾部：')
     console.error(tailLines(out))
     return 1

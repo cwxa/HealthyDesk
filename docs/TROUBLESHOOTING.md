@@ -620,3 +620,57 @@ if (child.exitCode != null) break      // 🔴 正好卡在那 1.5s 的窗口里
 
 **顺带一条**：把"只能真机"改写成"已由代码覆盖"时，**只改文档就等于把 caveat 从"未验证"换成"已验证"**——
 正是该禁止的。必须先真的把守卫和单测写出来、跑了、用变异证明有牙，文档才有资格改口。
+
+### 7.9 守卫"喂不饱自己"：入库的 gradle 脚本 `apply from` 了一个被忽略的生成产物
+
+**现象**：新加的 `android-unit-test` job 在 CI 首跑 `36886981654` 上红，**43 秒**就结束，
+且**一份 JUnit 报告都没产出**：
+
+```
+> Could not read script '…/android/capacitor-cordova-android-plugins/cordova.variables.gradle'
+  as it does not exist.
+BUILD FAILED in 34s
+```
+
+而**本机同一条命令一直绿**（同一份源码、同一个 gradle 任务）。
+
+**根因**：这是一个**仓库层面的自相矛盾**，不是环境问题：
+
+| 文件 | 是否入库 | 说明 |
+|---|---|---|
+| `android/app/capacitor.build.gradle` | ✅ **被跟踪** | 第 10 行 `apply from "../capacitor-cordova-android-plugins/cordova.variables.gradle"` |
+| `android/capacitor.settings.gradle` | ✅ **被跟踪** | 同上，引用同目录 |
+| `android/capacitor-cordova-android-plugins/` | ❌ **被 `android/.gitignore:101` 忽略** | 由 `cap sync` 生成 |
+
+⇒ **干净的检出上，gradle 在配置阶段就炸**（连编译都没到），而本机因为以前跑过打包、
+那些产物还**留在工作区**里 ⇒ 本机**永远绿**。经典「本机绿 ≠ CI 绿」，
+而且这次**连错误都被伪装成"构建失败"**（真正的性质是"准备工作没做"）。
+
+**改法**：job 里补上生成原生工程这一步，**并且把「分类」写进守卫**：
+
+```yaml
+- run: npm ci
+- name: 生成原生工程（cap sync）
+  run: |
+    mkdir -p dist        # 纯 JVM 单测不读 web 资源，但 cap 要求 webDir 存在
+    npx cap sync android
+```
+
+守卫侧新增纯函数 `classifyBuildFailure(gradle输出)`，把"没有报告"细分成
+`native-project-not-generated` / `jdk-mismatch` / `deps-unavailable` / `unknown`，
+**每一类都给可执行的下一步**（第一类直接打印要跑的那两行命令）。
+配 `HINT_CASES` **6 例**自测，其中 **2 例是负向对照**（同样出现 `does not exist`
+但和原生工程无关、以及空输出 ⇒ 必须落 `unknown`），否则归类器就退化成
+"见到 `does not exist` 就喊环境不足"的开关。
+变异 `.buildenv/mutate-android-unit-guard.sh` **8/8**（H2 就是上面那个退化形态，
+由负向对照用例抓住）。
+
+**教训（可迁移的那一条）**：**"没有任何报告"是"没跑起来"，不是"测试失败"** ——
+但光这么说还不够：**"没跑起来"必须继续细分到"我该做什么"**。一条
+`环境不足` 如果只停在"环境不足"，人还是会去猜（本次第一反应是"runner 太慢了吧"）。
+判据：**报错里要能看出"缺什么、补什么"，且这种归类本身要配负向对照** ——
+否则任何"没报告"都会被归成同一句话，等于没归。
+
+**顺带一条**：这也说明**「本机跑过一次」会污染后续所有判断**。凡是依赖生成产物的
+任务，验证时至少要问一句：**"干净检出上有这个文件吗？"**
+（对照 §7.1 的时区版：那次是"只在生成那台机器上绿"，这次是"只在跑过打包的机器上绿"。）
