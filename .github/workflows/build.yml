@@ -256,8 +256,6 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
-      # 脚本自己会解析 JUnit XML 报告并报出「实际跑了几个用例」——
-      # 只看 gradle 退出码会把「一个用例都没跑」读成通过（配置漂了就是这么装的）。
       - name: 安装依赖
         run: npm ci
 
@@ -269,13 +267,20 @@ jobs:
       #    `Could not read script '…/cordova.variables.gradle' as it does not exist.`）。
       #    本机因为以前跑过打包、那些产物还留在工作区里，所以本机**一直绿** ——
       #    典型的「本机绿 ≠ CI 绿」。
-      #    ⚠️ 纯 JVM 单测**不读** web 资源，不需要真的构建前端；但 `cap` 的项目生成要求
-      #       `webDir` 存在（缺了它会自己去 copy 然后失败），所以喂一个空目录即可。
-      - name: 生成原生工程（cap sync）
-        run: |
-          mkdir -p dist
-          npx cap sync android
+      #    ⚠️ 纯 JVM 单测**不读** web 资源，本来不需要真的构建前端 —— 但实测
+      #       `npx cap sync android` 会**硬校验** `dist/index.html`
+      #       （`The web assets directory (./dist) must contain an index.html file.`），
+      #       空目录糊弄不过去（第二轮 CI 首跑就是这么红的：以为读 CLI 源码推出"空目录够用"，
+      #       实际没跑过 —— 推演 ≠ 跑通）。反正 `verify` job 里也构建同一份，这里照做即可。
+      - name: 构建前端（cap sync 的前置）
+        run: npm run build:web
 
+      - name: 生成原生工程（cap sync）
+        run: npx cap sync android
+
+      # 脚本自己会解析 JUnit XML 报告并报出「实际跑了几个用例」——
+      # 只看 gradle 退出码会把「一个用例都没跑」读成通过（配置漂了就是这么装的）。
+      # 报告缺失时还会把原因归类到「该做什么」上（cap sync 没跑 / JDK 不对 / 依赖下不来）。
       - name: 权限队列单元测试（纯 JVM）
         run: npm run verify:android
 

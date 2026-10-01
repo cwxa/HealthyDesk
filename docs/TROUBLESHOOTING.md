@@ -674,3 +674,13 @@ BUILD FAILED in 34s
 **顺带一条**：这也说明**「本机跑过一次」会污染后续所有判断**。凡是依赖生成产物的
 任务，验证时至少要问一句：**"干净检出上有这个文件吗？"**
 （对照 §7.1 的时区版：那次是"只在生成那台机器上绿"，这次是"只在跑过打包的机器上绿"。）
+
+**补记（同一个 job 的第二轮红，run `36889122295`）**：补上 `cap sync` 之后又红，
+这次是 `The web assets directory (./dist) must contain an index.html file.` ——
+起因是我**读了 CLI 源码**（`copyWebDir` 只做 `fs.copy`）就断定"喂个空 `dist` 目录够用"，
+**但没真跑过一次**。CLI 在更上层有一道**硬校验**要求 `dist/index.html` 存在。
+⇒ 改法是把 `mkdir -p dist` 换成 `npm run build:web`（真实构建产物）。
+（这正是铁律 #64：**「推演过」≠「跑通过」**。读源码得到的结论也要**跑一次**才算数，
+尤其在"这步能不能省"这类判断上 —— 省掉的每一步都是一次未经验证的假设。）
+本地把 `dist` 与 `capacitor-cordova-android-plugins/` **一起删掉**后按 job 的三步
+（`build:web` → `cap sync` → `gradlew --rerun-tasks`）真跑了一遍：全绿，10 个用例。
