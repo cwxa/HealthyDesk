@@ -177,6 +177,13 @@ jobs:
       - name: README 下载区守卫
         run: npm run verify:readme
 
+      # 原生配置：iOS / Android / 桌面的权限声明与 scheme 设置全是**静态文本**，判据不需要设备。
+      # 过去这类风险（iOS 少一条 UsageDescription ⇒ 一开摄像头进程被终止；Android 少 CAMERA
+      # ⇒ 权限请求必被拒）曾被归入"只能真机验证"。现在由这条静态守卫接管，
+      # 改错配置在 CI 里就红。与它就是 `verify:all` 的一员（第 13 条断言要求两边同步）。
+      - name: 原生配置守卫（权限声明 / scheme / 包名）
+        run: npm run verify:native-config
+
       # 本工作流自己的守卫：on:/if:/concurrency 决定了「什么触发构建、什么对外发布」，
       # 改错了既没有编译错误、也没有别的测试会红。盯的是 --
       # 打包 job 的 if 还在不在、`--draft` 闸门在不在、tag 会不会被半路取消。
@@ -213,6 +220,42 @@ jobs:
 
       - name: 版本号五处一致
         run: node scripts/set-version.js --check
+
+  # ─────────────────────────────────────────────────────────────
+  # Android 原生层单元测试（纯 JVM：不需要设备、模拟器、更不需要真机）
+  # ─────────────────────────────────────────────────────────────
+  android-unit-test:
+    name: Android 单元测试
+    runs-on: ubuntu-24.04
+    needs: verify
+    # 首次要拉 Gradle 依赖并编译 app 模块，正常约 3~6 分钟。这是兜「挂死」的宽松上限。
+    timeout-minutes: 30
+    # 🔴 **故意不设 `if` 闸门**（与下面几个打包 job 不同）：这道门要在**每次推送**上跑。
+    #    它接管的正是原先"只能真机走"的那条路径 —— 权限桥的并发请求会不会互相覆盖
+    #    导致前端 getUserMedia 永久挂起。若只在发版时才跑，等于把风险又推回"发版前才发现"。
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ubuntu runner 自带 Android SDK。与 mobile-android 同样的做法：**别引**
+      # `android-actions/setup-android`（它内部的 `sdkmanager tools` 早已被仓库移除，
+      # 会让整个 action 以退出码 1 失败）。这里只需要把 SDK 位置告诉 AGP。
+      - name: 准备 Android SDK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          [ -d "$SDK" ] || { echo "::error::找不到 Android SDK（$SDK）"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      # 脚本自己会解析 JUnit XML 报告并报出「实际跑了几个用例」——
+      # 只看 gradle 退出码会把「一个用例都没跑」读成通过（配置漂了就是这么装的）。
+      # 也**不需要 `npm ci`**：脚本零依赖，只用 node 内置模块。
+      - name: 权限队列单元测试（纯 JVM）
+        run: npm run verify:android
 
   # ─────────────────────────────────────────────────────────────
   # Windows 桌面安装包（NSIS）
