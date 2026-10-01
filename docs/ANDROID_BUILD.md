@@ -421,7 +421,8 @@ mediapipe-assets/models/pose_landmarker_full.task ─┘
       （`drawable-port-xxxhdpi/splash.png` → `res/YH.png` 这类），**搜 `splash` 一个都匹配不到**，
       别据此误判成"启动图没打进去"。可靠做法是按 **PNG IHDR 解析像素尺寸**，
       与源码 `drawable-*/splash.png` 的尺寸集合比对（11 张应全部命中）
-- [ ] 真机安装测试：相机、评分、提醒、设置四项主流程走一遍
+- [ ] 设备安装测试：相机、评分、提醒、设置四项主流程走一遍
+      （⚠️ **需要设备**，属 `device-matrix.md` 的 C 类；配置类风险已由 `verify:native-config` 覆盖）
 - [ ] 上传 GitHub Release，并用**匿名** curl 确认 `Content-Type: application/vnd.android.package-archive`
 
 > 完整的多端发布验证清单（桌面包、构建顺序、推送前置检查）见

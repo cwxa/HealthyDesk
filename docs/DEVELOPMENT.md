@@ -14,7 +14,7 @@
 | [MULTIPLATFORM.md](MULTIPLATFORM.md) | 四端构建与打包、CI/CD、macOS 签名公证、iOS 权限链、**发布前验证清单** |
 | [ANDROID_BUILD.md](ANDROID_BUILD.md) | 安卓工具链（JDK/SDK/Gradle）、出包、release 签名与密钥备份 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 历年踩坑与排查手册（"又坏了"先翻这个） |
-| [device-matrix.md](device-matrix.md) | **真机验证台账**：固定 7 条验证路径、逐端通过记录、发布的门。四端「可用」结论只来自这里 |
+| [device-matrix.md](device-matrix.md) | **残余风险与覆盖台账**：A 类（代码已验证）/ B 类（产物问题）/ C 类（已接受的残余风险）+ 处置结论。「可用」判据只来自这里（2026-10-01 起：守卫全绿 + 残余逐项已处置） |
 | [ROADMAP.md](ROADMAP.md) | **后续 10 个需求**与排序理由、依赖关系、验收标准；含现状快照与「暂不做」清单 |
 | [ROADMAP-SCORING.md](ROADMAP-SCORING.md) | **评分与动作子系统专项**（S1–S10）：评分链路 / 动作链路的缺陷与迭代设计。它**取代** ROADMAP 需求 7 的粗粒度描述，两者同时看 |
 | [archive/vibe-code-prompt.md](archive/vibe-code-prompt.md) | 立项时的原始提示词，**仅历史参考**（写的是单机 Windows 版本，**勿照它实现**） |
@@ -415,7 +415,7 @@ Python 后端 —— 后端必须知道用户此刻在做什么。
   正对摄像头时耳线仍水平）、扩胸（双侧对称）、头部后缩（矢状面平移）**测不到** ⇒
   动作库里 `measurable: false`，既不参与判定也不给实时引导。
   对这类动作说「没检测到动作」等于**冤枉正在做的用户** —— 那正是 S2 要消灭的缺陷类型。
-  ⚠️ 这张表按指标定义推出，**尚未用真机数据校准**。
+  ⚠️ 这张表按指标定义推出，**尚未用真人数据校准**。
 - **零采样不下结论**：摄像头没拍到人时 `judged === 0`，界面显示 `--` 并保留
   「活动完成!」，既不宣布完成也不指责用户没做。
 
@@ -767,7 +767,7 @@ git tag v1.7.0 && git push origin v1.7.0        # 定稿（tag 允许覆盖已�
 gh release edit v1.7.0 --draft=false --latest   # 人工放行
 ```
 
-**停在 draft 是刻意的**：mac / iOS 未做真机验证，Release 一旦公开就有人下载。
+**停在 draft 是刻意的**：mac / iOS 没有在设备上跑过，Release 一旦公开就有人下载。
 Android 无签名 secrets 时产出的是 debug 包（不可分发），会被 CD 自动剔除。
 
 🔴 **分支构建不许覆盖已发布的 Release**：目标 Release 若不是 draft，`release/**` 触发会
@@ -869,7 +869,7 @@ Permission denied"指的是删除与跨目录搬运，同目录改名不受影�
 | 33 | UI 守卫**找不到浏览器时必须显式失败**，不许降级成"跳过该项" | 一个"检测不到就不查"的守卫 = 一个永远绿的守卫。同理：`--case=` 写错、`dist` 不存在，都要 exit≠0 |
 | 34 | 有异步自流程的页面要断言它**落到确定态**（出结果或给出可照做的提示），不能只断言"有内容" | 「卡 loading 而非报错」（某 `await` 永不 settle）是本项目踩过的真 bug 类型：不崩、不报错、日志全绿。`NeckActivity` 的取流流程就是这类 |
 | 35 | 截图留证要在**动画落定后**拍 | 页面大量 `framer-motion` 的 `initial={{opacity:0}}`；立刻截图会拍到"下半屏还没淡入"的中间帧，那种图看不出问题还会误导人 |
-| 36 | 「可构建 + 产物结构对 + CI 全绿」**不能**推出「用户装上去能用」。每端要对外说可用，必须有真机通过行 | mac/iOS 的 GUI 与摄像头一次都没在真机跑过；Android 权限桥自 v1.3.4 后改动数轮却再未上过真机。见 [device-matrix.md](device-matrix.md) |
+| 36 | 「可构建 + 产物结构对 + CI 全绿」**不能**推出「用户装上去能用」。每端要对外说可用，必须满足**守卫全绿 + 残余风险逐项已处置**（2026-10-01 起的口径；旧口径是"有真机通过行"） | mac/iOS 的 GUI 与摄像头一次都没在设备上跑过；Android 权限桥自 v1.3.4 后改动数轮却再未上过真机 —— 直到 v1.7.2 把它抽成纯逻辑、用 JVM 单测覆盖。见 [device-matrix.md](device-matrix.md) |
 | 37 | 时间戳只有**一处**实现（`backend/services/timefmt.py` 的 `now_iso_ms` / `to_iso_ms`）；任何地方都不许自己拼 `isoformat()` / `strftime('%Y-%m-%d…')` | 四处各拼一遍时相机那处写成了 `datetime.now().isoformat()`（**本地时间、无时区标记**）。SQLite 的 `'localtime'` 修饰符假定输入是 UTC，对无标记串照样按 UTC 解释 → 偏移被**再减一次**（UTC+8 下 8 小时）→ **本地 16:00 之后的采样全部被算到"次日"**：今日均分下午不再增长、`posture_daily` 日期整体错位、幽灵日行、保留期边界跟着偏，且归档层是长期保留层，**错误被固化** |
 | 38 | 迁移要"让某段归档重算"时，只删**原始表覆盖范围之内**的行；范围之外的行必须**保留** | 那些天的原始采样早被保留策略清理，归档是**唯一**副本，删了就永久消失（`DELETE … WHERE date >= MIN(ts)` 的 `>=` 不是随便选的） |
 | 39 | 判绿看**退出码**（`${PIPESTATUS[0]}`），不看管道最后一行的文字 | `cmd \| tail` 会把子命令退出码换成 `tail` 的（恒为 0）：守卫已经 exit 1，却以为全绿。反过来 `grep` 也会掩盖；本项目已两次栽在"输出像绿的"上 |

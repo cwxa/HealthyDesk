@@ -92,8 +92,9 @@ git push origin v1.7.0
 gh release edit v1.7.0 --draft=false --latest       # 人工放行（CI 的 Summary 里会打印这条）
 ```
 
-🔴 **为什么"放行"那一步不自动化**：四端的**真机通过行到现在还是空的**（见
-[device-matrix.md](device-matrix.md)）。"构建成功" ≠ "能用" —— 自动 publish 等于把前者
+🔴 **为什么"放行"那一步不自动化**：[device-matrix.md](device-matrix.md) §三 的 **C 类残余风险**
+（真人幅度校准、切后台冻结、真机 WebView 内核差异）**原理上无法由代码验证**，
+只能由人决定"带不带这个风险发"。"构建成功" ≠ "能用" —— 自动 publish 等于把前者
 当后者推到用户面前。这条闸门在 `verify:ci` 的第 8 条断言上。
 
 发版前的验证清单在 [MULTIPLATFORM.md §9](MULTIPLATFORM.md)，**必须逐条走**。
@@ -218,7 +219,7 @@ gh release edit v1.7.0 --draft=false --latest       # 人工放行（CI 的 Summ
 |---|---|---|
 | `desktop-windows` | 后端 PE 格式 + 同源校验 | ✅ 跑**解包后的** exe，等 `/api/health` 且 `status=ok` |
 | `desktop-macos`（×2 架构） | 权限声明 / Mach-O 架构 / 可执行位 / 同源校验 | ✅ 跑 `.app` 内后端，等 `/api/health` |
-| `mobile-android` | 签名指纹与历史一致 + 同源校验 | —（真机才测得出，见 §四） |
+| `mobile-android` | 签名指纹与历史一致 + 同源校验 | —（需设备，属 `device-matrix.md` C 类） |
 | `mobile-ios` | 权限声明 / BundleID / Mach-O + 同源校验 | —（CI 出的是未签名 `.xcarchive`） |
 
 > Windows 的运行时冒烟是 **2026-09-29 补的**：它是**主力分发平台**，此前只有静态校验 ——
