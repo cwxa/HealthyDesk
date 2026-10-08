@@ -246,6 +246,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # 🔴 Gradle 依赖缓存（2026-10-08 补）。此前本 job **裸跑无缓存**，每次从零下载
+      #    AGP 全套依赖；run 37728535206 撞上瞬时抖动，15 秒就 BUILD FAILED：
+      #      `Could not find com.squareup:javawriter:2.5.0.`
+      #      `Could not find com.google.code.findbugs:jsr305:3.0.2.`
+      #      `Could not find org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.0.`
+      #    守卫把这次正确归类为 `deps-unavailable`（不是 `test-failure`）——
+      #    这正是铁律 #77 要的分辨能力：**"没跑起来" ≠ "测试挂了"**。
+      #    上一轮（02:53，同一 job、同一份代码）1m55s 通过 ⇒ 纯属网络瞬时故障。
+      #    缓存命中后就不再依赖每一次的实时网络，把这类假红压掉。
+      - uses: gradle/actions/setup-gradle@v4
+
       # ubuntu runner 自带 Android SDK。与 mobile-android 同样的做法：**别引**
       # `android-actions/setup-android`（它内部的 `sdkmanager tools` 早已被仓库移除，
       # 会让整个 action 以退出码 1 失败）。这里只需要把 SDK 位置告诉 AGP。
@@ -652,6 +663,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      # 🔴 Gradle 依赖缓存（2026-10-08 补，同 android-unit-test）。
+      #    本 job 同样裸跑无缓存，而它耗时更长（正常 15~25 分钟，全在拉依赖 + 编译）⇒
+      #    撞瞬时网络抖动的窗口比单测 job 更大、代价更高。缓存命中后可显著缩短且更稳。
+      - uses: gradle/actions/setup-gradle@v4
 
       # ⚠️ 不用 `android-actions/setup-android@v3`：它内部会执行 `sdkmanager tools`，
       #    而 `tools` 包早已从 SDK 仓库移除 → `Warning: Failed to find package 'tools'`
