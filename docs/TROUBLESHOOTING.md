@@ -684,3 +684,52 @@ BUILD FAILED in 34s
 尤其在"这步能不能省"这类判断上 —— 省掉的每一步都是一次未经验证的假设。）
 本地把 `dist` 与 `capacitor-cordova-android-plugins/` **一起删掉**后按 job 的三步
 （`build:web` → `cap sync` → `gradlew --rerun-tasks`）真跑了一遍：全绿，10 个用例。
+
+### 7.10 `git push` 无输出、被静默掐掉 —— 其实是 401 卡在等凭据（2026-10-08）
+
+**现象**：`git push origin main` **不打印任何东西**，退出码 1，信号 `SIGTERM`。
+连试三次一样。同一台机器、同一分钟里 `git commit` 正常、`gh git status` 也正常。
+
+**误诊方向（我一开始走的）**：先怀疑代理 —— 因为前几轮推送都是
+`-c http.proxy=http://127.0.0.1:7897`，而这次报"无输出"，很像网络被掐。
+实际 `netstat` 显示 7897 **在监听**、`curl -x` 到 github **返回 200** ⇒ 代理没问题。
+
+**真正的根因**（用 `GIT_CURL_VERBOSE=1` + `timeout 60` 抓到）：
+
+```
+<= Recv header: HTTP/2 401
+<= Recv header: www-authenticate: Basic realm="GitHub"
+```
+
+git 的凭据管理器（`credential.helper=helper-selector` + `manager`，即
+Git Credential Manager）**拿不到 token 了**，于是 git 回退到**交互式索要用户名/密码** ——
+而这台机器上它没有可用的 tty，于是**静默挂住**，被外层 `timeout` / 工具超时掐成 `SIGTERM`。
+🔴 **"无输出 + SIGTERM" 与"网络不通"长得一模一样**，但方向完全不同。
+
+**判据（怎么一眼分开）**：
+
+| 现象 | 指向 |
+|---|---|
+| `curl -x <代理> https://github.com` 返回 200/non-000 | 代理**没问题** |
+| `GIT_CURL_VERBOSE=1` 里看到 `HTTP/2 401` + `www-authenticate: Basic` | **凭据**问题 |
+| `gh auth status` 仍显示 ✓ Logged in | 平台凭据还在，是 **git 侧的 helper** 没接上 |
+
+**改法**（本机验证过、一次成功）：绕开 git 的 credential helper，直接用 `gh` 的 token 走
+`extraheader`：
+
+```bash
+GH_TOKEN=$(gh auth token)
+git -c http.sslBackend=openssl \
+    -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 \
+    -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+    -c credential.helper= \
+    push origin main
+```
+
+🔴 那几个 `-c` **都必需**：`credential.helper=`（空值＝禁用，否则又会去调那个坏掉的 helper）、
+`http.sslBackend=openssl`（Windows 上的既有惯例）、以及代理两项。
+
+**教训**：**"没有输出"要把"等输入"也算进候选原因**。别只往"超时/网络"一个方向想 ——
+先问一句：**"它是在等结果，还是在等我回答一个问题？"**
+（同 §7.9 的"没报告"= "没跑起来"：两个坑的形状都是"什么都没发生"，
+而真正的原因是**流程停在了某个我没意识到的地方**。）
