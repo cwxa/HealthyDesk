@@ -2,3 +2,4 @@
 import { verifyGeometry } from './verify-pose.mjs'
 await verifyGeometry()
 await import('./verify-pose-lifecycle.mjs')
+await import('./verify-posture-calibration.mjs')

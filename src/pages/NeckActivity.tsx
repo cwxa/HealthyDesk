@@ -7,6 +7,8 @@ import { isMobile, platformLabel } from '../platform/runtime'
 import { localReminder } from '../platform/localReminder'
 import PostureSkeleton from '../components/PostureSkeleton'
 import ScoreGauge from '../components/ScoreGauge'
+import PostureCalibration from '../components/PostureCalibration'
+import type { CameraProfile } from '../platform/postureCalibration'
 import ExercisePanel, { type ExerciseState } from '../components/ExercisePanel'
 import ExerciseGuide from '../components/ExerciseGuide'
 import { EXERCISES as exercises, TOTAL_DURATION_SEC } from '../data/exercises'
@@ -136,6 +138,9 @@ export default function NeckActivity() {
   /** 安装包版本（安卓侧读取），用于确认用户实际装的是哪一版。 */
   const [buildTag, setBuildTag] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
+  const [cameraProfile, setCameraProfile] = useState<CameraProfile | null>(null)
+  const calibratingRef = useRef(false)
+  const onCollectingChange = useCallback((value: boolean) => { calibratingRef.current = value }, [])
   const [mode, setMode] = useState<Mode>('monitor')
   const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect, setScoreMode, isLocal } = usePoseEngine()
   const { post, get } = useApi()
@@ -190,6 +195,12 @@ export default function NeckActivity() {
         return
       }
       streamRef.current = stream
+      const trackSettings = stream.getVideoTracks()[0]?.getSettings()
+      // 仅有真实设备与尺寸信息时允许校准；桌面传输缩放后仍使用同一宽高比。
+      setCameraProfile(trackSettings?.deviceId && trackSettings.width && trackSettings.height ? {
+        key: JSON.stringify([trackSettings.deviceId, trackSettings.facingMode ?? '', trackSettings.width, trackSettings.height]),
+        aspect: trackSettings.width / trackSettings.height,
+      } : null)
 
       // ⚠️ 先让 <video> 可见再 play()：`display:none` 的元素在部分安卓 WebView 上
       // play() 的 Promise 会一直不 resolve，从而把整个流程卡死。
@@ -227,6 +238,8 @@ export default function NeckActivity() {
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
+    setCameraProfile(null)
+    calibratingRef.current = false
     if (videoRef.current) videoRef.current.srcObject = null
     setCameraReady(false)
     stop()
@@ -321,7 +334,7 @@ export default function NeckActivity() {
       setLatestResult(result)
       // 语音批评**只在静息态**：运动态的 issues（"动作幅度不足"）不是姿态问题，
       // 更不该用「检测到头部严重侧倾，请注意调整坐姿。」去批评一个正在做拉伸的人。
-      if (mode === 'monitor' && result.type === 'pose' && result.issues && result.issues.length > 0) {
+      if (mode === 'monitor' && !calibratingRef.current && result.type === 'pose' && result.issues && result.issues.length > 0) {
         const severeOnly = result.issues.filter(i => i.includes('严重'))
         if (severeOnly.length > 0) speakPostureIssue(severeOnly)
       }
@@ -337,7 +350,7 @@ export default function NeckActivity() {
             shoulder_diff: result.shoulder_diff,
             spine_angle: result.spine_angle,
           })
-        } else if (mode === 'monitor' && canRecordPosture(result)) {
+        } else if (mode === 'monitor' && !calibratingRef.current && canRecordPosture(result)) {
           // 只记录**静息坐姿**采样。活动期间写库会同时污染两处：
           // 「今日平均分」与「部位健康度」会把"用户在做动作"当成"不良姿态"
           // （康复动作本就要求偏离中立位），进而显示成一片红色的差数据。
@@ -838,6 +851,8 @@ export default function NeckActivity() {
   )
 
   // ==================== 手机端：整屏不滚动 ====================
+  const calibrationPanel = <PostureCalibration result={latestResult} camera={cameraProfile}
+    enabled={mode === 'monitor' && cameraReady && connected} onCollectingChange={onCollectingChange} />
   // 顶部「标题 + 状态」→ 紧凑指标条（固定在上半部分）→ 摄像头自适应剩余高度 → 底部操作
   if (mobile) {
     const statusText = cameraError
@@ -848,6 +863,7 @@ export default function NeckActivity() {
 
     return (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {calibrationPanel}
         {/* 标题 + 状态 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexShrink: 0 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700 }}>🧘 肩颈活动</h2>
@@ -1001,6 +1017,7 @@ export default function NeckActivity() {
   // ==================== 桌面端：左画面 + 右侧栏 ====================
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {calibrationPanel}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h2 style={{ fontSize: 24, fontWeight: 700 }}>🧘 肩颈活动</h2>
         {cameraError && (

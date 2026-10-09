@@ -125,6 +125,9 @@ def mediapipe_test():
             session = PoseSession()
             response = session.process(result, 'monitor', 0)
             assert response['metric_version'] == 2
+            if result and 'signed_metrics' in result:
+                assert response['signed_metrics'] == result['signed_metrics']
+                assert set(response['signed_metrics']) == {k for k in ('head_angle', 'shoulder_diff', 'spine_angle') if k in response}
             if response['type'] == 'pose':
                 assert all(q['valid'] for q in response['quality'].values())
             else:

@@ -32,7 +32,7 @@ def spine_angle(a, b, c, d, width=640, height=480):
 
 
 def measure_pose(points, width, height):
-    metrics, quality = {}, {}
+    metrics, signed_metrics, quality = {}, {}, {}
     dimensions_valid = math.isfinite(width) and math.isfinite(height) and width > 0 and height > 0
     functions = {"head_angle": head_tilt_angle, "shoulder_diff": shoulder_ratio, "spine_angle": spine_angle}
     for name, indices in METRIC_POINTS.items():
@@ -57,5 +57,10 @@ def measure_pose(points, width, height):
             quality[name] = {"valid": False, "confidence": confidence, "reason": "degenerate_geometry"}
         else:
             metrics[name] = round(value * 100) / 100
+            # 带方向的原始特征供个人基线使用，不改变既有绝对值评分。
+            # 复用已测量的幅度，只补方向，避免重复三角函数与双口径漂移。
+            direction = (p[2].x + p[3].x - p[0].x - p[1].x) if name == 'spine_angle' else (p[1].y - p[0].y) / (p[1].x - p[0].x)
+            signed = -value if direction < 0 else value
+            signed_metrics[name] = round(signed * 100) / 100
             quality[name] = {"valid": True, "confidence": confidence}
-    return {"metrics": metrics, "quality": quality, "complete": len(metrics) == 3}
+    return {"metrics": metrics, "signed_metrics": signed_metrics, "quality": quality, "complete": len(metrics) == 3}

@@ -70,6 +70,7 @@ class PoseDetector:
             return {
                 **measured["metrics"],
                 "quality": measured["quality"],
+                "signed_metrics": measured["signed_metrics"],
                 "complete": measured["complete"],
                 "metric_version": METRIC_VERSION,
                 "frame_width": w,

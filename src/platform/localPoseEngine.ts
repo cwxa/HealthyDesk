@@ -225,6 +225,7 @@ export class LocalPoseEngine {
       mode,
       metric_version: METRIC_VERSION,
       quality: measured.quality,
+      signed_metrics: measured.signed_metrics,
       frame_width: W,
       frame_height: H,
       reason: type === 'no_pose' ? 'invalid_measurement' : undefined,

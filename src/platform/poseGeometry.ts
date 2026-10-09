@@ -34,6 +34,8 @@ export function spineAngle(a: PosePoint, b: PosePoint, c: PosePoint, d: PosePoin
 
 export function measurePose(points: PosePoint[], width: number, height: number) {
   const metrics: Partial<Record<MetricName, number>> = {}
+  // 带方向的原始特征只供个人基线使用，不进入原有绝对值评分与 EMA。
+  const signed_metrics: Partial<Record<MetricName, number>> = {}
   const quality = {} as Record<MetricName, MetricQuality>
   const dimensionsValid = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   for (const name of Object.keys(METRIC_POINTS) as MetricName[]) {
@@ -53,8 +55,14 @@ export function measurePose(points: PosePoint[], width: number, height: number) 
     if (value === undefined || !Number.isFinite(value)) quality[name] = { valid: false, confidence, reason: 'degenerate_geometry' }
     else {
       metrics[name] = pyRound(value * 100) / 100
+      // 复用已测量的幅度，只补方向，避免再次计算三角函数及双口径漂移。
+      const direction = name === 'spine_angle'
+        ? p[2].x + p[3].x - p[0].x - p[1].x
+        : (p[1].y - p[0].y) / (p[1].x - p[0].x)
+      const signed = direction < 0 ? -value : value
+      signed_metrics[name] = pyRound(signed * 100) / 100 || 0
       quality[name] = { valid: true, confidence }
     }
   }
-  return { metrics, quality, complete: Object.keys(metrics).length === 3 }
+  return { metrics, signed_metrics, quality, complete: Object.keys(metrics).length === 3 }
 }

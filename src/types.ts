@@ -26,6 +26,8 @@ export interface PoseResult {
   message?: string
   metric_version?: number
   quality?: Record<string, { valid: boolean; confidence: number; reason?: string }>
+  /** 未平滑的带方向指标，用于质量受控的个人中立位校准。 */
+  signed_metrics?: Partial<Record<'head_angle' | 'shoulder_diff' | 'spine_angle', number>>
   frame_width?: number
   frame_height?: number
   session_id?: string

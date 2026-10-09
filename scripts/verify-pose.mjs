@@ -59,7 +59,22 @@ export async function verifyGeometry() {
     const mirrored = structuredClone(c)
     mirrored.points.forEach(p => { p.x = 1 - p.x })
     assert.deepEqual(geo.measurePose(mirrored.points, width, height).metrics, result.metrics)
+    for (const name of Object.keys(result.signed_metrics)) {
+      assert.equal(geo.measurePose(mirrored.points, width, height).signed_metrics[name], -result.signed_metrics[name] || 0, `Mirrored direction: ${name}`)
+      assert.equal(Math.abs(result.signed_metrics[name]), result.metrics[name], `Signed magnitude: ${name}`)
+    }
     cases.push(mirrored)
+    // 独立构造非零躯干角，避免方向回归只测到 0°。
+    const tiltedTrunk = structuredClone(c)
+    const shoulderY = (c.points[11].y + c.points[12].y) / 2
+    const offset = Math.tan(10 * Math.PI / 180) * (.8 - shoulderY) * height / width
+    tiltedTrunk.points[23].x += offset; tiltedTrunk.points[24].x += offset
+    assert.equal(geo.measurePose(tiltedTrunk.points, width, height).signed_metrics.spine_angle, 10)
+    cases.push(tiltedTrunk)
+    const mirroredTrunk = structuredClone(tiltedTrunk)
+    mirroredTrunk.points.forEach(p => { p.x = 1 - p.x })
+    assert.equal(geo.measurePose(mirroredTrunk.points, width, height).signed_metrics.spine_angle, -10)
+    cases.push(mirroredTrunk)
   }
   const tilt = fresh(640, 480, 40)
   assert.equal(geo.measurePose(tilt.points, 640, 480).metrics.head_angle, 40)

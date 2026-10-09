@@ -33,7 +33,9 @@ const engine = new LocalPoseEngine()
 await Promise.all([engine.init(), engine.init()])
 assert.deepEqual(delegate, ['GPU'])
 const video = { currentTime: 0, videoWidth: 1280, videoHeight: 720 }
-assert.equal(engine.detect(video, 0).score, 100)
+const neutralResult = engine.detect(video, 0)
+assert.equal(neutralResult.score, 100)
+assert.deepEqual(neutralResult.signed_metrics, { head_angle: 0, shoulder_diff: 0, spine_angle: 0 })
 assert.equal(engine.detect(video, 1), null)
 video.currentTime++
 points[8].y += Math.tan(40 * Math.PI / 180) * .2 * 1280 / 720
@@ -45,6 +47,7 @@ const partial = engine.detect(video, 600)
 assert.equal(partial.type, 'partial_pose')
 assert.equal(partial.score, undefined)
 assert.equal(partial.spine_angle, undefined)
+assert.equal(partial.signed_metrics.spine_angle, undefined)
 assert.equal(partial.frame_width, 1280)
 throwInference = true; video.currentTime++
 assert.equal(engine.detect(video, 800).type, 'no_pose')

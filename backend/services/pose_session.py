@@ -34,5 +34,5 @@ class PoseSession:
         if not metrics:
             self.smoother.reset()
         return {**base, **scored, "type": kind, **({"reason": "invalid_measurement"} if not metrics else {}), **{k: pose[k] for k in (
-            "visibility", "quality", "landmarks", "frame_width", "frame_height",
+            "visibility", "quality", "landmarks", "frame_width", "frame_height", "signed_metrics",
         ) if k in pose}}
