@@ -90,9 +90,9 @@ def main():
             "landmarks": {k: c[k] for k in (
                 "left_ear", "right_ear", "left_shoulder", "right_shoulder", "left_hip", "right_hip"
             )},
-            "head_angle": round(head, 2),
-            "shoulder_diff": round(shoulder, 2),
-            "spine_angle": round(spine, 2),
+            "head_angle": round(head * 100) / 100 if head is not None else None,
+            "shoulder_diff": round(shoulder * 100) / 100 if shoulder is not None else None,
+            "spine_angle": round(spine * 100) / 100 if spine is not None else None,
         })
     print(json.dumps(out, ensure_ascii=False, indent=2))
 

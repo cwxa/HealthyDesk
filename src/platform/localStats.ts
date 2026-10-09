@@ -75,7 +75,7 @@ export async function computeSummary(): Promise<StatsSummary> {
   // 部位健康度：必须读今天的原始行（见文件头说明）。
   // 今天的原始采样永远不会被保留策略清掉，所以这里一定有数据可用。
   const [startIso, endIso] = dayBoundsIso(today)
-  const todayPostures = await readPostureRange(startIso, endIso)
+  const todayPostures = (await readPostureRange(startIso, endIso)).filter(r => r.metric_version === 2)
   const partHealth = computePartHealth(todayPostures)
 
   // 最近一次**活动**（不是姿态采样）的成绩。`activity_log` 里只有活动行，

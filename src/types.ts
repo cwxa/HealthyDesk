@@ -14,7 +14,7 @@ export interface Landmarks {
 }
 
 export interface PoseResult {
-  type: 'pose' | 'no_pose' | 'ready' | 'error'
+  type: 'pose' | 'partial_pose' | 'no_pose' | 'ready' | 'error'
   timestamp: string
   score?: number
   head_angle?: number
@@ -24,6 +24,14 @@ export interface PoseResult {
   issues?: string[]
   landmarks?: Landmarks
   message?: string
+  metric_version?: number
+  quality?: Record<string, { valid: boolean; confidence: number; reason?: string }>
+  frame_width?: number
+  frame_height?: number
+  session_id?: string
+  frame_id?: number
+  captured_at?: number
+  reason?: string
   /**
    * 评分模式。运动态（活动进行中）的回包会带 `'exercise'`，静息态**不带**该字段
    * —— 刻意保持静息态的返回结构与历史版本一字不变（见 scorer.py 的说明）。

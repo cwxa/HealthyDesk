@@ -21,6 +21,7 @@ export default function PostureSkeleton({ landmarks, width, height }: Props) {
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="xMidYMid slice"
       style={{
         width: '100%',
         height: '100%',
@@ -52,7 +53,7 @@ export default function PostureSkeleton({ landmarks, width, height }: Props) {
       {CONNECTIONS.map(([from, to], i) => {
         const p1 = landmarks[from]
         const p2 = landmarks[to]
-        if (!p1?.x || !p2?.x) return null
+        if (!p1 || !p2 || ![p1.x, p1.y, p2.x, p2.y].every(Number.isFinite)) return null
         return (
           <line
             key={`line-${i}`}
@@ -67,7 +68,7 @@ export default function PostureSkeleton({ landmarks, width, height }: Props) {
 
       {/* Landmark points */}
       {Object.entries(landmarks).map(([key, point]) => {
-        if (!point?.x) return null
+        if (!point || ![point.x, point.y].every(Number.isFinite)) return null
         const isHead = key === 'nose' || key.includes('ear')
         const isShoulder = key.includes('shoulder')
 

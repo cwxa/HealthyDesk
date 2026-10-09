@@ -23,6 +23,7 @@ import {
 import { nativeDiagAsync, describePermission, onNativePermissionChange } from '../platform/nativeDiag'
 import { withTimeout } from '../utils/withTimeout'
 import type { PoseResult } from '../types'
+import { canMeasureExercise, canRecordPosture } from '../platform/poseResultPolicy'
 
 type Mode = 'monitor' | 'exercise' | 'done'
 
@@ -136,10 +137,11 @@ export default function NeckActivity() {
   const [buildTag, setBuildTag] = useState('')
   const [latestResult, setLatestResult] = useState<PoseResult | null>(null)
   const [mode, setMode] = useState<Mode>('monitor')
-  const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect, setScoreMode } = usePoseEngine()
+  const { connected, onPoseResult, backendError, resetBackendError, attachVideo, stop, sendFrame, connect, setScoreMode, isLocal } = usePoseEngine()
   const { post, get } = useApi()
   const intervalRef = useRef<number>(0)
   const lastRecordRef = useRef(0)
+  const lastCapturedTimeRef = useRef(-1)
   // 标记摄像头已卸载（StrictMode 双挂载 / 组件卸载），使未完成的 async 不再回写
   const cameraAbortRef = useRef(false)
   // 取流进行中标记，避免并发启动摄像头
@@ -202,9 +204,9 @@ export default function NeckActivity() {
         void Promise.resolve(video.play()).catch(() => {})
       }
 
-      setCameraStage(isMobile() ? '正在加载姿态模型…' : '正在连接后端…')
+      setCameraStage(isLocal ? '正在加载姿态模型…' : '正在连接后端…')
       // 桌面端连 Python 后端；移动端启动本地姿态引擎
-      if (isMobile() && video) {
+      if (isLocal && video) {
         await attachVideo(video)
       } else {
         connect()
@@ -220,7 +222,7 @@ export default function NeckActivity() {
     } finally {
       startingRef.current = false
     }
-  }, [connect, attachVideo])
+  }, [connect, attachVideo, isLocal])
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -277,23 +279,29 @@ export default function NeckActivity() {
 
   // Frame capture（仅桌面端：移动端由本地引擎直接读取 video 元素）
   const captureAndSend = useCallback(() => {
-    if (isMobile()) return
+    if (isLocal) return
     if (!canvasRef.current || !videoRef.current || !connected) return
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    canvas.width = 640
-    canvas.height = 480
-    ctx.drawImage(videoRef.current, 0, 0, 640, 480)
+    const video = videoRef.current
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+    if (video.currentTime === lastCapturedTimeRef.current) return
+    lastCapturedTimeRef.current = video.currentTime
+    const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight))
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     sendFrame(canvas.toDataURL('image/jpeg', 0.7))
-  }, [connected, sendFrame])
+  }, [connected, sendFrame, isLocal])
 
   useEffect(() => {
-    if (isMobile()) return
+    if (isLocal) return
     if (!cameraReady || !connected) return
+    lastCapturedTimeRef.current = -1
     intervalRef.current = window.setInterval(captureAndSend, 200)
     return () => clearInterval(intervalRef.current)
-  }, [cameraReady, connected, captureAndSend])
+  }, [cameraReady, connected, captureAndSend, isLocal])
 
   /**
    * 把当前模式同步给姿态引擎。
@@ -309,6 +317,7 @@ export default function NeckActivity() {
   // Pose result handling
   useEffect(() => {
     onPoseResult((result: PoseResult) => {
+      if (result.mode && result.mode !== (mode === 'exercise' ? 'exercise' : 'monitor')) return
       setLatestResult(result)
       // 语音批评**只在静息态**：运动态的 issues（"动作幅度不足"）不是姿态问题，
       // 更不该用「检测到头部严重侧倾，请注意调整坐姿。」去批评一个正在做拉伸的人。
@@ -316,19 +325,19 @@ export default function NeckActivity() {
         const severeOnly = result.issues.filter(i => i.includes('严重'))
         if (severeOnly.length > 0) speakPostureIssue(severeOnly)
       }
-      if (result.type === 'pose' && result.score !== undefined) {
-        if (mode === 'exercise') {
+      if (result.type === 'pose' || result.type === 'partial_pose') {
+        if (mode === 'exercise' && canMeasureExercise(result, exercises[exCurrentRef.current].metric)) {
           // 🔴 只推入**原始帧**：判定的输入是活动量序列（幅度 / 保持时长 / 往复次数），
           // 分数是它的单调映射、带不回这些信息。⚠️ 只推**有姿态**的帧：
           // `judgeExercise` 把相邻帧的时间差当作"该帧的维持时长"，缺口必须留白而不是补 0。
           exFramesRef.current.push({
-            t: Date.now(),
+            t: result.captured_at ?? Date.now(),
             action: exCurrentRef.current,
-            head_angle: result.head_angle ?? 0,
-            shoulder_diff: result.shoulder_diff ?? 0,
-            spine_angle: result.spine_angle ?? 0,
+            head_angle: result.head_angle,
+            shoulder_diff: result.shoulder_diff,
+            spine_angle: result.spine_angle,
           })
-        } else {
+        } else if (mode === 'monitor' && canRecordPosture(result)) {
           // 只记录**静息坐姿**采样。活动期间写库会同时污染两处：
           // 「今日平均分」与「部位健康度」会把"用户在做动作"当成"不良姿态"
           // （康复动作本就要求偏离中立位），进而显示成一片红色的差数据。
@@ -341,6 +350,7 @@ export default function NeckActivity() {
               shoulder_diff: result.shoulder_diff!,
               spine_angle: result.spine_angle!,
               score: result.score!,
+              metric_version: result.metric_version ?? 1,
             }).catch(() => {})
           }
         }
@@ -540,8 +550,9 @@ export default function NeckActivity() {
   const score = latestResult?.type === 'pose' ? (latestResult.score ?? 0) : 0
   const issues = latestResult?.type === 'pose' ? (latestResult.issues ?? []) : []
   const hasPose = latestResult?.type === 'pose'
+  const hasMetrics = hasPose || latestResult?.type === 'partial_pose'
   const scoreColor = score >= 80 ? '#4CAF50' : score >= 60 ? '#FF9800' : score > 0 ? '#EF5350' : '#999'
-  const scoreLabel = score > 0 ? (score >= 80 ? '姿态良好' : score >= 60 ? '需要注意' : '姿态异常') : '等待数据'
+  const scoreLabel = latestResult?.type === 'partial_pose' ? '测量不完整' : score > 0 ? (score >= 80 ? '姿态良好' : score >= 60 ? '需要注意' : '姿态异常') : '等待数据'
   const mobile = isMobile()
 
   // 总时长**单点定义**在数据模块里 —— 这里只读，不再自己 reduce 一遍
@@ -580,11 +591,11 @@ export default function NeckActivity() {
    *   ① 徽章与提示同源，不可能矛盾；
    *   ② 徽章顺带满足「分数 ≥ 80 ⟺ 判完成」那条核心不变量（未达标一律钳到 79 分以下）。
    *
-   * ⚠️ 取不到判定时（动作的指标测不到 / 窗口不足两帧）返回 `null`，徽章回落到运动态通道 ——
-   * 那种情况下**提示也是空的**，所以同样不会自相矛盾。
+   * 取不到判定时（动作指标测不到 / 窗口不足两帧）返回 `null`，徽章显示未判定，
+   * 不以其他部位的绝对偏离代替当前动作的完成度。
    */
   const liveQuality: { grade: ExerciseGrade; hint: string; score: number } | null = (() => {
-    if (mode !== 'exercise') return null
+    if (mode !== 'exercise' || !hasMetrics) return null
     // 指标测不到的动作不给判定 —— 见 ExercisePanel 里 `measurable` 的说明
     if (!exercises[exCurrent].measurable) return null
     const frames = exFramesRef.current
@@ -616,7 +627,8 @@ export default function NeckActivity() {
    * （移动端没有 `p"实时动作达成度"`），`gauge` 恒为 `null` 整段空转，所以一直没红。
    * 两处都提到这里、并挂上 `ngId` 锚点，任何一处再回落到 `score` 都会被守卫当场抓住。
    */
-  const activityScore = liveQuality?.score ?? score
+  // 未获得动作判定时不给绝对偏离分，静止歪坐不能拿到虚假的动作成绩。
+  const activityScore = liveQuality?.score ?? 0
 
   const exState: ExerciseState = {
     phase: mode === 'done' ? 'done' : 'active',
@@ -624,7 +636,7 @@ export default function NeckActivity() {
     timeLeft: exTimeLeft,
     // 有逐动作判定时用它的实时分（与提示同源）；否则回落到**运动态通道**（不是静息姿态分）
     activityScore,
-    hasPose: latestResult?.type === 'pose',
+    hasPose: liveQuality !== null,
     totalDur,
     progress,
     qualityHint: liveQuality?.hint ?? '',
@@ -682,9 +694,9 @@ export default function NeckActivity() {
           />
           <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-          {cameraReady && latestResult?.type === 'pose' && latestResult.landmarks && (
+          {cameraReady && hasMetrics && latestResult?.landmarks && (
             <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', transform: 'scaleX(-1)' }}>
-              <PostureSkeleton landmarks={latestResult.landmarks} width={640} height={480} />
+              <PostureSkeleton landmarks={latestResult.landmarks} width={latestResult.frame_width ?? 640} height={latestResult.frame_height ?? 480} />
             </div>
           )}
 
@@ -784,6 +796,12 @@ export default function NeckActivity() {
             </AnimatePresence>
           )}
 
+          {cameraReady && latestResult?.type === 'partial_pose' && (
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(0,0,0,0.7)', color: '#fff', padding: '8px 14px', borderRadius: 12, fontSize: 12, zIndex: 10 }}>
+              测量不完整，请让耳、肩、髋部进入画面；暂不计算总分
+            </div>
+          )}
+
           {/* 未检测到人体：放画面垂直居中，避开底部指标条（原来贴底会和指标叠在一起） */}
           {cameraReady && connected && latestResult?.type === 'no_pose' && (
             <div style={{
@@ -792,7 +810,12 @@ export default function NeckActivity() {
               borderRadius: 20, fontSize: 13, zIndex: 10,
               whiteSpace: 'nowrap', maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>
-              未检测到人体，请面向摄像头
+              {latestResult.reason === 'expired' ? '画面已暂停，等待新的摄像头画面'
+                : latestResult.reason === 'connection_lost' ? '摄像头连接已断开，正在尝试重连'
+                : latestResult.reason === 'inference_error' || latestResult.reason === 'decode_error' ? '识别暂时中断，请重试'
+                : latestResult.reason === 'invalid_measurement' ? '关键部位暂不可测，请调整机位'
+                : latestResult.reason === 'mode_changed' ? '正在切换识别模式'
+                : '未检测到人体，请面向摄像头'}
             </div>
           )}
 
@@ -806,9 +829,9 @@ export default function NeckActivity() {
               display: 'flex', justifyContent: 'center',
               gap: mobile ? 6 : 16, zIndex: 10,
             }}>
-              <MetricBadge compact={mobile} label="头部侧倾" value={latestResult?.type === 'pose' ? latestResult.head_angle : undefined} unit="°" warn={5} critical={17} />
-              <MetricBadge compact={mobile} label="肩部高差" value={latestResult?.type === 'pose' ? latestResult.shoulder_diff : undefined} unit="%" warn={4} critical={14} />
-              <MetricBadge compact={mobile} label="脊柱倾斜" value={latestResult?.type === 'pose' ? latestResult.spine_angle : undefined} unit="°" warn={10} critical={26} />
+              <MetricBadge compact={mobile} label="头部侧倾" value={hasMetrics ? latestResult?.head_angle : undefined} unit="°" warn={5} critical={17} />
+              <MetricBadge compact={mobile} label="肩部高差" value={hasMetrics ? latestResult?.shoulder_diff : undefined} unit="%" warn={4} critical={14} />
+              <MetricBadge compact={mobile} label="躯干侧倾" value={hasMetrics ? latestResult?.spine_angle : undefined} unit="°" warn={10} critical={26} />
             </div>
           )}
         </div>
@@ -872,9 +895,9 @@ export default function NeckActivity() {
                 </div>
                 <div style={{ width: 1, height: 30, background: '#eee', flexShrink: 0 }} />
                 <div style={{ flex: 1, display: 'flex', gap: 6, minWidth: 0 }}>
-                  <MiniMetric label="头部" value={hasPose ? latestResult?.head_angle : undefined} unit="°" warn={5} />
-                  <MiniMetric label="肩部" value={hasPose ? latestResult?.shoulder_diff : undefined} unit="%" warn={4} />
-                  <MiniMetric label="脊柱" value={hasPose ? latestResult?.spine_angle : undefined} unit="°" warn={10} />
+                  <MiniMetric label="头部" value={hasMetrics ? latestResult?.head_angle : undefined} unit="°" warn={5} />
+                  <MiniMetric label="肩部" value={hasMetrics ? latestResult?.shoulder_diff : undefined} unit="%" warn={4} />
+                  <MiniMetric label="躯干" value={hasMetrics ? latestResult?.spine_angle : undefined} unit="°" warn={10} />
                 </div>
               </div>
             ) : (
@@ -920,7 +943,7 @@ export default function NeckActivity() {
                     <span style={{ fontSize: 10, color: '#999', flexShrink: 0 }}>{exCurrent + 1}/{exercises.length}</span>
                   </div>
                 </div>
-                <ScoreGauge ngId="exercise-bar-score" score={activityScore} size={44} hasData={hasPose} />
+                <ScoreGauge ngId="exercise-bar-score" score={activityScore} size={44} hasData={liveQuality !== null} />
               </div>
             )}
 
@@ -1014,7 +1037,7 @@ export default function NeckActivity() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <MetricRow icon="↕" label="头部侧倾角" value={latestResult?.type === 'pose' ? `${latestResult.head_angle?.toFixed(1)}°` : '--'} warn={latestResult?.type === 'pose' ? (latestResult.head_angle ?? 0) > 5 : false} okRange="≤5°" />
                   <MetricRow icon="⇔" label="肩部高度差" value={latestResult?.type === 'pose' ? `${latestResult.shoulder_diff?.toFixed(1)}%` : '--'} warn={latestResult?.type === 'pose' ? (latestResult.shoulder_diff ?? 0) > 4 : false} okRange="≤4%" />
-                  <MetricRow icon="↻" label="脊柱倾斜角" value={latestResult?.type === 'pose' ? `${latestResult.spine_angle?.toFixed(1)}°` : '--'} warn={latestResult?.type === 'pose' ? (latestResult.spine_angle ?? 0) > 10 : false} okRange="≤10°" />
+                  <MetricRow icon="↻" label="躯干侧倾角" value={latestResult?.type === 'pose' ? `${latestResult.spine_angle?.toFixed(1)}°` : '--'} warn={latestResult?.type === 'pose' ? (latestResult.spine_angle ?? 0) > 10 : false} okRange="≤10°" />
                 </div>
               </div>
 

@@ -142,7 +142,8 @@ async def upgrade_from_v4() -> dict:
             #
             # 这条实验是被变异测试 S1 逼出来的：S1 把"列已存在就跳过"的判断去掉，
             # 守卫却依然全绿 —— 因为当时只跑了上面那次会被跳过的"第二遍"。
-            await db.execute("DELETE FROM schema_version WHERE version = ?", (LATEST_VERSION,))
+            # v6 加入后仍重放 v5，保留原有可空动作列幂等覆盖。
+            await db.execute("DELETE FROM schema_version WHERE version >= 5")
             await db.commit()
             replay_error = None
             replay_version = None

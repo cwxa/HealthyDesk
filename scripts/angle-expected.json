@@ -59,7 +59,7 @@
         0.7
       ]
     },
-    "head_angle": 7.13,
+    "head_angle": 5.36,
     "shoulder_diff": 0.0,
     "spine_angle": 0.0
   },
@@ -92,7 +92,7 @@
       ]
     },
     "head_angle": 0.0,
-    "shoulder_diff": 13.33,
+    "shoulder_diff": 10.0,
     "spine_angle": 0.0
   },
   {
@@ -125,7 +125,7 @@
     },
     "head_angle": 0.0,
     "shoulder_diff": 0.0,
-    "spine_angle": 1.64
+    "spine_angle": 2.18
   },
   {
     "name": "ears_too_close_dx_guard",
@@ -155,7 +155,7 @@
         0.7
       ]
     },
-    "head_angle": 0.0,
+    "head_angle": null,
     "shoulder_diff": 0.0,
     "spine_angle": 0.0
   },
@@ -188,8 +188,8 @@
       ]
     },
     "head_angle": 0.0,
-    "shoulder_diff": 0.0,
-    "spine_angle": 0.44
+    "shoulder_diff": null,
+    "spine_angle": 0.59
   },
   {
     "name": "head_tilt_beyond_30_guard",
@@ -219,7 +219,7 @@
         0.7
       ]
     },
-    "head_angle": 0.0,
+    "head_angle": 61.93,
     "shoulder_diff": 0.0,
     "spine_angle": 0.0
   },
@@ -253,6 +253,6 @@
     },
     "head_angle": 0.0,
     "shoulder_diff": 0.0,
-    "spine_angle": 90.0
+    "spine_angle": null
   }
 ]

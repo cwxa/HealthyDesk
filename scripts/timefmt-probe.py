@@ -294,6 +294,9 @@ async def probe_migration(tmpdir: str) -> dict:
             day_preserved.append(got == old[:10])
         native_untouched = all(by_id.get(rid) == before_by_id[rid] for rid in native_ids)
 
+        # 归档实现现在按测量版本分组；先升级结构，不改变本测试的 v4 时间语义。
+        from db.migrations import _add_metric_versions
+        await _add_metric_versions(db)
         # ---- 跑真实 rollup ----
         await rollup_daily(db)
         daily_after_1 = await read_daily(db)

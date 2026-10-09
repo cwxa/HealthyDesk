@@ -1,5 +1,13 @@
 # 四端构建：Windows / macOS / Android / iOS
 #
+# 🔴 本文件**只打包，不守门**（2026-10-08 拆分）。
+#    守门（一致性/类型/版本/原生配置/UI 冒烟）与 Android 原生层单测都在 **ci.yml**，
+#    那个文件**每次推送都跑**；本文件只在发版分支/tag/手动时跑。
+#    拆分的理由：两者触发时机与失败含义不同 ——
+#      本文件的红 = **打包坏了**；ci.yml 的红 = **代码/配置/守卫坏了**。
+#    混在一起时，"四端构建成功"这个结论会被守门 job 的红染上歧义。
+#    ⚠️ GitHub 不允许跨 workflow 的 `needs`，所以本文件的 job **不再**依赖 verify。
+#
 # 为什么需要 CI：
 #   Windows 上**只能**构建 Windows 与 Android。macOS 与 iOS 都不行，原因是硬性的：
 #     - iOS：Xcode / clang / 代码签名没有非 macOS 实现
@@ -11,8 +19,8 @@
 #     版本号**取自分支名**，与 package.json 必须一致；目标是**已发布**的 Release 时直接失败
 #     （已发布的资产不可被覆盖，要发行就升版本号）。
 #   - 打 tag（v*）→ 同上；差别是 tag 被当作**定稿动作**，允许覆盖已发布 Release 的资产。
-#   - 推 main / feat|fix|chore|docs 分支 → **只跑守门（verify）**，不打包。
-#     （此前推 main 是**完全不触发**的 —— CI 对主干零设防，这是补上的洞。）
+#   - 推 main / feat|fix|chore|docs 分支 → **本文件完全不打包**（打包 job 的 `if` 已排除它们），
+#     守门由 ci.yml 负责。
 #   - Actions 页面手动触发（workflow_dispatch）→ 只构建，不碰 Release
 #
 # 两道闸门（都是刻意保留的，不是没做完）：
@@ -34,15 +42,11 @@ on:
   workflow_dispatch:
   push:
     branches:
-      # 主干：每次合进来都要过守门。
-      - main
       # 发版专线：推它 = 构建四端 + 创建/更新该版本的 draft Release（版本号取自分支名）。
       - 'release/**'
-      # 开发分支：只跑守门，不打包（打包 job 的 `if` 里已排除它们）。
-      - 'feat/**'
-      - 'fix/**'
-      - 'chore/**'
-      - 'docs/**'
+      # ⚠️ 刻意**不列** main / feat / fix / chore / docs：
+      #    那些分支只该过守门（ci.yml），打包 job 的 `if` 也会把它们排除。
+      #    列在这里只会每次推送都新建一个**必然全 job 跳过**的空 run，污染 Actions 列表。
     tags:
       - 'v*'
 
@@ -77,231 +81,13 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────────────────────
-  # 守门：跨语言一致性 / 类型 / 版本号。任一不过，四端构建都不启动。
-  # ─────────────────────────────────────────────────────────────
-  verify:
-    name: 守门 · 一致性 / 类型 / 版本
-    runs-on: ubuntu-24.04
-    # 🔴 六个 job 都设了 timeout-minutes —— 这是**兜「挂死」**的宽松上限，不是性能目标。
-    #    不设的话中途卡住（等网络、等锁、轮询不退出）会一直烧到默认上限（6 小时），
-    #    而本项目**真的发生过挂起**：退役 runner 标签让 job 既不报错也不失败地永远排队、
-    #    electron-builder 退避重试、后端冒烟 60 次轮询。挂住比失败贵得多，也没有提示。
-    #    取值 ≈ 正常耗时的 3~6 倍，故意留足余量（宁可慢，不可误杀）。
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-          # 缓存 pip 轮子：后端依赖里有 mediapipe + opencv，每次冷装要几分钟。
-          # 缓存 key 由 requirements.txt 的内容哈希决定，改依赖才失效。
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - name: 安装前端依赖
-        run: npm ci
-
-      # 评分/角度模块只依赖 numpy（mediapipe 是惰性导入），
-      # 所以重新生成期望值不需要装 opencv + mediapipe 那 400MB。
-      # ⚠️ 时间戳契约守卫（verify-timefmt）额外要 aiosqlite：它跑的是**真实**的
-      #    `services.retention.rollup_daily`（async）来验「迁移后归档与按天窗口同源」。
-      #    用同步 sqlite3 复刻一遍是最省事的做法，但那样验的是**副本**而不是实现
-      #    —— 副本会与源码各错各的，测试还全绿（本项目明令禁止）。aiosqlite 是纯
-      #    Python 小包，装它只多几秒。
-      - name: 安装后端最小依赖
-        run: python -m pip install --quiet numpy aiosqlite
-
-      - name: 类型检查
-        run: npx tsc --noEmit
-
-      # 期望值是由 Python 生成、node 比对的。如果只改了其中一边，
-      # 提交里的 json 就会和生成器脱节 —— 这时比对本身仍在"自洽地跑"，
-      # 却已经与被测实现无关了。重新生成一次并比对，堵住这个盲区。
-      #
-      # 🔴 TZ 必须钉成**非 UTC**：日聚合的期望值里有「本地日」用例，而 UTC 下
-      #    "本地零点"就是 UTC 零点 —— 生成器自检与两端对拍都**无法区分**「按本地时区算」
-      #    与「按 UTC 算」，这类回归会整条溜过去（已实测漏网过一次）。
-      #    生成物本身**不随时区变化**（已验证跨 4 个时区逐字节相同），这里只是让自检有牙。
-      # ⚠️ 只能靠**环境变量**钉时区，别在生成器里 spawn 子进程换 TZ：Windows CRT 上父进程
-      #    TZ=UTC 时子进程拿到的是 +1:00 而不是 +8:00，嵌套传 TZ 不可靠。
-      - name: 期望值是否与生成器同步
-        env:
-          TZ: Asia/Shanghai
-        run: |
-          set -euo pipefail
-          # 🔴 这里只列**内容能逐字节复现**的几份：
-          #    - scoring / angle：原有覆盖；
-          #    - daily-agg：这次时区事故补上的 —— 它的期望值曾把**生成机的 UTC 偏移**
-          #      写死进去（本机 UTC+8 → 16:00Z），换到 UTC 的 runner 上两端实现都对、
-          #      产物却对不上。现在生成物已做到与时区无关，加进同步检查堵住复发。
-          # ⚠️ part-health / exercise-quality / export 暂不列入：前两者经 numpy 参与计算，
-          #    期望值带小数字面量，而 CI 的 numpy 是**不钉版本**装的 —— 换大版本可能给出
-          #    不同字面量，列入会制造假红（要纳入得先钉 numpy 版本再逐份验证）；
-          #    export 则因为本机（Windows）Python 输出 CRLF、仓库文件是 LF，
-          #    本地无法可靠验证，留待有 Linux 环境时再纳。
-          # ⚠️ 本机比对注意换行符：先 `tr -d '\r'` 再 diff，否则会"全篇不一致"。
-          # 名单必须与 scripts/ 下"生成器 + 同名 -expected.json"的配对保持一致 ——
-          # 漏掉一个，那个期望值就能在"改了生成器忘了重生成"的状态下一直绿下去
-          #（本轮补上 exercise-quality / export 两组，它们此前不在这个循环里）。
-          for name in scoring angle daily-agg exercise-quality export; do
-            echo "=== $name ==="
-            python "scripts/gen-${name}-cases.py" > "/tmp/${name}.json"
-            diff -u "scripts/${name}-expected.json" "/tmp/${name}.json"
-          done
-          echo "✓ 期望值与生成器同步"
-
-      - name: 跨语言一致性（评分 / 平滑 / 角度）
-        run: npm run verify:parity
-
-      # 表结构层：迁移编号连续、**加列幂等**（SQLite 没有 ADD COLUMN IF NOT EXISTS）、
-      # 老数据不丢、以及"同一个字段在 桌面列 / 移动端行接口 / 导出规格 三处"必须同构。
-      # 它跑真实 SQLite + 真实 apply_migrations，需要 aiosqlite（同上一步的说明）。
-      - name: 表结构与迁移守卫
-        run: npm run verify:schema
-
-      # 动作库数据化（ROADMAP-SCORING S7）：动作名只能存在于 src/data/exercises.ts，
-      # 引导动画必须由数据驱动（不再按下标 switch），总时长单点定义。
-      # 纯源码 + 数据守卫，不需要构建，所以放在 build:web 之前 —— 早期失败更便宜。
-      - name: 动作库守卫（唯一数据源 / 逐项对拍 / 引导数据化）
-        run: npm run verify:exercises
-
-      # README 下载区：只允许「指向 Releases 页」的入口，不许写死版本号 / 体积 /
-      # 逐版本下载链接（那三者每发一版都会漂，历史上真的漂过、也漏过）。
-      # 纯文本守卫，不需要构建。
-      - name: README 下载区守卫
-        run: npm run verify:readme
-
-      # 原生配置：iOS / Android / 桌面的权限声明与 scheme 设置全是**静态文本**，判据不需要设备。
-      # 过去这类风险（iOS 少一条 UsageDescription ⇒ 一开摄像头进程被终止；Android 少 CAMERA
-      # ⇒ 权限请求必被拒）曾被归入"只能真机验证"。现在由这条静态守卫接管，
-      # 改错配置在 CI 里就红。与它就是 `verify:all` 的一员（第 13 条断言要求两边同步）。
-      - name: 原生配置守卫（权限声明 / scheme / 包名）
-        run: npm run verify:native-config
-
-      # 本工作流自己的守卫：on:/if:/concurrency 决定了「什么触发构建、什么对外发布」，
-      # 改错了既没有编译错误、也没有别的测试会红。盯的是 --
-      # 打包 job 的 if 还在不在、`--draft` 闸门在不在、tag 会不会被半路取消。
-      # 纯文本守卫（按缩进取块），不需要构建，也不装依赖。
-      - name: CI 工作流守卫
-        run: npm run verify:ci
-
-      # 假摄像头案例（`scripts/fake-camera/`）：**真人照片派生**的逐帧序列两端对拍。
-      # 与 `verify:parity` 不重叠 —— 那边跑合成数值用例，这边跑 mediapipe 在真人照片上
-      # 实跑出来的序列（结论已落盘在 scenarios.json，所以**这一步不需要 mediapipe**，纯 node + esbuild）。
-      # 它同时钉住「改了阈值没重建案例」：fixture 里登记的阈值必须等于当前 TS 常量。
-      - name: 假摄像头案例对拍（真人素材 · 桌面端 vs 移动端）
-        run: npm run verify:fake-camera
-
-      # 界面层：把「构建成功、类型通过、产物 sha256 对得上，但页面白屏 /
-      # 路由指不到 / ?platform= 覆盖失效」挡在提交阶段。
-      # 数值层（verify:parity）与产物层（verify:source）之间原本空着这一层，
-      # 详见 docs/MULTIPLATFORM.md §9.8。
-      #
-      # 🔴 用 runner 自带的 Chrome，**不引 playwright/puppeteer**：
-      #    ① 这道门要便宜（几十秒），不该拖 100MB+ 浏览器进 CI；
-      #    ② 守卫的依赖越少，守卫自己坏掉的概率越低 —— 守卫坏了会伪装成全绿。
-      #    ubuntu-24.04 镜像预装 google-chrome；找不到时脚本会**显式失败**而不是跳过。
-      #
-      # 其中两个**移动端**组合还会注入一条假摄像头（CDP + canvas.captureStream）并
-      # 按墙上时间喂 10 秒帧 —— 于是「有帧时的实时引导 / 实时徽章」第一次有了自动化证据
-      # （见 §9.9）。代价是这一步多约 70 秒：**不许**为了快就把那一段改成"缺资源就跳过"，
-      # 那样它又会变回一个永远绿的守卫（脚本里对缺失资源是 exit 1）。
-      - name: 构建前端（UI 冒烟的前置）
-        run: npm run build:web
-
-      - name: UI 冒烟（5 个平台 × 3 个路由 + 假摄像头实时引导）
-        run: npm run verify:ui
-
-      - name: 版本号五处一致
-        run: node scripts/set-version.js --check
-
-  # ─────────────────────────────────────────────────────────────
-  # Android 原生层单元测试（纯 JVM：不需要设备、模拟器、更不需要真机）
-  # ─────────────────────────────────────────────────────────────
-  android-unit-test:
-    name: Android 单元测试
-    runs-on: ubuntu-24.04
-    needs: verify
-    # 首次要拉 Gradle 依赖并编译 app 模块，正常约 3~6 分钟。这是兜「挂死」的宽松上限。
-    timeout-minutes: 30
-    # 🔴 **故意不设 `if` 闸门**（与下面几个打包 job 不同）：这道门要在**每次推送**上跑。
-    #    它接管的正是原先"只能真机走"的那条路径 —— 权限桥的并发请求会不会互相覆盖
-    #    导致前端 getUserMedia 永久挂起。若只在发版时才跑，等于把风险又推回"发版前才发现"。
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # 🔴 Gradle 依赖缓存（2026-10-08 补）。此前本 job **裸跑无缓存**，每次从零下载
-      #    AGP 全套依赖；run 37728535206 撞上瞬时抖动，15 秒就 BUILD FAILED：
-      #      `Could not find com.squareup:javawriter:2.5.0.`
-      #      `Could not find com.google.code.findbugs:jsr305:3.0.2.`
-      #      `Could not find org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.0.`
-      #    守卫把这次正确归类为 `deps-unavailable`（不是 `test-failure`）——
-      #    这正是铁律 #77 要的分辨能力：**"没跑起来" ≠ "测试挂了"**。
-      #    上一轮（02:53，同一 job、同一份代码）1m55s 通过 ⇒ 纯属网络瞬时故障。
-      #    缓存命中后就不再依赖每一次的实时网络，把这类假红压掉。
-      - uses: gradle/actions/setup-gradle@v4
-
-      # ubuntu runner 自带 Android SDK。与 mobile-android 同样的做法：**别引**
-      # `android-actions/setup-android`（它内部的 `sdkmanager tools` 早已被仓库移除，
-      # 会让整个 action 以退出码 1 失败）。这里只需要把 SDK 位置告诉 AGP。
-      - name: 准备 Android SDK
-        run: |
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          [ -d "$SDK" ] || { echo "::error::找不到 Android SDK（$SDK）"; exit 1; }
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-
-      - name: 安装依赖
-        run: npm ci
-
-      # 🔴 必须先生成原生工程 —— 这一步是 CI 首跑（run 36886981654）红出来的教训：
-      #    入库的 `android/app/capacitor.build.gradle` 会 `apply from`
-      #    `../capacitor-cordova-android-plugins/cordova.variables.gradle`，而那个目录被
-      #    `android/.gitignore` 忽略 ⇒ **干净的检出上一定不存在** ⇒ gradle 在**配置阶段**
-      #    就炸，一份 JUnit 报告都产出不了（错误长这样：
-      #    `Could not read script '…/cordova.variables.gradle' as it does not exist.`）。
-      #    本机因为以前跑过打包、那些产物还留在工作区里，所以本机**一直绿** ——
-      #    典型的「本机绿 ≠ CI 绿」。
-      #    ⚠️ 纯 JVM 单测**不读** web 资源，本来不需要真的构建前端 —— 但实测
-      #       `npx cap sync android` 会**硬校验** `dist/index.html`
-      #       （`The web assets directory (./dist) must contain an index.html file.`），
-      #       空目录糊弄不过去（第二轮 CI 首跑就是这么红的：以为读 CLI 源码推出"空目录够用"，
-      #       实际没跑过 —— 推演 ≠ 跑通）。反正 `verify` job 里也构建同一份，这里照做即可。
-      - name: 构建前端（cap sync 的前置）
-        run: npm run build:web
-
-      - name: 生成原生工程（cap sync）
-        run: npx cap sync android
-
-      # 脚本自己会解析 JUnit XML 报告并报出「实际跑了几个用例」——
-      # 只看 gradle 退出码会把「一个用例都没跑」读成通过（配置漂了就是这么装的）。
-      # 报告缺失时还会把原因归类到「该做什么」上（cap sync 没跑 / JDK 不对 / 依赖下不来）。
-      - name: 权限队列单元测试（纯 JVM）
-        run: npm run verify:android
-
-  # ─────────────────────────────────────────────────────────────
   # Windows 桌面安装包（NSIS）
   # ─────────────────────────────────────────────────────────────
   desktop-windows:
     name: Windows 安装包
     runs-on: windows-latest
-    needs: verify
+    # 🔴 不写 `needs:` —— 守门（verify）与 Android 单测已拆到 ci.yml，
+    #    GitHub **不允许跨 workflow 的 needs**。打包 job 现在只由自己的 `if` 决定跑不跑。
     # 兜「挂死」的宽松上限（正常约 15 分钟：pip 装 mediapipe/opencv + PyInstaller + NSIS）。
     timeout-minutes: 90
     # 🔴 只有「要出产物」的触发才打包：release/** 分支、tag、手动。
@@ -438,7 +224,8 @@ jobs:
   desktop-macos:
     name: macOS 安装包（${{ matrix.arch }}）
     runs-on: ${{ matrix.runner }}
-    needs: verify
+    # 🔴 不写 `needs:` —— 守门（verify）与 Android 单测已拆到 ci.yml，
+    #    GitHub **不允许跨 workflow 的 needs**。打包 job 现在只由自己的 `if` 决定跑不跑。
     # 兜「挂死」的宽松上限（每个矩阵项各算一次；正常约 20~30 分钟）。
     timeout-minutes: 90
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
@@ -643,7 +430,8 @@ jobs:
   mobile-android:
     name: Android APK
     runs-on: ubuntu-24.04
-    needs: verify
+    # 🔴 不写 `needs:` —— 守门（verify）与 Android 单测已拆到 ci.yml，
+    #    GitHub **不允许跨 workflow 的 needs**。打包 job 现在只由自己的 `if` 决定跑不跑。
     # 兜「挂死」的宽松上限（正常约 15~25 分钟：Gradle 首次拉依赖最慢）。
     timeout-minutes: 60
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。
@@ -824,7 +612,8 @@ jobs:
     name: iOS 归档
     # macos-15：`macos-14` 的弃用支持 2026-11-02 到期，别贴着期限走
     runs-on: macos-15
-    needs: verify
+    # 🔴 不写 `needs:` —— 守门（verify）与 Android 单测已拆到 ci.yml，
+    #    GitHub **不允许跨 workflow 的 needs**。打包 job 现在只由自己的 `if` 决定跑不跑。
     # 兜「挂死」的宽松上限（正常约 20~35 分钟：pod install + xcodebuild archive 都慢）。
     timeout-minutes: 90
     # if 同 desktop-windows：只打包 release 分支 / tag / 手动。

@@ -194,7 +194,7 @@ const LIVE_SCORE_WIRING = {
    * 🔴 v1.7.1 起从 `exState` 的字段初始化式提成了一个变量 —— 因为页面上有**两处**
    * 要显示它（移动端练习条 + 桌面面板），原来练习条那处自己读了运动态 `score`。
    */
-  derive: 'const activityScore = liveQuality?.score ?? score',
+  derive: 'const activityScore = liveQuality?.score ?? 0',
   /**
    * 🔴 移动端练习条的徽章：必须用派生值，且必须带 `data-ng` 锚点。
    *

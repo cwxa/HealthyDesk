@@ -42,6 +42,10 @@ export function usePoseEngine() {
   const rafRef = useRef<number>(0)
   const onPoseRef = useRef<((r: PoseResult) => void) | null>(null)
   const runningRef = useRef(false)
+  const generationRef = useRef(0)
+  const lastInferenceRef = useRef(0)
+  const lastResultAtRef = useRef(0)
+  const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null)
   /**
    * 当前评分模式。用 ref 而不是 state：推理循环（移动端 rAF / 桌面端定时发帧）
    * 不该因为模式切换而重建 —— 重建循环会掐掉正在跑的摄像头链路。
@@ -49,6 +53,7 @@ export function usePoseEngine() {
   const modeRef = useRef<ScoreMode>(MODE_MONITOR)
 
   const emit = useCallback((r: PoseResult) => {
+    lastResultAtRef.current = performance.now()
     setPoseResult(r)
     onPoseRef.current?.(r)
   }, [])
@@ -57,22 +62,28 @@ export function usePoseEngine() {
   useEffect(() => {
     if (!useLocal) {
       setConnected(wsConnected)
-      setPoseResult(wsPoseResult)
+      setPoseResult(wsPoseResult?.mode && wsPoseResult.mode !== modeRef.current ? null : wsPoseResult)
       setBackendError(wsBackendError)
     }
   }, [useLocal, wsConnected, wsPoseResult, wsBackendError])
 
   useEffect(() => {
     if (useLocal) return
-    wsOnPoseResult((r) => onPoseRef.current?.(r))
+    wsOnPoseResult((r) => {
+      // 旧模式的在途结果不能进入新模式的记录通道。
+      if (r.mode && r.mode !== modeRef.current) return
+      onPoseRef.current?.(r)
+    })
   }, [useLocal, wsOnPoseResult])
 
   // ---- 移动端：本地推理循环 ----
   const localLoop = useCallback(() => {
     if (!runningRef.current) return
     const video = videoRef.current
-    if (video && video.readyState >= 2) {
-      const r = localPoseEngine.detect(video, performance.now(), modeRef.current)
+    const now = performance.now()
+    if (!document.hidden && video && video.readyState >= 2 && now - lastInferenceRef.current >= 100) {
+      lastInferenceRef.current = now
+      const r = localPoseEngine.detect(video, now, modeRef.current)
       if (r) emit(r)
     }
     rafRef.current = requestAnimationFrame(localLoop)
@@ -84,19 +95,40 @@ export function usePoseEngine() {
     const video = videoRef.current
     if (!video || video.readyState < 2) return
     if (document.hidden) return
-    const r = localPoseEngine.detect(video, performance.now(), modeRef.current)
+    const now = performance.now()
+    if (now - lastInferenceRef.current < 100) return
+    lastInferenceRef.current = now
+    const r = localPoseEngine.detect(video, now, modeRef.current)
     if (r) emit(r)
   }, [emit])
 
+  /** 一处负责使异步启动失效、取消调度、清理旧视频与会话指标。 */
+  const cleanupLocal = useCallback(() => {
+    generationRef.current += 1
+    runningRef.current = false
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = 0
+    if (watchdogRef.current) clearInterval(watchdogRef.current)
+    watchdogRef.current = null
+    videoRef.current?.removeEventListener('timeupdate', onVideoTimeUpdate)
+    localPoseEngine.resetSession()
+    lastInferenceRef.current = 0
+    console.info('[PoseEngine] Session stopped', { generation: generationRef.current })
+  }, [onVideoTimeUpdate])
+
   /** 绑定视频元素并启动本地推理（移动端）。 */
   const attachVideo = useCallback(async (video: HTMLVideoElement) => {
+    if (useLocal) cleanupLocal()
     videoRef.current = video
     if (!useLocal) return
+    const generation = generationRef.current
+    const startedAt = performance.now()
     setConnected(false)
     setBackendError(null)
     try {
       // 模型来自本地打包资源（apk 内 mediapipe/），加超时避免加载失败时无限等待
       await withTimeout(localPoseEngine.init(), 45000, '姿态模型加载')
+      if (generation !== generationRef.current) return
       // 安卓 WebView 中 video 未必自动播放；不阻塞主流程，本地引擎按 readyState 取帧
       void Promise.resolve(video.play()).catch(() => {})
       runningRef.current = true
@@ -106,7 +138,16 @@ export function usePoseEngine() {
       // 兜底：部分 WebView 在后台/未聚焦时会节流 rAF，
       // 用 timeupdate 事件保证视频有新画面时至少处理一次
       video.addEventListener('timeupdate', onVideoTimeUpdate)
+      // 视频停滞或页面隐藏时，不让最后一帧的好分永久留在界面上。
+      watchdogRef.current = setInterval(() => {
+        if (runningRef.current && performance.now() - lastResultAtRef.current > 1500) {
+          localPoseEngine.invalidateResult()
+          emit({ type: 'no_pose', timestamp: new Date().toISOString(), mode: modeRef.current, reason: 'expired', message: 'Pose result expired' })
+        }
+      }, 500)
+      console.info('[PoseEngine] Session started', { generation, elapsed_ms: performance.now() - startedAt })
     } catch (e) {
+      if (generation !== generationRef.current) return
       const name = (e as { name?: string })?.name ?? 'Error'
       console.error('Local pose engine init failed:', e)
       setBackendError(
@@ -114,19 +155,18 @@ export function usePoseEngine() {
       )
       setConnected(false)
     }
-  }, [useLocal, localLoop, emit, onVideoTimeUpdate])
+  }, [useLocal, localLoop, emit, onVideoTimeUpdate, cleanupLocal])
 
   const stop = useCallback(() => {
-    runningRef.current = false
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    rafRef.current = 0
-    videoRef.current?.removeEventListener('timeupdate', onVideoTimeUpdate)
+    if (useLocal) cleanupLocal()
     if (useLocal) {
       setConnected(false)
+      setPoseResult(null)
+      onPoseRef.current?.({ type: 'no_pose', timestamp: new Date().toISOString(), reason: 'expired', message: 'Camera session stopped' })
     } else {
       wsDisconnect()
     }
-  }, [useLocal, wsDisconnect, onVideoTimeUpdate])
+  }, [useLocal, wsDisconnect, cleanupLocal])
 
   const resetBackendError = useCallback(() => {
     setBackendError(null)
@@ -151,8 +191,9 @@ export function usePoseEngine() {
    * 重渲染，更不应重建推理循环 —— 那会掐掉正在跑的摄像头链路。
    */
   const setScoreMode = useCallback((m: ScoreMode) => {
+    if (m !== modeRef.current) emit({ type: 'no_pose', timestamp: new Date().toISOString(), mode: m, reason: 'mode_changed', message: 'Pose mode changed' })
     modeRef.current = m
-  }, [])
+  }, [emit])
 
   /**
    * 发帧时带上当前模式。
@@ -166,10 +207,10 @@ export function usePoseEngine() {
 
   useEffect(() => {
     return () => {
-      runningRef.current = false
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (useLocal) cleanupLocal()
+      onPoseRef.current = null
     }
-  }, [])
+  }, [useLocal, cleanupLocal])
 
   return {
     connected,

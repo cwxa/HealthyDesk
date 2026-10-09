@@ -44,15 +44,17 @@ export async function localRetentionDays(): Promise<number> {
 /** 把原始采样折成每日归档，只重算**样本数发生变化**的日子，返回重算天数。 */
 export async function rollupDaily(): Promise<number> {
   const counts = await readPostureDayCounts()
-  const existing = new Map((await getDailyRows()).map((r) => [r.date, Number(r.sample_count)]))
+  const existing = new Map((await getDailyRows(undefined, null)).map((r) => [`${r.date}|${r.metric_version ?? 1}`, Number(r.sample_count)]))
 
   let updated = 0
-  for (const [day, n] of Object.entries(counts)) {
-    if (existing.get(day) === n) continue
+  for (const [key, n] of Object.entries(counts)) {
+    if (existing.get(key) === n) continue
+    const [day, versionText] = key.split('|')
+    const metricVersion = Number(versionText)
     const [startIso, endIso] = dayBoundsIso(day)
-    const rows = await readPostureRange(startIso, endIso)
+    const rows = (await readPostureRange(startIso, endIso)).filter(r => (r.metric_version ?? 1) === metricVersion)
     const agg = aggregateDay(rows)
-    await putDailyRow({ date: day, ...agg, updated_at: new Date().toISOString() })
+    await putDailyRow({ date: day, metric_version: metricVersion, ...agg, updated_at: new Date().toISOString() })
     updated += 1
   }
   return updated

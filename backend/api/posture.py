@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from pydantic import Field
 from db.database import get_db
 from services.scorer import compute_score
 from services.rounding import round_1
@@ -12,10 +13,11 @@ router = APIRouter(tags=["posture"])
 
 class PostureRecord(BaseModel):
     timestamp: str
-    head_angle: float
-    shoulder_diff: float
-    spine_angle: float
-    score: int
+    head_angle: float = Field(ge=0, le=90, allow_inf_nan=False)
+    shoulder_diff: float = Field(ge=0, allow_inf_nan=False)
+    spine_angle: float = Field(ge=0, le=90, allow_inf_nan=False)
+    score: int = Field(ge=0, le=100)
+    metric_version: int = Field(default=1, ge=1, le=2)
 
 
 @router.post("/posture/record")
@@ -23,8 +25,8 @@ async def record_posture(record: PostureRecord):
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO posture_score (timestamp, head_angle, shoulder_diff, spine_angle, score) VALUES (?, ?, ?, ?, ?)",
-            (record.timestamp, record.head_angle, record.shoulder_diff, record.spine_angle, record.score),
+            "INSERT INTO posture_score (timestamp, head_angle, shoulder_diff, spine_angle, score, metric_version) VALUES (?, ?, ?, ?, ?, ?)",
+            (record.timestamp, record.head_angle, record.shoulder_diff, record.spine_angle, record.score, record.metric_version),
         )
         await db.commit()
         logger.debug("Posture recorded: score=%d", record.score)
@@ -58,7 +60,7 @@ async def get_posture_average(days: int = 7):
         # 取整走统一口径 round_1，不用内置 round（两端平局点会分叉）。
         cursor = await db.execute(
             "SELECT AVG(score) as avg_score, COUNT(*) as count "
-            "FROM posture_score WHERE date(timestamp, 'localtime') >= date('now', 'localtime', ?)",
+            "FROM posture_score WHERE metric_version = 2 AND date(timestamp, 'localtime') >= date('now', 'localtime', ?)",
             (f"-{days} days",),
         )
         row = await cursor.fetchone()
@@ -74,7 +76,7 @@ async def get_posture_trend(days: int = 7):
     try:
         cursor = await db.execute(
             "SELECT date(timestamp, 'localtime') as day, AVG(score) as avg_score "
-            "FROM posture_score WHERE date(timestamp, 'localtime') >= date('now', 'localtime', ?) "
+            "FROM posture_score WHERE metric_version = 2 AND date(timestamp, 'localtime') >= date('now', 'localtime', ?) "
             "GROUP BY day ORDER BY day",
             (f"-{days} days",),
         )

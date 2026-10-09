@@ -65,6 +65,7 @@ export const data = {
     shoulder_diff: number
     spine_angle: number
     score: number
+    metric_version?: number
   }): Promise<void> {
     if (hasLocalBackend()) {
       await http('/api/posture/record', { method: 'POST', body: JSON.stringify(rec) })
@@ -236,4 +237,3 @@ export const data = {
 export type { DataStatus, ImportOutcome }
 export { exportFileName } from './localData'
 export type { ExportBundle, Skipped } from './exportFormat'
-

@@ -1,4 +1,5 @@
-import math
+import time
+from services.pose_geometry import measure_pose, METRIC_VERSION, head_tilt_angle, shoulder_ratio, spine_angle
 import logging
 from typing import Optional
 import numpy as np
@@ -52,6 +53,7 @@ class PoseDetector:
     def process_frame(self, image: np.ndarray) -> Optional[dict]:
         if not self._initialized:
             return None
+        started_at = time.perf_counter()
         try:
             results = self.pose.process(image)
             if not results.pose_landmarks:
@@ -60,31 +62,19 @@ class PoseDetector:
             landmarks = results.pose_landmarks.landmark
             h, w = image.shape[:2]
 
-            # Visibility check — skip if key landmarks are uncertain
-            vis = {i: landmarks[i].visibility for i in CHECK_LANDMARKS}
-            min_vis = min(vis.values())
-            if min_vis < MIN_VISIBILITY:
-                logger.debug("Low visibility: min=%.2f, skipping frame", min_vis)
-                return None
-
-            head_angle = _compute_head_tilt_angle(
-                landmarks[LEFT_EAR], landmarks[RIGHT_EAR]
-            )
-
-            shoulder_diff = _compute_shoulder_ratio(
-                landmarks[LEFT_SHOULDER], landmarks[RIGHT_SHOULDER]
-            )
-
-            spine_angle = _compute_spine_angle(
-                landmarks[LEFT_SHOULDER], landmarks[RIGHT_SHOULDER],
-                landmarks[LEFT_HIP], landmarks[RIGHT_HIP]
-            )
-
+            # 原检查仅覆盖上半身；现在每个指标单独检查其依赖关键点。
+            measured = measure_pose(landmarks, w, h)
+            valid = [q["confidence"] for q in measured["quality"].values() if q["valid"]]
+            logger.debug("Pose measured: dimensions=%dx%d complete=%s quality=%s elapsed_ms=%.2f",
+                         w, h, measured["complete"], measured["quality"], (time.perf_counter() - started_at) * 1000)
             return {
-                "head_angle": round(head_angle, 2),
-                "shoulder_diff": round(shoulder_diff, 2),
-                "spine_angle": round(spine_angle, 2),
-                "visibility": round(min_vis, 3),
+                **measured["metrics"],
+                "quality": measured["quality"],
+                "complete": measured["complete"],
+                "metric_version": METRIC_VERSION,
+                "frame_width": w,
+                "frame_height": h,
+                "visibility": round(min(valid, default=0) * 1000) / 1000,
                 "landmarks": {
                     "nose": _point(landmarks[NOSE], w, h),
                     "left_ear": _point(landmarks[LEFT_EAR], w, h),
@@ -94,13 +84,15 @@ class PoseDetector:
                 },
             }
         except Exception as e:
-            logger.error("Pose processing error: %s", e)
-            return None
+            logger.exception("Pose processing failed: elapsed_ms=%.2f error=%s", (time.perf_counter() - started_at) * 1000, e)
+            return {"error": "inference_error"}
 
     def release(self):
         if self.pose:
             self.pose.close()
             self._initialized = False
+            self.pose = None
+            logger.info("Pose detector released")
 
 
 def _point(landmark, w, h):
@@ -112,42 +104,21 @@ def _compute_head_tilt_angle(left_ear, right_ear) -> float:
     Pure 2D metric — no Z-depth involved. Reliable from a front-facing camera.
     Note: in the raw (unmirrored) frame, the person's left ear is on the RIGHT
     side of the image (larger x), so right_ear.x < left_ear.x in image coords."""
-    dx = abs(right_ear.x - left_ear.x)  # horizontal ear separation
-    dy = abs(right_ear.y - left_ear.y)  # vertical ear difference
+    # v2：异常几何返回 None，超过 30° 不再清零；用像素比例计算。
+    return head_tilt_angle(left_ear, right_ear)
 
-    # Sanity: ears must be reasonably separated horizontally
-    if dx < 0.03:
-        return 0.0
-
-    angle = math.degrees(math.atan2(dy, dx))
-
-    # Beyond 30° is physiologically unlikely for head tilt — tracking error
-    if angle > 30:
-        return 0.0
-
-    return angle
 
 
 def _compute_shoulder_ratio(left_shoulder, right_shoulder) -> float:
     """Shoulder height difference as percentage of shoulder width.
     Distance-invariant — same value whether close or far from camera."""
-    shoulder_width = abs(left_shoulder.x - right_shoulder.x)
-    if shoulder_width < 0.01:
-        return 0.0
-    dy = abs(left_shoulder.y - right_shoulder.y)
-    return (dy / shoulder_width) * 100
+    return shoulder_ratio(left_shoulder, right_shoulder)
+
 
 
 def _compute_spine_angle(left_shoulder, right_shoulder, left_hip, right_hip) -> float:
-    shoulder_mid_x = (left_shoulder.x + right_shoulder.x) / 2
-    shoulder_mid_y = (left_shoulder.y + right_shoulder.y) / 2
-    hip_mid_x = (left_hip.x + right_hip.x) / 2
-    hip_mid_y = (left_hip.y + right_hip.y) / 2
-    dx = hip_mid_x - shoulder_mid_x
-    dy = hip_mid_y - shoulder_mid_y
-    if dy < 0.001:
-        return 90.0
-    return abs(math.degrees(math.atan2(dx, dy)))
+    return spine_angle(left_shoulder, right_shoulder, left_hip, right_hip)
+
 
 
 pose_detector = PoseDetector()

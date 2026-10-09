@@ -175,6 +175,7 @@ VALID = build_export(BASE_TABLES, "1.4.0", 3, ts(10))["bundle"]
 MINIMAL = build_export(None, "", 0, "")["bundle"]
 
 VALIDATE_CASES = [
+    {"name": "旧版 v1 包规范化为 v2", "raw": {**VALID, "format_version": 1}, "expected": validate_export({**VALID, "format_version": 1})},
     {"name": "合法包", "raw": VALID, "expected": validate_export(VALID)},
     {"name": "合法空包", "raw": MINIMAL, "expected": validate_export(MINIMAL)},
     {"name": "非法·不是对象（字符串）", "raw": "hello", "expected": validate_export("hello")},

@@ -19,8 +19,8 @@
 
 ## 版本
 
-`format_version` 变化才代表不兼容。校验时**只接受当前版本**（拒绝而不是猜测），
-因为格式演进时静默地"尽力而为"会让用户以为导入成功了。
+`format_version` 变化代表不兼容。新版明确接受 v1/v2 并规范化为 v2；未知版本拒绝。
+v2 日归档增加测量版本主键，旧客户端忽略该字段会覆盖同日记录，因此旧客户端应拒绝新文件。
 
 ## `skipped` 为什么不写进文件
 
@@ -36,7 +36,8 @@ import re
 from services.daily_agg import daily_avg_score, daily_bad_pct
 
 EXPORT_FORMAT = "neckguardian-export"
-EXPORT_FORMAT_VERSION = 1
+# 测量版本改变了日归档主键，旧客户端不能安全恢复新版备份；新版仍接受 v1。
+EXPORT_FORMAT_VERSION = 2
 # 导出的 CSV 前面要加 BOM，否则 Excel 打开中文表头是乱码。
 CSV_BOM = "\ufeff"
 
@@ -61,6 +62,7 @@ TABLE_FIELDS = {
         ("shoulder_diff", "num"),
         ("spine_angle", "num"),
         ("score", "num"),
+        ("metric_version", "num"),
     ),
     "posture_daily": (
         ("date", "str"),
@@ -71,6 +73,7 @@ TABLE_FIELDS = {
         ("shoulder_bad_count", "num"),
         ("spine_bad_count", "num"),
         ("updated_at", "str"),
+        ("metric_version", "num"),
     ),
     "usage_record": (("date", "str"), ("usage_minutes", "num"), ("break_count", "num")),
     "activity_log": (
@@ -166,7 +169,7 @@ def normalize_rows(table: str, rows) -> tuple[list[dict], int]:
         row = {}
         ok = True
         for name, kind in fields:
-            value = raw.get(name)
+            value = raw.get(name, 1) if name == "metric_version" else raw.get(name)
             if kind == "num":
                 value = _num(value)
             elif kind == "str?":
@@ -174,6 +177,9 @@ def normalize_rows(table: str, rows) -> tuple[list[dict], int]:
             else:
                 value = _str(value)
             if value is _INVALID or (value is None and kind != "str?"):
+                ok = False
+                break
+            if name == "metric_version" and value not in (1, 2):
                 ok = False
                 break
             row[name] = value
@@ -241,7 +247,7 @@ def validate_export(raw) -> dict:
         return {"ok": False, "error": "bad_format", "bundle": None, "skipped": empty}
 
     version = _num(raw.get("format_version"))
-    if version is None or version != int(version) or int(version) != EXPORT_FORMAT_VERSION:
+    if version is None or version not in (1, EXPORT_FORMAT_VERSION):
         return {"ok": False, "error": "unsupported_version", "bundle": None, "skipped": empty}
 
     tables = raw.get("tables")
@@ -278,7 +284,7 @@ def validate_export(raw) -> dict:
 # 而每日汇总正是用户想拿 Excel 看一眼的东西。派生量在这里现算（同 daily_agg）。
 # ---------------------------------------------------------------------------
 
-DAILY_CSV_HEADER = ("日期", "采样数", "日均分", "最低分", "头部问题占比%", "肩部问题占比%", "脊柱问题占比%")
+DAILY_CSV_HEADER = ("日期", "采样数", "日均分", "最低分", "头部问题占比%", "肩部问题占比%", "躯干问题占比%", "测量版本")
 
 
 def _csv_field(text: str) -> str:
@@ -322,6 +328,7 @@ def build_daily_csv(daily_rows) -> str:
             _fmt_1(daily_bad_pct(row, "head")),
             _fmt_1(daily_bad_pct(row, "shoulder")),
             _fmt_1(daily_bad_pct(row, "spine")),
+            _fmt_int(r.get("metric_version", 1)),
         ]
         lines.append(",".join(_csv_field(f) for f in fields))
     return CSV_BOM + "\r\n".join(lines) + "\r\n"

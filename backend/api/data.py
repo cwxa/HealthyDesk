@@ -83,7 +83,7 @@ async def export_daily_csv():
     try:
         cursor = await db.execute(
             "SELECT date, sample_count, score_sum, min_score,"
-            " head_bad_count, shoulder_bad_count, spine_bad_count FROM posture_daily ORDER BY date"
+            " head_bad_count, shoulder_bad_count, spine_bad_count, metric_version FROM posture_daily ORDER BY date, metric_version"
         )
         return {"csv": build_daily_csv([dict(r) for r in await cursor.fetchall()])}
     finally:

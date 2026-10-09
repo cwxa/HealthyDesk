@@ -57,7 +57,7 @@ async def _daily_rows(db, since_expr: str):
     cursor = await db.execute(
         "SELECT date, sample_count, score_sum, min_score,"
         " head_bad_count, shoulder_bad_count, spine_bad_count"
-        " FROM posture_daily WHERE date >= ? ORDER BY date",
+        " FROM posture_daily WHERE metric_version = 2 AND date >= ? ORDER BY date",
         (since_expr,),
     )
     return await cursor.fetchall()
@@ -151,7 +151,7 @@ async def get_summary():
 
         # 今日均分：消费归档行（今天这一天）。归档里没有今天 → 今天还没有采样 → 0。
         cursor = await db.execute(
-            "SELECT sample_count, score_sum FROM posture_daily WHERE date = " + TODAY
+            "SELECT sample_count, score_sum FROM posture_daily WHERE metric_version = 2 AND date = " + TODAY
         )
         row = await cursor.fetchone()
         today_avg = daily_avg_score(dict(row)) if row else 0
@@ -162,7 +162,7 @@ async def get_summary():
         # （今天的原始采样永远不会被保留策略清掉，见 services/retention.py）。
         cursor = await db.execute(
             f"SELECT head_angle, shoulder_diff, spine_angle FROM posture_score "
-            f"WHERE {LOCAL_DAY.format(col='timestamp')} = {TODAY}"
+            f"WHERE metric_version = 2 AND {LOCAL_DAY.format(col='timestamp')} = {TODAY}"
         )
         part_health = compute_part_health(await cursor.fetchall())
 
@@ -204,7 +204,7 @@ async def get_daily_history(days: int = 30):
         cursor = await db.execute(
             "SELECT date, sample_count, score_sum, min_score,"
             " head_bad_count, shoulder_bad_count, spine_bad_count"
-            " FROM posture_daily WHERE date >= date('now','localtime', ?) ORDER BY date",
+            " FROM posture_daily WHERE metric_version = 2 AND date >= date('now','localtime', ?) ORDER BY date",
             (f"-{days} days",),
         )
         rows = await cursor.fetchall()

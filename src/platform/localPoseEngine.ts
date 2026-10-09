@@ -39,17 +39,14 @@ import {
 
 // 引擎自身的参数。评分模型的阈值/分档/单项扣分/取整统一定义在 scoringModel.ts，
 // 与统计聚合（partHealth）共用同一份，避免两处各写一遍后悄悄漂移。
-const MIN_VISIBILITY = 0.5
-const EMA_ALPHA = 0.35
+import { PoseSmoother, EMA_ALPHA } from './poseSmoother'
+import { measurePose, METRIC_VERSION } from './poseGeometry'
 
 const NOSE = 0
 const LEFT_EAR = 7
 const RIGHT_EAR = 8
 const LEFT_SHOULDER = 11
 const RIGHT_SHOULDER = 12
-const LEFT_HIP = 23
-const RIGHT_HIP = 24
-const CHECK_LANDMARKS = [NOSE, LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER]
 
 /**
  * WASM 资源与模型走**本地打包**（public/mediapipe/），
@@ -57,64 +54,6 @@ const CHECK_LANDMARKS = [NOSE, LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDE
  */
 const WASM_ROOT = new URL('mediapipe/wasm', document.baseURI).href
 const MODEL_URL = new URL('mediapipe/models/pose_landmarker_full.task', document.baseURI).href
-
-type LM = { x: number; y: number; z: number; visibility?: number }
-
-/** 指数滑动平均，抑制帧间抖动（对应后端 PoseSmoother）。 */
-class PoseSmoother {
-  private values: Record<string, number> | null = null
-  private alpha = EMA_ALPHA
-
-  update(metrics: Record<string, number>): Record<string, number> {
-    if (this.values === null) {
-      this.values = { ...metrics }
-      return { ...this.values }
-    }
-    const smoothed: Record<string, number> = {}
-    for (const k of Object.keys(metrics)) {
-      if (typeof metrics[k] === 'number' && k in this.values) {
-        smoothed[k] = pyRound((this.alpha * metrics[k] + (1 - this.alpha) * this.values[k]) * 100) / 100
-        this.values[k] = smoothed[k]
-      } else {
-        smoothed[k] = metrics[k]
-      }
-    }
-    return smoothed
-  }
-
-  reset() {
-    this.values = null
-  }
-}
-
-// ---- 角度计算（与 pose_detector.py 等价） ----
-
-function headTiltAngle(leftEar: LM, rightEar: LM): number {
-  const dx = Math.abs(rightEar.x - leftEar.x)
-  const dy = Math.abs(rightEar.y - leftEar.y)
-  if (dx < 0.03) return 0
-  const angle = (Math.atan2(dy, dx) * 180) / Math.PI
-  if (angle > 30) return 0
-  return angle
-}
-
-function shoulderRatio(leftShoulder: LM, rightShoulder: LM): number {
-  const width = Math.abs(leftShoulder.x - rightShoulder.x)
-  if (width < 0.01) return 0
-  const dy = Math.abs(leftShoulder.y - rightShoulder.y)
-  return (dy / width) * 100
-}
-
-function spineAngle(leftShoulder: LM, rightShoulder: LM, leftHip: LM, rightHip: LM): number {
-  const sMidX = (leftShoulder.x + rightShoulder.x) / 2
-  const sMidY = (leftShoulder.y + rightShoulder.y) / 2
-  const hMidX = (leftHip.x + rightHip.x) / 2
-  const hMidY = (leftHip.y + rightHip.y) / 2
-  const dx = hMidX - sMidX
-  const dy = hMidY - sMidY
-  if (dy < 0.001) return 90
-  return Math.abs((Math.atan2(dx, dy) * 180) / Math.PI)
-}
 
 /**
  * 评分（与 scorer.py 等价）。
@@ -170,6 +109,8 @@ export class LocalPoseEngine {
   private lastVideoTime = -1
   /** 上一次推理用的评分模式，用于在切换时清空平滑状态。 */
   private lastMode: ScoreMode | null = null
+  private modelGeneration = 0
+  private inferenceFailures = 0
 
   get ready(): boolean {
     return this.landmarker !== null
@@ -179,6 +120,8 @@ export class LocalPoseEngine {
   async init(): Promise<void> {
     if (this.landmarker) return
     if (this.loading) return this.loading
+    const generation = this.modelGeneration
+    const startedAt = performance.now()
     this.loading = (async () => {
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT)
       const baseOptions = { modelAssetPath: MODEL_URL }
@@ -194,7 +137,7 @@ export class LocalPoseEngine {
         })
       } catch (e) {
         // 部分安卓 WebView 不支持 GPU delegate，回退到 CPU（WASM）
-        console.warn('[LocalPoseEngine] GPU delegate 初始化失败，回退 CPU：', e)
+        console.warn('[LocalPoseEngine] GPU delegate failed; falling back to CPU:', e)
         this.landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: { ...baseOptions, delegate: 'CPU' },
           runningMode: 'VIDEO',
@@ -204,6 +147,12 @@ export class LocalPoseEngine {
           minTrackingConfidence: 0.5,
         })
       }
+      if (generation !== this.modelGeneration) {
+        this.landmarker?.close()
+        this.landmarker = null
+        throw new Error('Pose model initialization cancelled')
+      }
+      console.info('[LocalPoseEngine] Model initialized', { elapsed_ms: performance.now() - startedAt })
     })()
     try {
       await this.loading
@@ -226,45 +175,36 @@ export class LocalPoseEngine {
     this.lastVideoTime = video.currentTime
 
     const ts = new Date().toISOString()
+    const startedAt = performance.now()
     let result
     try {
       result = this.landmarker.detectForVideo(video, timestampMs)
-    } catch {
-      return null
+    } catch (error) {
+      this.smoother.reset()
+      this.inferenceFailures += 1
+      if (this.inferenceFailures === 1 || this.inferenceFailures % 30 === 0) console.error('[LocalPoseEngine] Inference failed', { mode, count: this.inferenceFailures, elapsed_ms: performance.now() - startedAt, error })
+      return { type: 'no_pose', timestamp: ts, mode, reason: 'inference_error', message: 'Inference failed' }
     }
+    if (this.inferenceFailures) console.info('[LocalPoseEngine] Inference recovered', { failures: this.inferenceFailures })
+    this.inferenceFailures = 0
 
     const lms = result.landmarks?.[0]
     if (!lms || lms.length < 25) {
       this.smoother.reset()
-      return { type: 'no_pose', timestamp: ts, message: 'No pose detected' }
+      return { type: 'no_pose', timestamp: ts, mode, reason: 'no_person', message: 'No pose detected' }
     }
 
-    // 可见性检查：关键点任一低于阈值即视为未检测到（与后端一致）
-    const vis = CHECK_LANDMARKS.map((i) => lms[i]?.visibility ?? 0)
-    const minVis = Math.min(...vis)
-    if (minVis < MIN_VISIBILITY) {
-      this.smoother.reset()
-      return { type: 'no_pose', timestamp: ts, message: 'No pose detected' }
-    }
-
-    // 归一化坐标 -> 像素坐标（640x480，与后端输出的 landmarks 口径一致）
-    const W = 640
-    const H = 480
-    const pt = (lm: LM) => ({ x: pyRound(lm.x * W * 10) / 10, y: pyRound(lm.y * H * 10) / 10 })
-
+    // 逐指标检查：髋部不可测时仍展示头肩，但不给完整坐姿分。
+    const W = video.videoWidth
+    const H = video.videoHeight
+    const measured = measurePose(lms, W, H)
+    const pt = (lm: { x: number; y: number }) => ({ x: pyRound(lm.x * W * 10) / 10, y: pyRound(lm.y * H * 10) / 10 })
     const landmarks: Landmarks = {
-      nose: pt(lms[NOSE]),
-      left_ear: pt(lms[LEFT_EAR]),
-      right_ear: pt(lms[RIGHT_EAR]),
-      left_shoulder: pt(lms[LEFT_SHOULDER]),
-      right_shoulder: pt(lms[RIGHT_SHOULDER]),
+      nose: pt(lms[NOSE]), left_ear: pt(lms[LEFT_EAR]), right_ear: pt(lms[RIGHT_EAR]),
+      left_shoulder: pt(lms[LEFT_SHOULDER]), right_shoulder: pt(lms[RIGHT_SHOULDER]),
     }
-
-    const raw = {
-      head_angle: pyRound(headTiltAngle(lms[LEFT_EAR], lms[RIGHT_EAR]) * 100) / 100,
-      shoulder_diff: pyRound(shoulderRatio(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) * 100) / 100,
-      spine_angle: pyRound(spineAngle(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER], lms[LEFT_HIP], lms[RIGHT_HIP]) * 100) / 100,
-    }
+    const raw = measured.metrics as Record<string, number>
+    const minVis = Math.min(...Object.values(measured.quality).filter(q => q.valid).map(q => q.confidence), 1)
 
     // 切换模式时清空平滑状态：EMA 是跨帧的，不清空就会拿「运动中」的平滑值
     // 去评「静息态」（或反过来），表现为活动结束后约 1 秒内的虚假报警。
@@ -274,22 +214,44 @@ export class LocalPoseEngine {
       this.lastMode = mode
     }
 
-    const smoothed = this.smoother.update(raw) as { head_angle: number; shoulder_diff: number; spine_angle: number }
-    const scored = computeScore(smoothed.head_angle, smoothed.shoulder_diff, smoothed.spine_angle, mode)
+    const smoothed = this.smoother.update(raw, timestampMs) as { head_angle: number; shoulder_diff: number; spine_angle: number }
+    const scored = measured.complete ? computeScore(smoothed.head_angle, smoothed.shoulder_diff, smoothed.spine_angle, mode) : smoothed
+    const type = measured.complete ? 'pose' : Object.keys(raw).length ? 'partial_pose' : 'no_pose'
+    if (type === 'no_pose') this.smoother.reset()
 
     return {
-      type: 'pose',
+      type,
       timestamp: ts,
+      mode,
+      metric_version: METRIC_VERSION,
+      quality: measured.quality,
+      frame_width: W,
+      frame_height: H,
+      reason: type === 'no_pose' ? 'invalid_measurement' : undefined,
       ...scored,
       visibility: pyRound(minVis * 1000) / 1000,
       landmarks,
     }
   }
 
+  /** 复用模型，清空属于摄像头会话的状态。 */
+  invalidateResult() {
+    // 超时保留帧去重记录，不能把冻结画面再次推理成“新鲜”结果。
+    this.smoother.reset()
+    this.lastMode = null
+  }
+
+  resetSession() {
+    this.lastVideoTime = -1
+    this.inferenceFailures = 0
+    this.invalidateResult()
+  }
+
   close() {
+    this.modelGeneration += 1
     this.landmarker?.close()
     this.landmarker = null
-    this.smoother.reset()
+    this.resetSession()
   }
 }
 

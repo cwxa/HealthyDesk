@@ -34,7 +34,7 @@ import type { DayAggregate } from './dailyAgg'
 import { dayKeyFromTs } from './localDay'
 
 const DB_NAME = 'neckguardian'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 /** 供数据管理层在导出包里记录 schema 版本（与桌面端 `migrations.LATEST_VERSION` 对应）。 */
 export { DB_VERSION }
@@ -46,6 +46,7 @@ export interface PostureRecord {
   shoulder_diff: number
   spine_angle: number
   score: number
+  metric_version?: number
 }
 
 export interface UsageRecord {
@@ -76,6 +77,7 @@ export interface ActivityLogRecord {
 export interface DailyRow extends DayAggregate {
   date: string
   updated_at: string
+  metric_version?: number
 }
 
 type StoreName = 'settings' | 'posture_score' | 'usage_record' | 'activity_log' | 'posture_daily'
@@ -106,7 +108,15 @@ function openDb(): Promise<IDBDatabase> {
       }
       // ---- v2 新增：每日归档（与桌面端 SQLite 的 posture_daily 同构）----
       if (!db.objectStoreNames.contains('posture_daily')) {
-        db.createObjectStore('posture_daily', { keyPath: 'date' })
+        db.createObjectStore('posture_daily', { keyPath: ['date', 'metric_version'] })
+      } else if (req.transaction?.objectStore('posture_daily').keyPath === 'date') {
+        // 版本升级事务原子复制；原归档保留为 v1，不能伪造重算历史指标。
+        const old = req.transaction.objectStore('posture_daily').getAll()
+        old.onsuccess = () => {
+          db.deleteObjectStore('posture_daily')
+          const store = db.createObjectStore('posture_daily', { keyPath: ['date', 'metric_version'] })
+          for (const row of old.result) store.put({ ...row, metric_version: row.metric_version ?? 1 })
+        }
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -172,6 +182,7 @@ export async function setLocalSetting(key: string, value: string): Promise<void>
 // ---------------- posture_score ----------------
 
 export async function addPostureRecord(rec: Omit<PostureRecord, 'id'>): Promise<void> {
+  if (![rec.head_angle, rec.shoulder_diff, rec.spine_angle, rec.score].every(Number.isFinite)) throw new Error('Invalid posture metrics')
   await tx('posture_score', 'readwrite', (s) => s.add(rec))
 }
 
@@ -217,12 +228,14 @@ export function readPostureDayCounts(): Promise<Record<string, number>> {
         const t = db.transaction('posture_score', 'readonly')
         const idx = t.objectStore('posture_score').index('timestamp')
         const counts: Record<string, number> = {}
-        const req = idx.openKeyCursor()
+        // 逐条读取版本但不堆积整天样本；同一天的 v1/v2 必须分组。
+        const req = idx.openCursor()
         req.onsuccess = () => {
           const cur = req.result
           if (!cur) return
           const day = dayKeyFromTs(String(cur.key))
-          counts[day] = (counts[day] ?? 0) + 1
+          const key = `${day}|${cur.value.metric_version ?? 1}`
+          counts[key] = (counts[key] ?? 0) + 1
           cur.continue()
         }
         req.onerror = () => reject(req.error)
@@ -257,13 +270,13 @@ export function deletePostureBefore(startIso: string): Promise<number> {
 // ---------------- posture_daily（每日归档） ----------------
 
 export async function putDailyRow(row: DailyRow): Promise<void> {
-  await tx('posture_daily', 'readwrite', (s) => s.put(row))
+  await tx('posture_daily', 'readwrite', (s) => s.put({ ...row, metric_version: row.metric_version ?? 1 }))
 }
 
 /** 读取 `date >= sinceDay` 的归档行（按日期升序）。归档表很小，可以全量取。 */
-export async function getDailyRows(sinceDay?: string): Promise<DailyRow[]> {
+export async function getDailyRows(sinceDay?: string, metricVersion: number | null = 2): Promise<DailyRow[]> {
   const all = await getAll<DailyRow>('posture_daily')
-  const rows = sinceDay ? all.filter((r) => r.date >= sinceDay) : all
+  const rows = all.filter(r => (!sinceDay || r.date >= sinceDay) && (metricVersion === null || (r.metric_version ?? 1) === metricVersion))
   return rows.sort((a, b) => (a.date < b.date ? -1 : 1))
 }
 
@@ -290,7 +303,7 @@ export function replaceStoreRows(
         const t = db.transaction(store, 'readwrite')
         const os = t.objectStore(store)
         os.clear()
-        for (const r of rows) os.add(r)
+        for (const r of rows) os.add(store === 'posture_daily' ? { ...r, metric_version: r.metric_version ?? 1 } : r)
         t.oncomplete = () => resolve(rows.length)
         t.onerror = () => reject(t.error)
         t.onabort = () => reject(t.error)

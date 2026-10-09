@@ -61,10 +61,10 @@ async def rollup_daily(db) -> int:
     幂等：重复调用结果相同（同一天的重算结果一致）。
     """
     cursor = await db.execute(
-        "SELECT p.day AS day, p.n AS n, COALESCE(d.sample_count, -1) AS stored "
-        "FROM (SELECT date(timestamp, 'localtime') AS day, COUNT(*) AS n "
-        "      FROM posture_score GROUP BY day) p "
-        "LEFT JOIN posture_daily d ON d.date = p.day"
+        "SELECT p.day AS day, p.metric_version AS metric_version, p.n AS n, COALESCE(d.sample_count, -1) AS stored "
+        "FROM (SELECT date(timestamp, 'localtime') AS day, metric_version, COUNT(*) AS n "
+        "      FROM posture_score GROUP BY day, metric_version) p "
+        "LEFT JOIN posture_daily d ON d.date = p.day AND d.metric_version = p.metric_version"
     )
     pending = [r for r in await cursor.fetchall() if r["day"] is not None and r["n"] != r["stored"]]
 
@@ -75,15 +75,15 @@ async def rollup_daily(db) -> int:
         start_iso, end_iso = local_day_bounds_utc(day)
         rows = await db.execute(
             "SELECT head_angle, shoulder_diff, spine_angle, score FROM posture_score "
-            "WHERE timestamp >= ? AND timestamp < ?",
-            (start_iso, end_iso),
+            "WHERE timestamp >= ? AND timestamp < ? AND metric_version = ?",
+            (start_iso, end_iso, row["metric_version"]),
         )
         agg = aggregate_day(await rows.fetchall())
         await db.execute(
             "INSERT INTO posture_daily (date, sample_count, score_sum, min_score,"
-            " head_bad_count, shoulder_bad_count, spine_bad_count, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(date) DO UPDATE SET"
+            " head_bad_count, shoulder_bad_count, spine_bad_count, updated_at, metric_version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(date, metric_version) DO UPDATE SET"
             " sample_count=excluded.sample_count, score_sum=excluded.score_sum,"
             " min_score=excluded.min_score, head_bad_count=excluded.head_bad_count,"
             " shoulder_bad_count=excluded.shoulder_bad_count, spine_bad_count=excluded.spine_bad_count,"
@@ -97,6 +97,7 @@ async def rollup_daily(db) -> int:
                 agg["shoulder_bad_count"],
                 agg["spine_bad_count"],
                 stamp,
+                row["metric_version"],
             ),
         )
         updated += 1

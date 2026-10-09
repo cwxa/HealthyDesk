@@ -220,6 +220,39 @@ async def _add_action_scores_column(db: aiosqlite.Connection) -> None:
         logger.info("迁移 5：activity_log 新增列 %s", ACTION_SCORES_COLUMN)
 
 
+async def _add_metric_versions(db: aiosqlite.Connection) -> None:
+    """迁移 6：保留旧记录，同一天的新旧指标使用不同归档主键。"""
+    await db.execute("SAVEPOINT metric_versions")
+    try:
+        cursor = await db.execute("PRAGMA table_info(posture_score)")
+        names = {r["name"] if hasattr(r, "keys") else r[1] for r in await cursor.fetchall()}
+        if "metric_version" not in names:
+            await db.execute("ALTER TABLE posture_score ADD COLUMN metric_version INTEGER NOT NULL DEFAULT 1")
+        cursor = await db.execute("PRAGMA table_info(posture_daily)")
+        names = {r["name"] if hasattr(r, "keys") else r[1] for r in await cursor.fetchall()}
+        if "metric_version" not in names:
+            # DDL 与复制处于同一事务，中断回滚后重跑不会丢失已归档的旧数据。
+            await db.execute("ALTER TABLE posture_daily RENAME TO posture_daily_legacy")
+            await db.execute("""CREATE TABLE posture_daily (
+                date TEXT NOT NULL, metric_version INTEGER NOT NULL DEFAULT 1,
+                sample_count INTEGER NOT NULL, score_sum REAL NOT NULL, min_score INTEGER NOT NULL,
+                head_bad_count INTEGER NOT NULL DEFAULT 0, shoulder_bad_count INTEGER NOT NULL DEFAULT 0,
+                spine_bad_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+                PRIMARY KEY(date, metric_version))""")
+            await db.execute("""INSERT INTO posture_daily
+                (date, metric_version, sample_count, score_sum, min_score, head_bad_count, shoulder_bad_count, spine_bad_count, updated_at)
+                SELECT date, 1, sample_count, score_sum, min_score, head_bad_count, shoulder_bad_count, spine_bad_count, updated_at FROM posture_daily_legacy""")
+            await db.execute("DROP TABLE posture_daily_legacy")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_posture_metric_ts ON posture_score(metric_version, timestamp)")
+        await db.execute("RELEASE SAVEPOINT metric_versions")
+    except Exception:
+        await db.execute("ROLLBACK TO SAVEPOINT metric_versions")
+        await db.execute("RELEASE SAVEPOINT metric_versions")
+        raise
+    await db.commit()
+    logger.info("Metric version migration completed")
+
+
 # (版本号, SQL 或可调用迁移)。顺序即执行顺序；编号必须连续递增。
 MIGRATIONS: list[tuple[int, MigrationScript]] = [
     (1, BASELINE_SQL),
@@ -227,6 +260,7 @@ MIGRATIONS: list[tuple[int, MigrationScript]] = [
     (3, RETENTION_SETTING_SQL),
     (4, TIMESTAMP_UTC_SQL),
     (5, _add_action_scores_column),
+    (6, _add_metric_versions),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

@@ -134,9 +134,9 @@ export const HINT_COMPLETED = '很好，保持住'
 export interface ExerciseFrame {
   /** 毫秒时间戳，只用于求区间长度，原点无所谓。序列必须按它升序。 */
   t: number
-  head_angle: number
-  shoulder_diff: number
-  spine_angle: number
+  head_angle?: number
+  shoulder_diff?: number
+  spine_angle?: number
 }
 
 export interface ExerciseSpec {
@@ -241,7 +241,7 @@ function amplitudesOf(frames: ExerciseFrame[], metric: ExerciseMetric): number[]
     const thr = METRIC_THRESHOLD[m]
     // 🔴 先削掉「没被时间支撑」的孤立段，再取最低位当基线 —— 顺序不能反：
     // 反了的话那么一帧抖动照样能偷走 base（旧缺陷）。
-    const vals = supportFiltered(frames.map((f) => f[field]), ts, thr)
+    const vals = supportFiltered(frames.map((f) => f[field]!), ts, thr)
     let base = Infinity
     for (const v of vals) if (v < base) base = v
     // `- base` 之后必然 ≥ 0（base 就是最小值），所以不必再 max(0, …)
@@ -271,6 +271,11 @@ export function judgeExercise(frames: ExerciseFrame[], spec?: Partial<ExerciseSp
         // 一个"看错部位"的结论。与 kind 的非法值回落保持类同一思路。
         METRIC_ANY
   const durationMs = spec?.duration_ms != null ? Number(spec.duration_ms) : 0
+  // 防止缺失/非有限数进入 min/max 后产生 NaN，并被比较分支误判为完成。
+  const required = metric === METRIC_ANY ? Object.values(METRIC_FIELD) : [METRIC_FIELD[metric]]
+  if (frames.some(f => !Number.isFinite(f.t) || required.some(k => !Number.isFinite(f[k])))) {
+    return { grade: GRADE_IDLE, hint: HINT_IDLE, peak_activity: 0, held_ms: 0, hold_ratio: 0, cycles: 0 }
+  }
   const minCycles = spec?.min_cycles != null ? spec.min_cycles : kind === KIND_CYCLIC ? DEFAULT_MIN_CYCLES : 0
 
   if (frames.length === 0) {

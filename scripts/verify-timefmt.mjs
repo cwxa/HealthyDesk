@@ -119,6 +119,7 @@ async function findPython() {
 function backendSources() {
   const files = {
     camera: 'backend/ws/camera_ws.py',
+    session: 'backend/services/pose_session.py',
     retention: 'backend/services/retention.py',
     data: 'backend/api/data.py',
     migrations: 'backend/db/migrations.py',
@@ -309,8 +310,8 @@ async function main() {
   if (/datetime\.now\(\)\s*\.\s*isoformat\s*\(/.test(src.camera.code)) {
     fail(`${src.camera.rel} 仍在用 datetime.now().isoformat()（本地时间、无时区标记）—— 这正是本次修复的根因`)
   }
-  if (!/now_iso_ms\s*\(/.test(src.camera.code)) {
-    fail(`${src.camera.rel} 未使用 services.timefmt.now_iso_ms()，帧时间戳的格式不再受契约约束`)
+  if (!/session\.process\s*\(/.test(src.camera.code) || !/now_iso_ms\s*\(/.test(src.session.code)) {
+    fail(`Camera session chain must use services.timefmt.now_iso_ms() for result timestamps`)
   }
   // 「自己拼时间戳格式」的特征：直接 strftime 出 `%Y-%m-%dT...`
   const OWN_IMPL_RE = /strftime\s*\(\s*['"]%Y-%m-%dT/
@@ -318,7 +319,7 @@ async function main() {
   // `strftime('%Y-%m-%dT%H:%M:%fZ', timestamp, 'utc')` —— 那是把**存量数据**从旧格式
   // 搬运成新格式的 SQL 表达式，逐行转换在 Python 里做不了。它不产生「当前时刻」，
   // 只搬运旧值，所以不受「单点定义」约束；其行为正确性由上面 D 段实测保证。
-  for (const key of ['retention', 'data', 'camera']) {
+  for (const key of ['retention', 'data', 'camera', 'session']) {
     if (OWN_IMPL_RE.test(src[key].code)) {
       fail(`${src[key].rel} 自己拼了时间戳格式 —— 必须复用 services/timefmt.py（单点定义）`)
     }

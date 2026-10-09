@@ -78,6 +78,7 @@ export default function Dashboard() {
         <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon={TrendingUpIcon} delay={0} />
         <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon={ActivityIcon} delay={0.04} />
         <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon={BarChart2Icon} delay={0.08} />
+        <p style={{ fontSize: 12, color: '#888', gridColumn: '1 / -1' }}>姿态统计采用更新后的测量口径，历史旧口径数据保留在导出记录中。</p>
         <StatCard label="活动完成率" value={weekly?.completion_rate} unit="%" color="#9C27B0" icon={CheckIcon} delay={0.12} />
       </div>
 
@@ -110,11 +111,11 @@ export default function Dashboard() {
           <div style={{ flex: 1 }}>
             <p style={{ fontSize: 14, fontWeight: 600, color: '#333', marginBottom: 10 }}>健康指数</p>
             {/* 三个值均来自 posture_score 的分项字段真实聚合（后端 part_health.py /
-                移动端 partHealth.ts），此前头部写死 85、肩部凭空 +5、脊柱直接用总分。
+                移动端 partHealth.ts），此前头部写死 85、肩部凭空 +5、躯干直接用总分。
                 无采样时为 null → 显示「暂无数据」，而不是被误读成「健康度 0」。 */}
             <HealthBar label="头部" value={summary?.part_health?.head} color="#4CAF50" />
             <HealthBar label="肩部" value={summary?.part_health?.shoulder} color="#2196F3" />
-            <HealthBar label="脊柱" value={summary?.part_health?.spine} color="#FF9800" />
+            <HealthBar label="躯干" value={summary?.part_health?.spine} color="#FF9800" />
           </div>
         </motion.div>
 

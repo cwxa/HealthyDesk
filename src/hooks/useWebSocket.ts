@@ -23,6 +23,17 @@ export function useWebSocket() {
   const fatalErrorRef = useRef(false)
   const reconnectTimerRef = useRef<number>(0)
   const retryCountRef = useRef(0)
+  const sessionRef = useRef('')
+  const frameIdRef = useRef(0)
+  const inFlightRef = useRef<{ id: number; mode: ScoreMode } | null>(null)
+  const ackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearInFlight = useCallback(() => {
+    if (ackTimerRef.current) clearTimeout(ackTimerRef.current)
+    ackTimerRef.current = null
+    inFlightRef.current = null
+  }, [])
 
   const connect = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return
@@ -40,14 +51,24 @@ export function useWebSocket() {
       return
     }
     wsRef.current = ws
+    sessionRef.current = crypto.randomUUID()
+    clearInFlight()
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return
       retryCountRef.current = 0
-      setConnected(true)
+      // TCP 已连接不等于模型就绪，避免冷启动时提前发帧触发 ACK 超时。
+      setConnected(false)
     }
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return
+      clearInFlight()
+      if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
       setConnected(false)
+      setPoseResult(null)
+      onPoseRef.current?.({ type: 'no_pose', timestamp: new Date().toISOString(), reason: 'connection_lost', message: 'Camera connection closed' })
       if (wsRef.current === ws) wsRef.current = null
       // 后端已明确报致命错误（如 MediaPipe 初始化失败）时不再重连：
       // 重连也无法恢复，只会让界面无限闪「正在连接后端...」。
@@ -56,17 +77,29 @@ export function useWebSocket() {
     }
 
     ws.onerror = () => {
+      if (wsRef.current !== ws) return
       // onerror 后通常紧跟 onclose，重连逻辑统一放在 onclose 处理
       setConnected(false)
     }
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'pose' || data.type === 'no_pose') {
+        if (data.type === 'pose' || data.type === 'partial_pose' || data.type === 'no_pose') {
+          const pending = inFlightRef.current
+          if (!pending || data.session_id !== sessionRef.current || data.frame_id !== pending.id) return
+          clearInFlight()
           setPoseResult(data as PoseResult)
           onPoseRef.current?.(data as PoseResult)
+          if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
+          resultTimerRef.current = setTimeout(() => {
+            const expired: PoseResult = { type: 'no_pose', timestamp: new Date().toISOString(), mode: data.mode, reason: 'expired', message: 'Pose result expired' }
+            setPoseResult(expired)
+            onPoseRef.current?.(expired)
+          }, 1500)
         } else if (data.type === 'error') {
+          clearInFlight()
           // 后端侧致命错误：标记并停止重连，向 UI 暴露原因
           fatalErrorRef.current = true
           setBackendError(data.message || '后端处理出错')
@@ -75,6 +108,7 @@ export function useWebSocket() {
           // 模型就绪，清除历史错误
           fatalErrorRef.current = false
           setBackendError(null)
+          setConnected(true)
         }
       } catch {
         // ignore parse errors
@@ -82,7 +116,7 @@ export function useWebSocket() {
     }
     // scheduleReconnect 在下方以 function 声明，依赖通过 ref 读取，故此处安全
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [clearInFlight])
 
   // 指数退避重连：后端崩溃重启或短暂断连后可自愈，无需重启整个应用
   function scheduleReconnect() {
@@ -100,6 +134,8 @@ export function useWebSocket() {
   }
 
   const disconnect = useCallback(() => {
+    clearInFlight()
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
     manualCloseRef.current = true
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
@@ -112,7 +148,9 @@ export function useWebSocket() {
       ws.close()
     }
     setConnected(false)
-  }, [])
+    setPoseResult(null)
+    onPoseRef.current?.({ type: 'no_pose', timestamp: new Date().toISOString(), reason: 'expired', message: 'Camera session stopped' })
+  }, [clearInFlight])
 
   /**
    * 发送一帧。
@@ -122,10 +160,29 @@ export function useWebSocket() {
    * —— 那会让做对动作的用户被判「头部严重侧倾」。
    */
   const sendFrame = useCallback((base64Data: string, mode: ScoreMode = MODE_MONITOR) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'frame', data: base64Data, mode }))
+    if (wsRef.current?.readyState === WebSocket.OPEN && !inFlightRef.current && wsRef.current.bufferedAmount < 512_000) {
+      const id = ++frameIdRef.current
+      inFlightRef.current = { id, mode }
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'frame', data: base64Data, mode, session_id: sessionRef.current, frame_id: id, captured_at: Date.now() }))
+      } catch (error) {
+        // 连接关闭竞态不能留下永久在途帧，错误结果同样使页面旧分数失效。
+        clearInFlight()
+        console.error('[PoseSocket] Frame send failed', { frame_id: id, mode, error })
+        setPoseResult(null)
+        onPoseRef.current?.({ type: 'no_pose', timestamp: new Date().toISOString(), mode, reason: 'inference_error', message: 'Frame send failed' })
+        wsRef.current?.close()
+        return
+      }
+      ackTimerRef.current = setTimeout(() => {
+        console.warn('[PoseSocket] Frame acknowledgement timed out', { frame_id: id, mode })
+        clearInFlight()
+        setPoseResult(null)
+        onPoseRef.current?.({ type: 'no_pose', timestamp: new Date().toISOString(), mode, reason: 'expired', message: 'Pose result expired' })
+        wsRef.current?.close()
+      }, 1500)
     }
-  }, [])
+  }, [clearInFlight])
 
   const onPoseResult = useCallback((cb: (result: PoseResult) => void) => {
     onPoseRef.current = cb
@@ -141,6 +198,8 @@ export function useWebSocket() {
     return () => {
       // 卸载：彻底清理连接、定时器与回调引用，避免内存泄漏
       manualCloseRef.current = true
+      clearInFlight()
+      if (resultTimerRef.current) clearTimeout(resultTimerRef.current)
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = 0
@@ -153,7 +212,7 @@ export function useWebSocket() {
       }
       onPoseRef.current = null
     }
-  }, [])
+  }, [clearInFlight])
 
   return {
     connect,

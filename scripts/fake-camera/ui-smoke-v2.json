@@ -1,0 +1,828 @@
+{
+  "ui_smoke": {
+    "why": "v2 修正像素比例并按时间平滑。起势保留 3 帧，使真实浏览器有机会采到中立位；随后使用合成旋转强信号。此案例验证链路与评分一致性，不代表真人姿势准确率。",
+    "sequence": "01-upright x3 06-head-tilt-v2 x57",
+    "frame_interval_ms": 200,
+    "frame_count": 60,
+    "lead_in_frames": 3,
+    "feed_ms": 10000,
+    "click_slack_ms": 600,
+    "action_duration_ms": 12000,
+    "rate_floor": 1.5,
+    "rate_floor_browser": 2.0,
+    "rate_floor_browser_why": "浏览器里读数的**可信下界**（= `verify:ui` 的「环境够不够」门）。与 `rate_floor`（离线扫描最低档）分开登记，是因为实测分叉：同一份帧表在浏览器里2.7–4.5 帧/秒稳定判成 completed，而 1.5–1.6 帧/秒那一档**结论不可信** —— CI `36676223799` 同一次 run 里两个平台都跑 1.5 帧/秒，一个判 completed score=84、另一个判 insufficient score=76（跨在 80 分达标线上摇摆）；`36660895335` 的 1.5/1.6 也判成 insufficient。根因是离线扫描只重打时间戳、建模不出 `static_image_mode=False` 的逐帧跟踪在长间隔下要重新收敛。语义：**低帧率只决定「这一轮该不该采信」，不单独当失败理由** —— 帧率低于它但结论仍与期望一致照样通过（只记一条 ⚠，并注明那一档不可信）；低于它**且**判不出 expected 才重试一次，两轮都不采信 ⇒ **记「本次未验证」**（打 ⚠ + 发 `::warning::`，**不判红**；2026-09-30 拍板）——而**采信轮里结论与 fixture 不一致照旧判红**。低于 `rate_floor` 则连离线模型都没证过那一档，结论对得上也不采信。",
+    "rate_sweep": {
+      "1.5": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 4.1,
+        "held_ms": 8666.666666666668,
+        "hold_ratio": 0.7,
+        "cycles": 0
+      },
+      "2.0": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 4.1,
+        "held_ms": 8500.0,
+        "hold_ratio": 0.7,
+        "cycles": 0
+      },
+      "3.0": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 4.0,
+        "held_ms": 9000.0,
+        "hold_ratio": 0.8,
+        "cycles": 0
+      },
+      "5.0": {
+        "grade": "completed",
+        "hint": "很好，保持住",
+        "peak_activity": 4.1,
+        "held_ms": 9000.0,
+        "hold_ratio": 0.8,
+        "cycles": 0
+      }
+    },
+    "margins": {
+      "amplitude": 3.0,
+      "hold": 0.09999999999999998
+    },
+    "frames": [
+      "01-upright.jpg",
+      "01-upright.jpg",
+      "01-upright.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg",
+      "06-head-tilt-v2.jpg"
+    ],
+    "metric_version": 2,
+    "readings": [
+      {
+        "t": 0,
+        "head_angle": 2.27
+      },
+      {
+        "t": 200,
+        "head_angle": 2.13
+      },
+      {
+        "t": 400,
+        "head_angle": 1.95
+      },
+      {
+        "t": 600,
+        "head_angle": 5.41
+      },
+      {
+        "t": 800,
+        "head_angle": 9.36
+      },
+      {
+        "t": 1000,
+        "head_angle": 12.93
+      },
+      {
+        "t": 1200,
+        "head_angle": 15.6
+      },
+      {
+        "t": 1400,
+        "head_angle": 17.44
+      },
+      {
+        "t": 1600,
+        "head_angle": 18.95
+      },
+      {
+        "t": 1800,
+        "head_angle": 20.09
+      },
+      {
+        "t": 2000,
+        "head_angle": 20.95
+      },
+      {
+        "t": 2200,
+        "head_angle": 21.46
+      },
+      {
+        "t": 2400,
+        "head_angle": 21.77
+      },
+      {
+        "t": 2600,
+        "head_angle": 21.97
+      },
+      {
+        "t": 2800,
+        "head_angle": 22.08
+      },
+      {
+        "t": 3000,
+        "head_angle": 22.13
+      },
+      {
+        "t": 3200,
+        "head_angle": 22.15
+      },
+      {
+        "t": 3400,
+        "head_angle": 22.17
+      },
+      {
+        "t": 3600,
+        "head_angle": 22.19
+      },
+      {
+        "t": 3800,
+        "head_angle": 22.2
+      },
+      {
+        "t": 4000,
+        "head_angle": 22.21
+      },
+      {
+        "t": 4200,
+        "head_angle": 22.21
+      },
+      {
+        "t": 4400,
+        "head_angle": 22.21
+      },
+      {
+        "t": 4600,
+        "head_angle": 22.21
+      },
+      {
+        "t": 4800,
+        "head_angle": 22.21
+      },
+      {
+        "t": 5000,
+        "head_angle": 22.22
+      },
+      {
+        "t": 5200,
+        "head_angle": 22.23
+      },
+      {
+        "t": 5400,
+        "head_angle": 22.24
+      },
+      {
+        "t": 5600,
+        "head_angle": 22.25
+      },
+      {
+        "t": 5800,
+        "head_angle": 22.26
+      },
+      {
+        "t": 6000,
+        "head_angle": 22.26
+      },
+      {
+        "t": 6200,
+        "head_angle": 22.26
+      },
+      {
+        "t": 6400,
+        "head_angle": 22.26
+      },
+      {
+        "t": 6600,
+        "head_angle": 22.26
+      },
+      {
+        "t": 6800,
+        "head_angle": 22.26
+      },
+      {
+        "t": 7000,
+        "head_angle": 22.26
+      },
+      {
+        "t": 7200,
+        "head_angle": 22.26
+      },
+      {
+        "t": 7400,
+        "head_angle": 22.26
+      },
+      {
+        "t": 7600,
+        "head_angle": 22.25
+      },
+      {
+        "t": 7800,
+        "head_angle": 22.25
+      },
+      {
+        "t": 8000,
+        "head_angle": 22.24
+      },
+      {
+        "t": 8200,
+        "head_angle": 22.24
+      },
+      {
+        "t": 8400,
+        "head_angle": 22.23
+      },
+      {
+        "t": 8600,
+        "head_angle": 22.22
+      },
+      {
+        "t": 8800,
+        "head_angle": 22.22
+      },
+      {
+        "t": 9000,
+        "head_angle": 22.21
+      },
+      {
+        "t": 9200,
+        "head_angle": 22.2
+      },
+      {
+        "t": 9400,
+        "head_angle": 22.19
+      },
+      {
+        "t": 9600,
+        "head_angle": 22.18
+      },
+      {
+        "t": 9800,
+        "head_angle": 22.17
+      },
+      {
+        "t": 10000,
+        "head_angle": 22.16
+      },
+      {
+        "t": 10200,
+        "head_angle": 22.15
+      },
+      {
+        "t": 10400,
+        "head_angle": 22.14
+      },
+      {
+        "t": 10600,
+        "head_angle": 22.13
+      },
+      {
+        "t": 10800,
+        "head_angle": 22.12
+      },
+      {
+        "t": 11000,
+        "head_angle": 22.11
+      },
+      {
+        "t": 11200,
+        "head_angle": 22.09
+      },
+      {
+        "t": 11400,
+        "head_angle": 22.07
+      },
+      {
+        "t": 11600,
+        "head_angle": 22.05
+      },
+      {
+        "t": 11800,
+        "head_angle": 22.04
+      }
+    ],
+    "rate_readings": {
+      "1.5": [
+        {
+          "t": 0.0,
+          "head_angle": 2.27
+        },
+        {
+          "t": 666.6666666666666,
+          "head_angle": 9.5
+        },
+        {
+          "t": 1333.3333333333333,
+          "head_angle": 15.08
+        },
+        {
+          "t": 2000.0,
+          "head_angle": 18.62
+        },
+        {
+          "t": 2666.6666666666665,
+          "head_angle": 20.22
+        },
+        {
+          "t": 3333.3333333333335,
+          "head_angle": 21.0
+        },
+        {
+          "t": 4000.0,
+          "head_angle": 21.8
+        },
+        {
+          "t": 4666.666666666667,
+          "head_angle": 22.46
+        },
+        {
+          "t": 5333.333333333333,
+          "head_angle": 22.75
+        },
+        {
+          "t": 6000.0,
+          "head_angle": 22.67
+        },
+        {
+          "t": 6666.666666666667,
+          "head_angle": 22.62
+        },
+        {
+          "t": 7333.333333333333,
+          "head_angle": 22.57
+        },
+        {
+          "t": 8000.0,
+          "head_angle": 22.49
+        },
+        {
+          "t": 8666.666666666666,
+          "head_angle": 22.41
+        },
+        {
+          "t": 9333.333333333334,
+          "head_angle": 22.38
+        }
+      ],
+      "2.0": [
+        {
+          "t": 0.0,
+          "head_angle": 2.27
+        },
+        {
+          "t": 500.0,
+          "head_angle": 2.01
+        },
+        {
+          "t": 1000.0,
+          "head_angle": 8.52
+        },
+        {
+          "t": 1500.0,
+          "head_angle": 14.01
+        },
+        {
+          "t": 2000.0,
+          "head_angle": 17.74
+        },
+        {
+          "t": 2500.0,
+          "head_angle": 19.67
+        },
+        {
+          "t": 3000.0,
+          "head_angle": 20.47
+        },
+        {
+          "t": 3500.0,
+          "head_angle": 21.15
+        },
+        {
+          "t": 4000.0,
+          "head_angle": 21.73
+        },
+        {
+          "t": 4500.0,
+          "head_angle": 22.11
+        },
+        {
+          "t": 5000.0,
+          "head_angle": 22.29
+        },
+        {
+          "t": 5500.0,
+          "head_angle": 22.24
+        },
+        {
+          "t": 6000.0,
+          "head_angle": 22.24
+        },
+        {
+          "t": 6500.0,
+          "head_angle": 22.23
+        },
+        {
+          "t": 7000.0,
+          "head_angle": 22.2
+        },
+        {
+          "t": 7500.0,
+          "head_angle": 22.19
+        },
+        {
+          "t": 8000.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 8500.0,
+          "head_angle": 22.22
+        },
+        {
+          "t": 9000.0,
+          "head_angle": 22.23
+        },
+        {
+          "t": 9500.0,
+          "head_angle": 22.22
+        }
+      ],
+      "3.0": [
+        {
+          "t": 0.0,
+          "head_angle": 2.27
+        },
+        {
+          "t": 333.3333333333333,
+          "head_angle": 2.07
+        },
+        {
+          "t": 666.6666666666666,
+          "head_angle": 7.1
+        },
+        {
+          "t": 1000.0,
+          "head_angle": 12.09
+        },
+        {
+          "t": 1333.3333333333333,
+          "head_angle": 15.97
+        },
+        {
+          "t": 1666.6666666666667,
+          "head_angle": 18.37
+        },
+        {
+          "t": 2000.0,
+          "head_angle": 19.66
+        },
+        {
+          "t": 2333.3333333333335,
+          "head_angle": 20.6
+        },
+        {
+          "t": 2666.6666666666665,
+          "head_angle": 21.33
+        },
+        {
+          "t": 3000.0,
+          "head_angle": 21.83
+        },
+        {
+          "t": 3333.3333333333335,
+          "head_angle": 22.11
+        },
+        {
+          "t": 3666.6666666666665,
+          "head_angle": 22.17
+        },
+        {
+          "t": 4000.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 4333.333333333333,
+          "head_angle": 22.22
+        },
+        {
+          "t": 4666.666666666667,
+          "head_angle": 22.2
+        },
+        {
+          "t": 5000.0,
+          "head_angle": 22.19
+        },
+        {
+          "t": 5333.333333333333,
+          "head_angle": 22.21
+        },
+        {
+          "t": 5666.666666666667,
+          "head_angle": 22.22
+        },
+        {
+          "t": 6000.0,
+          "head_angle": 22.23
+        },
+        {
+          "t": 6333.333333333333,
+          "head_angle": 22.22
+        },
+        {
+          "t": 6666.666666666667,
+          "head_angle": 22.22
+        },
+        {
+          "t": 7000.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 7333.333333333333,
+          "head_angle": 22.22
+        },
+        {
+          "t": 7666.666666666667,
+          "head_angle": 22.23
+        },
+        {
+          "t": 8000.0,
+          "head_angle": 22.25
+        },
+        {
+          "t": 8333.333333333334,
+          "head_angle": 22.26
+        },
+        {
+          "t": 8666.666666666666,
+          "head_angle": 22.28
+        },
+        {
+          "t": 9000.0,
+          "head_angle": 22.29
+        },
+        {
+          "t": 9333.333333333334,
+          "head_angle": 22.3
+        },
+        {
+          "t": 9666.666666666666,
+          "head_angle": 22.3
+        }
+      ],
+      "5.0": [
+        {
+          "t": 0.0,
+          "head_angle": 2.27
+        },
+        {
+          "t": 200.0,
+          "head_angle": 2.13
+        },
+        {
+          "t": 400.0,
+          "head_angle": 1.95
+        },
+        {
+          "t": 600.0,
+          "head_angle": 5.41
+        },
+        {
+          "t": 800.0,
+          "head_angle": 9.36
+        },
+        {
+          "t": 1000.0,
+          "head_angle": 12.93
+        },
+        {
+          "t": 1200.0,
+          "head_angle": 15.6
+        },
+        {
+          "t": 1400.0,
+          "head_angle": 17.44
+        },
+        {
+          "t": 1600.0,
+          "head_angle": 18.95
+        },
+        {
+          "t": 1800.0,
+          "head_angle": 20.09
+        },
+        {
+          "t": 2000.0,
+          "head_angle": 20.95
+        },
+        {
+          "t": 2200.0,
+          "head_angle": 21.46
+        },
+        {
+          "t": 2400.0,
+          "head_angle": 21.77
+        },
+        {
+          "t": 2600.0,
+          "head_angle": 21.97
+        },
+        {
+          "t": 2800.0,
+          "head_angle": 22.08
+        },
+        {
+          "t": 3000.0,
+          "head_angle": 22.13
+        },
+        {
+          "t": 3200.0,
+          "head_angle": 22.15
+        },
+        {
+          "t": 3400.0,
+          "head_angle": 22.17
+        },
+        {
+          "t": 3600.0,
+          "head_angle": 22.19
+        },
+        {
+          "t": 3800.0,
+          "head_angle": 22.2
+        },
+        {
+          "t": 4000.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 4200.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 4400.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 4600.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 4800.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 5000.0,
+          "head_angle": 22.22
+        },
+        {
+          "t": 5200.0,
+          "head_angle": 22.23
+        },
+        {
+          "t": 5400.0,
+          "head_angle": 22.24
+        },
+        {
+          "t": 5600.0,
+          "head_angle": 22.25
+        },
+        {
+          "t": 5800.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 6000.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 6200.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 6400.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 6600.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 6800.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 7000.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 7200.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 7400.0,
+          "head_angle": 22.26
+        },
+        {
+          "t": 7600.0,
+          "head_angle": 22.25
+        },
+        {
+          "t": 7800.0,
+          "head_angle": 22.25
+        },
+        {
+          "t": 8000.0,
+          "head_angle": 22.24
+        },
+        {
+          "t": 8200.0,
+          "head_angle": 22.24
+        },
+        {
+          "t": 8400.0,
+          "head_angle": 22.23
+        },
+        {
+          "t": 8600.0,
+          "head_angle": 22.22
+        },
+        {
+          "t": 8800.0,
+          "head_angle": 22.22
+        },
+        {
+          "t": 9000.0,
+          "head_angle": 22.21
+        },
+        {
+          "t": 9200.0,
+          "head_angle": 22.2
+        },
+        {
+          "t": 9400.0,
+          "head_angle": 22.19
+        },
+        {
+          "t": 9600.0,
+          "head_angle": 22.18
+        },
+        {
+          "t": 9800.0,
+          "head_angle": 22.17
+        }
+      ]
+    }
+  }
+}

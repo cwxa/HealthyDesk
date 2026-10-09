@@ -129,7 +129,30 @@ const fileArg =
   '.github/workflows/build.yml'
 const target = path.isAbsolute(fileArg) ? fileArg : path.join(REPO_ROOT, fileArg)
 
-const SRC = fs.readFileSync(target, 'utf8')
+// 🔴 2026-10-08：workflow 拆成两个文件 —— build.yml（只打包）+ ci.yml（只守门）。
+//    本守卫必须**同时**读两份，并把每条断言落到**正确的那个文件**上：
+//      - 打包相关（1~10、14~17）→ BUILD
+//      - 守门相关（11、13）      → CI
+//      - 通用（12 timeout）      → 两份都要过
+//    `--file=` 仍指向 build.yml（`.buildenv/mutate-ci.py` 的变异池都打在这个文件上）；
+//    ci.yml 走 `--ci-file=`（默认相对路径），`--no-ci` 可只跑 build.yml 那半边
+//    （变异脚本对 ci.yml 的变异用 `--ci-file=<临时副本>`）。
+const ciFileArg = (args.find((a) => a.startsWith('--ci-file=')) || '').replace('--ci-file=', '')
+const NO_CI = args.includes('--no-ci')
+
+const BUILD_PATH = target
+const CI_PATH = path.isAbsolute(ciFileArg || '')
+  ? ciFileArg
+  : path.join(REPO_ROOT, ciFileArg || '.github/workflows/ci.yml')
+
+// 🔴 必须先规范化换行符：Windows 工作区（core.autocrlf）里这两个 .yml 是 **CRLF**，
+//    而 subBlock 用的是 `l === 'key:'` 这类**精确整行匹配** —— 行尾多一个 `\r` 就全查不到。
+//    （2026-10-08 实测：拆分后守卫在 Windows 上把 16 条断言读成全红，CI 的 Linux 上却是绿的
+//      —— 典型的"本机与 CI 不一致"，所以归一化必须落在**读取处**，而不是靠平台运气。）
+const SRC = fs.readFileSync(BUILD_PATH, 'utf8').replace(/\r\n/g, '\n')
+// ci.yml 缺席时留空串：断言 11/13 会以"找不到"的形式判红，而不是让脚本崩掉。
+const CI_SRC =
+  NO_CI || !fs.existsSync(CI_PATH) ? '' : fs.readFileSync(CI_PATH, 'utf8').replace(/\r\n/g, '\n')
 
 let passed = 0
 let failed = 0
@@ -191,34 +214,68 @@ function ifOf(body, indent = 4) {
   return out.join('\n')
 }
 
-const onBlock = subBlock(SRC, 'on', 0)
-// 去掉引号再比，免得被 'main' / "main" 的写法差异绊倒。
-const branches = (subBlock(onBlock || '', 'branches', 4) || '').replace(/['"]/g, '')
-const tags = (subBlock(onBlock || '', 'tags', 4) || '').replace(/['"]/g, '')
-const branchItems = branches
-  .split('\n')
-  .map((l) => l.trim())
-  .filter(Boolean)
+/**
+ * 取某个文件的 `on:` → `branches` / `tags` 列表。
+ * 返回值：{ onBlock, branches[], tags[] }（全部已去引号）。
+ */
+function parseTriggers(text) {
+  const onBlock = subBlock(text, 'on', 0)
+  const branches = subBlock(onBlock || '', 'branches', 4) || ''
+  const tags = subBlock(onBlock || '', 'tags', 4) || ''
+  const toItems = (s) =>
+    s
+      .split('\n')
+      .map((l) => l.trim().replace(/['"]/g, ''))
+      .filter(Boolean)
+  return { onBlock, branches: toItems(branches), tags: toItems(tags) }
+}
+
+const BUILD_TRIG = parseTriggers(SRC)
+const CI_TRIG = parseTriggers(CI_SRC)
 
 const PACKAGING_JOBS = ['desktop-windows', 'desktop-macos', 'mobile-android', 'mobile-ios']
 
-console.log(`CI 工作流守卫 · ${path.relative(REPO_ROOT, target).replace(/\\/g, '/')}`)
+console.log(`CI 工作流守卫 · ${path.relative(REPO_ROOT, BUILD_PATH).replace(/\\/g, '/')}`)
+if (CI_SRC) {
+  console.log(`              + ${path.relative(REPO_ROOT, CI_PATH).replace(/\\/g, '/')}（守门）`)
+} else if (NO_CI) {
+  console.log('              （--no-ci：只查 build.yml）')
+} else {
+  console.log(`              ⚠️ 找不到 ${path.relative(REPO_ROOT, CI_PATH)} —— 守门相关断言将判红`)
+}
 
 // ── 触发条件 ────────────────────────────────────────────────────────────────
-check(onBlock !== null, '1) 有 `on:` 块')
+// 🔴 拆分后：守门触发（main / feat / fix）看 **ci.yml**；出包触发（release/** / v*）
+//    看 **build.yml**。两边都别有 "on:" 块 —— 少了任一，那半边的触发链就静默失效。
+check(BUILD_TRIG.onBlock !== null, '1) build.yml 有 `on:` 块')
+check(CI_TRIG.onBlock !== null, '1) ci.yml 有 `on:` 块（守门文件必须在）')
 check(
-  branchItems.includes('- main'),
-  '1) 推 main 会触发（主干受守门）',
-  `实际：${branchItems.join(' | ')}`,
+  CI_TRIG.branches.includes('- main'),
+  '1) 推 main 会触发守门（主干受守门 · ci.yml）',
+  `实际：${CI_TRIG.branches.join(' | ') || '(空)'}`,
 )
-check(branchItems.includes('- release/**'), '2) 推 release/** 会触发（发版分支出包）')
-check(branchItems.includes('- feat/**'), '3) 推 feat/** 会触发（开发分支过守门）')
-check(branchItems.includes('- fix/**'), '3) 推 fix/** 会触发（修 bug 分支过守门）')
 check(
-  tags.split('\n').map((l) => l.trim()).includes('- v*'),
-  '4) 推 v* tag 会触发（定稿构建）',
+  BUILD_TRIG.branches.includes('- release/**'),
+  '2) 推 release/** 会出包（发版分支 · build.yml）',
+  `实际：${BUILD_TRIG.branches.join(' | ') || '(空)'}`,
 )
-check(/^ {2}workflow_dispatch:$/m.test(SRC), '5) 保留 workflow_dispatch（应急手动构建）')
+check(
+  CI_TRIG.branches.includes('- feat/**'),
+  '3) 推 feat/** 会触发守门（开发分支 · ci.yml）',
+  `实际：${CI_TRIG.branches.join(' | ') || '(空)'}`,
+)
+check(
+  CI_TRIG.branches.includes('- fix/**'),
+  '3) 推 fix/** 会触发守门（修 bug 分支 · ci.yml）',
+  `实际：${CI_TRIG.branches.join(' | ') || '(空)'}`,
+)
+check(
+  BUILD_TRIG.tags.includes('- v*'),
+  '4) 推 v* tag 会触发出包（定稿构建 · build.yml）',
+  `实际：${BUILD_TRIG.tags.join(' | ') || '(空)'}`,
+)
+check(/^ {2}workflow_dispatch:$/m.test(SRC), '5) build.yml 保留 workflow_dispatch（应急手动构建）')
+check(/^ {2}workflow_dispatch:$/m.test(CI_SRC), '5) ci.yml 保留 workflow_dispatch（应急手动守门）')
 
 // ── 打包 job 的启用条件 ─────────────────────────────────────────────────────
 let missingIf = []
@@ -273,7 +330,7 @@ check(
   '缺 isDraft/fromTag 判断、或少了 exit 1 → 推 release/v<已发布版本> 会把线上资产冲掉',
 )
 
-// ── 并发：tag 不许被取消 ────────────────────────────────────────────────────
+// ── 并发：tag 不许被取消（判据落在 build.yml —— 只有它写 Release）────────────
 // 🔴 断言必须落在 `cancel-in-progress` 的**取值**上，**不能**落在整个 `concurrency` 块上。
 //    2026-09-29 第二轮审计时 `group:` 被改成带 `refs/tags/` 的表达式，于是
 //    "块内出现过 refs/tags/" 被 **group 行**满足 —— 把 `cancel-in-progress` 改回恒真，
@@ -283,7 +340,7 @@ const conc = subBlock(SRC, 'concurrency', 0) || ''
 const cancelVal = ((conc.match(/^ {2}cancel-in-progress:(.*)$/m) || [])[1] || '').trim()
 check(
   cancelVal.includes('refs/tags/'),
-  '10) tag 构建不被后来的推送取消（半路取消会留下空壳 release）',
+  '10) 出包构建 tag 不被后来的推送取消（半路取消会留下空壳 release · build.yml）',
   `实际 cancel-in-progress：${cancelVal || '(空)'} —— 判断必须落在这一行上，不是整个 concurrency 块`,
 )
 
@@ -299,32 +356,43 @@ check(
   `实际：${cancelVal || '(空)'} —— 必须包 ${{ }}，别写折叠标量`,
 )
 
-// ── 反向对照 ───────────────────────────────────────────────────────────────
-const verifyJob = subBlock(SRC, 'verify', 2) || ''
+// ── 反向对照（判据落在 **ci.yml** —— verify job 搬去了那里）─────────────────
+// 🔴 这条同时是给守卫自己照镜子的：它证明前面几条读的是**各自的作用域**，
+//    而不是"拿全文随便 includes 一下"。
+const verifyJob = subBlock(CI_SRC, 'verify', 2) || ''
 check(
   verifyJob !== '' && ifOf(verifyJob) === '',
-  '11) 反向对照：verify job 没有任何 `if:`（守门必须无条件跑）',
+  '11) 反向对照：verify job 没有任何 `if:`（守门必须无条件跑 · ci.yml）',
   '给守门加 if 等于让"兜底的那一道"变成有条件的 —— 它一失效，上面几条都没人看了',
 )
 
 // ── 12) 每个 job 都要有 timeout-minutes ────────────────────────────────────
 // 不设的话中途卡住会一直烧到默认上限（6 小时）：挂起比失败贵得多，而且**没有任何提示**。
 // 本项目真的发生过（退役 runner 标签 → job 永远排队，不报错也不失败）。
-const jobsBlock = subBlock(SRC, 'jobs', 0) || ''
-const jobNames = [...jobsBlock.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map((m) => m[1])
-const noTimeout = jobNames.filter((n) => {
-  const body = subBlock(SRC, n, 2) || ''
-  return !/^ {4}timeout-minutes: *[0-9]+$/m.test(body)
-})
+// 🔴 拆分后 **两个文件都要查** —— 只查一个，另一个里新增的 job 就能裸奔。
+function jobsOf(text) {
+  const jobsBlock = subBlock(text, 'jobs', 0) || ''
+  const names = [...jobsBlock.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map((m) => m[1])
+  const noTimeout = names.filter((n) => {
+    const body = subBlock(text, n, 2) || ''
+    return !/^ {4}timeout-minutes: *[0-9]+$/m.test(body)
+  })
+  return { names, noTimeout }
+}
+const buildJobs = jobsOf(SRC)
+const ciJobs = jobsOf(CI_SRC)
+const allJobs = [...buildJobs.names, ...ciJobs.names]
+const allNoTimeout = [...buildJobs.noTimeout, ...ciJobs.noTimeout]
 check(
-  jobNames.length >= 6 && noTimeout.length === 0,
-  '12) 每个 job 都有 timeout-minutes（挂住的 job 会烧到默认上限，且不报错）',
-  `共 ${jobNames.length} 个 job，缺 timeout-minutes 的：${noTimeout.join(' ') || '(无)'}`,
+  allJobs.length >= 6 && allNoTimeout.length === 0,
+  '12) 每个 job 都有 timeout-minutes（挂住的 job 会烧到默认上限，且不报错 · 两个文件）',
+  `共 ${allJobs.length} 个 job（build ${buildJobs.names.length} + ci ${ciJobs.names.length}），缺 timeout-minutes 的：${allNoTimeout.join(' ') || '(无)'}`,
 )
 
 // ── 13) verify:all 与 CI 的 verify job 必须一致 ─────────────────────────────
 // 往 verify:all 加了新守卫却忘了加进 CI → CI 永绿、只有本地会红（"合进主干时没人拦"）。
 // 只比对**去掉注释行之后**的 job 正文：否则"被注释掉的步骤 + 注释里写着命令"会假通过。
+// 🔴 判据落在 **ci.yml** 的 verify job 上（那是现在唯一跑守门的地方）。
 const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'))
 const verifyAllCmds = String(pkg.scripts['verify:all'] || '')
   .split('&&')
@@ -337,7 +405,7 @@ const verifyJobCode = verifyJob
 const notInCi = verifyAllCmds.filter((c) => !verifyJobCode.includes(c))
 check(
   verifyAllCmds.length >= 5 && notInCi.length === 0,
-  '13) `verify:all` 的每一项都出现在 CI 的 verify job 里（防"加了守卫忘了接 CI"）',
+  '13) `verify:all` 的每一项都出现在 CI 的 verify job 里（防"加了守卫忘了接 CI" · ci.yml）',
   `verify:all 共 ${verifyAllCmds.length} 项；CI 里找不到：${notInCi.join(' | ') || '(无)'}`,
 )
 

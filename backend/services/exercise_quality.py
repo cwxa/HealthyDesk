@@ -80,6 +80,7 @@ S1 给评分分了静息/运动双通道之后，界面能显示「动作达成�
 """
 
 import json
+import math
 import logging
 
 from config import (  # noqa: E402
@@ -287,6 +288,12 @@ def judge_exercise(frames, spec=None) -> dict:
         metric = METRIC_ANY
 
     frames = list(frames)
+    required = list(METRIC_FIELD.values()) if metric == METRIC_ANY else [METRIC_FIELD[metric]]
+    if any(not isinstance(f.get("t"), (int, float)) or not math.isfinite(f["t"]) or
+           any(not isinstance(f.get(k), (int, float)) or not math.isfinite(f[k]) for k in required) for f in frames):
+        # 缺失项不能作为 0 或 NaN 进入活动范围，避免比较失效而误判完成。
+        return {"grade": GRADE_IDLE, "hint": HINT_IDLE, "peak_activity": 0,
+                "held_ms": 0, "hold_ratio": 0, "cycles": 0}
     if not frames:
         # 一帧都没有 = 完全不知道用户做了什么，只能按"没动"处理（不能假装完成）
         return {

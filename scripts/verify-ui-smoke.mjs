@@ -467,18 +467,18 @@ const CAMERA_ASSETS = [
 
 /** `scenarios.json:ui_smoke` —— 逐帧喂给浏览器的那份帧表（单一真相来源）。 */
 function loadUiSmoke() {
-  const file = path.join(ROOT, 'scripts', 'fake-camera', 'scenarios.json')
+  const file = path.join(ROOT, 'scripts', 'fake-camera', 'ui-smoke-v2.json')
   const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
   const ui = doc.ui_smoke
   const need = ['frames', 'feed_ms', 'frame_count', 'lead_in_frames', 'rate_floor', 'rate_floor_browser', 'rate_sweep', 'action_duration_ms']
-  if (!ui) throw new Error('scenarios.json 里没有 ui_smoke 段（跑一次 build-frames.py 重新生成）')
+  if (!ui) throw new Error('ui-smoke-v2.json 里没有 ui_smoke 段（运行 build-pose-v2.py 生成）')
   const missing = need.filter((k) => ui[k] === undefined || ui[k] === null)
   if (missing.length) {
     throw new Error(`ui_smoke 段缺字段 ${missing.join(' / ')} —— 跑一次 ` +
-      'scripts/fake-camera/build-frames.py（改了喂帧表就用 --rewrite）')
+      'scripts/fake-camera/build-pose-v2.py')
   }
   if (!Array.isArray(ui.frames) || ui.frames.length === 0) {
-    throw new Error('scenarios.json 里没有可用的 ui_smoke.frames（跑一次 build-frames.py 重新生成）')
+    throw new Error('ui-smoke-v2.json 里没有可用的 ui_smoke.frames（运行 build-pose-v2.py 生成）')
   }
   if (ui.frames.length !== ui.frame_count) {
     throw new Error(`ui_smoke.frames 有 ${ui.frames.length} 项，但声明 frame_count=${ui.frame_count}`)
@@ -3120,4 +3120,6 @@ async function main() {
   if (EVIDENCE_DIR) console.log(`   截图已存：${path.relative(ROOT, EVIDENCE_DIR)}`)
 }
 
-main()
+// 复用同一隐藏浏览器/CDP宿主，姿态存储测试不另维护启动与关闭实现。
+export { findChrome, launchChrome, shutdownBrowser, startStaticServer, Cdp, evaluate, waitFor }
+if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) main()

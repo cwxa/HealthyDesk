@@ -12,9 +12,12 @@
 """
 
 from typing import Optional
+import math
 
 # smoothing factor: higher = faster response, lower = more stable
 EMA_ALPHA = 0.35
+EMA_TIME_CONSTANT_MS = -200 / math.log(1 - EMA_ALPHA)
+MAX_SMOOTHING_GAP_MS = 1500
 
 
 class PoseSmoother:
@@ -23,8 +26,15 @@ class PoseSmoother:
     def __init__(self, alpha: float = EMA_ALPHA):
         self.alpha = alpha
         self._values: Optional[dict] = None
+        self._last_timestamp = None
 
-    def update(self, metrics: dict) -> dict:
+    def update(self, metrics: dict, timestamp_ms=None) -> dict:
+        # 按时间平滑，消除桌面与手机帧率不同造成的响应差异。
+        dt = timestamp_ms - self._last_timestamp if timestamp_ms is not None and self._last_timestamp is not None else None
+        if dt is not None and (dt <= 0 or dt > MAX_SMOOTHING_GAP_MS):
+            self.reset()
+        alpha = 1 - math.exp(-dt / EMA_TIME_CONSTANT_MS) if dt is not None and 0 < dt <= MAX_SMOOTHING_GAP_MS else self.alpha
+        self._last_timestamp = timestamp_ms
         if self._values is None:
             self._values = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
             return dict(self._values)
@@ -32,11 +42,14 @@ class PoseSmoother:
         smoothed = {}
         for k, v in metrics.items():
             if isinstance(v, (int, float)) and k in self._values:
-                smoothed[k] = round((self.alpha * v + (1 - self.alpha) * self._values[k]) * 100) / 100
+                smoothed[k] = round((alpha * v + (1 - alpha) * self._values[k]) * 100) / 100
                 self._values[k] = smoothed[k]
             else:
                 smoothed[k] = v
+        # 当前缺失指标不继承遮挡前的状态。
+        self._values = dict(smoothed)
         return smoothed
 
     def reset(self):
         self._values = None
+        self._last_timestamp = None

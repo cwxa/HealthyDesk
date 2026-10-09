@@ -16,7 +16,9 @@
 import { dailyAvgScore, dailyBadPct, type DayAggregate } from './dailyAgg'
 
 export const EXPORT_FORMAT = 'neckguardian-export'
-export const EXPORT_FORMAT_VERSION = 1
+// 测量版本改变了日归档主键，旧客户端不能安全恢复新版备份；新版仍接受 v1。
+export const EXPORT_FORMAT_VERSION = 2
+// 上述可空列的兼容策略仍适用；v2 主键语义变化例外，需要拒绝旧客户端导入。
 /** CSV 前置 BOM，否则 Excel 打开中文表头是乱码。 */
 export const CSV_BOM = '\ufeff'
 
@@ -60,6 +62,7 @@ export const TABLE_FIELDS: Record<TableName, ReadonlyArray<readonly [string, Fie
     ['shoulder_diff', 'num'],
     ['spine_angle', 'num'],
     ['score', 'num'],
+    ['metric_version', 'num'],
   ],
   posture_daily: [
     ['date', 'str'],
@@ -70,6 +73,7 @@ export const TABLE_FIELDS: Record<TableName, ReadonlyArray<readonly [string, Fie
     ['shoulder_bad_count', 'num'],
     ['spine_bad_count', 'num'],
     ['updated_at', 'str'],
+    ['metric_version', 'num'],
   ],
   usage_record: [
     ['date', 'str'],
@@ -195,7 +199,7 @@ export function normalizeRows(
     const row: Record<string, FieldValue> = {}
     let ok = true
     for (const [name, kind] of fields) {
-      const src_v = src[name]
+      const src_v = name === 'metric_version' && !(name in src) ? 1 : src[name]
       let value: string | number | null | typeof INVALID
       if (kind === 'num') value = num(src_v)
       else if (kind === 'str?') value = strOrNull(src_v)
@@ -205,6 +209,7 @@ export function normalizeRows(
         ok = false
         break
       }
+      if (name === 'metric_version' && value !== 1 && value !== 2) { ok = false; break }
       row[name] = value
     }
     if (!ok) {
@@ -270,8 +275,7 @@ export function buildExport(
 /**
  * 校验并规范化一个导入包。错误码是**约定的字符串**（两端必须同一个码）。
  *
- * 只接受当前 `format_version`（拒绝而不是尽力而为）：格式演进时静默兼容会让用户
- * 以为导入成功了，而数据其实是残缺的。
+ * 明确接受 v1/v2 并规范化为 v2；未知版本拒绝，避免静默丢失归档主键语义。
  */
 export function validateExport(raw: unknown): ValidationResult {
   const empty: Skipped = {}
@@ -283,7 +287,7 @@ export function validateExport(raw: unknown): ValidationResult {
     return { ok: false, error: 'bad_format', bundle: null, skipped: empty }
   }
   const version = num(src.format_version)
-  if (version === null || version !== Math.trunc(version) || Math.trunc(version) !== EXPORT_FORMAT_VERSION) {
+  if (version === null || ![1, EXPORT_FORMAT_VERSION].includes(version)) {
     return { ok: false, error: 'unsupported_version', bundle: null, skipped: empty }
   }
   const tables = src.tables
@@ -331,7 +335,8 @@ export const DAILY_CSV_HEADER = [
   '最低分',
   '头部问题占比%',
   '肩部问题占比%',
-  '脊柱问题占比%',
+  '躯干问题占比%',
+  '测量版本',
 ] as const
 
 function csvField(text: string): string {
@@ -355,7 +360,7 @@ function fmt1(x: unknown): string {
  * 🔴 开头必须是 `CSV_BOM`。中文表头不带 BOM 时，Windows 版 Excel 会按
  * 系统 ANSI 代码页解读，直接显示成乱码 —— 这正是导出 CSV 唯一的用途场景。
  */
-export function buildDailyCsv(dailyRows: Array<Partial<DayAggregate> & { date?: string }>): string {
+export function buildDailyCsv(dailyRows: Array<Partial<DayAggregate> & { date?: string; metric_version?: number }>): string {
   const rows = [...dailyRows].sort((a, b) => ((a.date ?? '') < (b.date ?? '') ? -1 : 1))
   const lines = [DAILY_CSV_HEADER.map(csvField).join(',')]
   for (const r of rows) {
@@ -375,6 +380,7 @@ export function buildDailyCsv(dailyRows: Array<Partial<DayAggregate> & { date?: 
       fmt1(dailyBadPct(day, 'head')),
       fmt1(dailyBadPct(day, 'shoulder')),
       fmt1(dailyBadPct(day, 'spine')),
+      fmtInt(r.metric_version ?? 1),
     ]
     lines.push(fields.map(csvField).join(','))
   }
