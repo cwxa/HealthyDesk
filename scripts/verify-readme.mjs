@@ -141,6 +141,24 @@ const historyVersions = history ? (history.text.match(/\bv?\d+\.\d+\.\d+\b/g) ||
 check(historyVersions.length >= 5, '版本历史区仍保留着版本号（说明检查只作用于下载区）',
   `只找到 ${historyVersions.length} 个 —— 分节可能切错了，或历史表被删了`)
 
+// ---------- g) 当前版本必须已经写进版本历史 ----------
+// 🔴 2026-11-11 实测发现的缺口：v1.7.2 与 v1.7.3 两个版本发布后，README 的版本历史表
+//    仍停在 v1.7.1 —— 而 CI 一直全绿，因为上面这一条只验证"历史区**还有**版本号"，
+//    从不验证"**最新那一版**有没有补进去"。历史表是用户升级时唯一能看到"这版改了什么"的地方，
+//    漏掉它就等于让最近两个版本对外不可见。
+//    ⚠️ 这里的摩擦是**故意留的**：`set-version` 只改五处版本号、不碰 README，
+//       所以升完版本这条会立刻红，直到你按约定补一行 —— 那正是"发一版、记一行"的形状。
+const pkgVersion = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'),
+).version
+const historyHasCurrent = historyVersions.some((v) => v.replace(/^v/, '') === pkgVersion)
+check(
+  history !== null && historyHasCurrent,
+  `版本历史里有当前版本 v${pkgVersion}`,
+  `历史表里没有 v${pkgVersion} —— 发版前先在 README「版本历史」补一行` +
+    '（下载区不用动，它只指向 releases/latest）',
+)
+
 console.log('')
 if (failed > 0) {
   console.log(`❌ README 下载区守卫：${failed} 项不符合约定（通过 ${passed} 项）`)
