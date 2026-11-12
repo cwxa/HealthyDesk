@@ -26,6 +26,12 @@ Thumbs.db
 .workbuddy/
 .buildenv/
 
+# 🔴 编辑器/CLI 的**本机**配置，绝不入库：
+#    `.claude/settings.local.json` 里是 Claude Code 的权限白名单，含本机绝对路径
+#    （2026-11-11 清理时发现它被提交过）—— 对别的机器毫无意义，而且会随各人环境互相冲突。
+#    ⚠️ 只忽略 `.local` 那一个：`.claude/settings.json` 若将来用于**团队共享**配置，应当入库。
+.claude/settings.local.json
+
 # 🔴 安卓签名材料：绝不可入库（keystore.properties 里是**明文**口令）。
 # 兜底规则：即使有人在别处新建同名文件也不会被 `git add -A` 带走。
 # （android/.gitignore 里另有一份等价规则，两处都留着是刻意的冗余。）
