@@ -57,12 +57,19 @@ async function loadFrontendSource() {
     globalThis.document = { baseURI: 'https://localhost/' }
   }
 
-  // 评分常量现在统一在 scoringModel.ts（localPoseEngine 只是使用方），
-  // 所以常量从该模块整体取出；EMA_ALPHA 属于平滑器，仍在引擎模块内。
+  // 评分常量现在统一在 scoringModel.ts（localPoseEngine 只是使用方），所以整体取出。
+  // 🔴 2026-11-12 修正：EMA_ALPHA 必须**直接从 poseSmoother 取**。
+  //    原先这段注入写的是裸 `EMA_ALPHA`，靠 `localPoseEngine.ts` 里那句
+  //    `import { PoseSmoother, EMA_ALPHA } from './poseSmoother'` 把它带进作用域 ——
+  //    于是引擎模块里的 EMA_ALPHA 成了"自己用不着、纯粹给守卫中转"的导入，
+  //    `noUnusedLocals` 一开就报未使用，而删掉它又会让本脚本 bundle 后
+  //    `ReferenceError: EMA_ALPHA is not defined`（2026-11-12 实测踩到）。
+  //    现在守卫自己去定义处取，引擎模块不再承担这层隐形契约。
   const EXPOSE = `
 export { computeScore as __computeScore, PoseSmoother as __PoseSmoother };
 import * as __scoringModel from './scoringModel';
-export const __constants = { ...__scoringModel, EMA_ALPHA };
+import { EMA_ALPHA as __EMA_ALPHA } from './poseSmoother';
+export const __constants = { ...__scoringModel, EMA_ALPHA: __EMA_ALPHA };
 `
 
   const built = await esbuild.build({

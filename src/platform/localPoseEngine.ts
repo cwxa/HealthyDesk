@@ -39,7 +39,7 @@ import {
 
 // 引擎自身的参数。评分模型的阈值/分档/单项扣分/取整统一定义在 scoringModel.ts，
 // 与统计聚合（partHealth）共用同一份，避免两处各写一遍后悄悄漂移。
-import { PoseSmoother, EMA_ALPHA } from './poseSmoother'
+import { PoseSmoother } from './poseSmoother'
 import { measurePose, METRIC_VERSION } from './poseGeometry'
 
 const NOSE = 0

@@ -43,7 +43,7 @@ function AppShell() {
   }
 
   useEffect(() => {
-    window.electronAPI?.onBackendReady((data) => {
+    window.electronAPI?.onBackendReady(() => {
       setBackendReady(true)
     })
     // 移动端没有 Electron 后端进程；稍作延时确保本地数据层可用

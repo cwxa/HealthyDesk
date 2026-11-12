@@ -191,7 +191,7 @@ export default function Onboarding({
               data-ng-step={step}
               style={{ display: 'flex', gap: 6, margin: '22px 0 20px', alignItems: 'center' }}
             >
-              {steps.map((s, i) => (
+              {steps.map((_s, i) => (
                 <div
                   key={i}
                   style={{

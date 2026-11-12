@@ -75,11 +75,11 @@ export default function Dashboard() {
 
       {/* Stats cards */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile() ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 14 }}>
-        <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon={TrendingUpIcon} delay={0} />
-        <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon={ActivityIcon} delay={0.04} />
-        <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon={BarChart2Icon} delay={0.08} />
+        <StatCard label="今日平均评分" value={summary?.today_avg} unit="分" color="#4CAF50" icon={TrendingUpIcon} />
+        <StatCard label="今日活动次数" value={summary?.today_activities} unit="次" color="#FF9800" icon={ActivityIcon} />
+        <StatCard label="本周平均评分" value={weekly?.posture_avg} unit="分" color="#2196F3" icon={BarChart2Icon} />
         <p style={{ fontSize: 12, color: '#888', gridColumn: '1 / -1' }}>姿态统计采用更新后的测量口径，历史旧口径数据保留在导出记录中。</p>
-        <StatCard label="活动完成率" value={weekly?.completion_rate} unit="%" color="#9C27B0" icon={CheckIcon} delay={0.12} />
+        <StatCard label="活动完成率" value={weekly?.completion_rate} unit="%" color="#9C27B0" icon={CheckIcon} />
       </div>
 
       {/* Trend chart */}
@@ -283,8 +283,8 @@ function ActivityRow({ activity, isLast }: { activity: ActivityRecord; isLast: b
   )
 }
 
-function StatCard({ label, value, unit, color, icon: Icon, delay }: {
-  label: string; value: number | undefined; unit: string; color: string; icon: React.ElementType; delay: number
+function StatCard({ label, value, unit, color, icon: Icon }: {
+  label: string; value: number | undefined; unit: string; color: string; icon: React.ElementType
 }) {
   return (
     <div

@@ -391,7 +391,7 @@ function createWindow(): void {
 
   // 启用页面缩放（Ctrl/⌘ + 滚轮）
   mainWindow.webContents.setVisualZoomLevelLimits(1, 3)
-  mainWindow.webContents.on('zoom-changed', (event, direction) => {
+  mainWindow.webContents.on('zoom-changed', (_event, direction) => {
     const currentZoom = mainWindow?.webContents.getZoomFactor() || 1
     if (direction === 'in') {
       mainWindow?.webContents.setZoomFactor(Math.min(currentZoom + 0.1, 3))
